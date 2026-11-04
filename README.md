@@ -64,6 +64,7 @@ Cada servicio se expone a Internet con su propio túnel **ngrok**. El cliente us
 ├── README.md
 ├── auth-service/
 │   ├── .env.example
+│   ├── .npmrc                # ignore-scripts=true (usa los binarios precompilados)
 │   ├── index.js              # Express + SQLite + bcrypt + JWT
 │   ├── package.json
 │   └── package-lock.json
@@ -128,6 +129,8 @@ npm start
 ```
 
 Salida esperada: `Auth service en puerto 4000`.
+
+> `auth-service/.npmrc` contiene `ignore-scripts=true`. bcrypt y better-sqlite3 traen binarios precompilados. Sin esa opción, npm 11 intenta compilar better-sqlite3 con node-gyp al instalar desde `package-lock.json`, y la instalación falla en Windows si no está instalado Visual Studio. `npm start` y `npm run dev` funcionan igual.
 
 ### coordinator
 
@@ -373,6 +376,7 @@ Los nombres de usuario y los mensajes del servidor se insertan siempre con `text
 - **auth-service, `/login`**: no aplica trim ni reglas de formato al username (solo exige texto no vacío de hasta 1000 caracteres). Por eso el cliente envía el username ya recortado.
 - **auth-service, contraseñas**: la longitud de 6–72 se mide en caracteres. bcrypt trunca a 72 bytes, así que con caracteres multibyte (tildes, emojis) los bytes que pasen de 72 no cuentan.
 - **auth-service, cierre y bcrypt**: el cierre ordenado fuerza la salida a los 5 s. bcrypt 6.0.0 trae binarios precompilados, así que npm puede avisar que no ejecutó su script de instalación, pero el módulo funciona sin compilar.
+- **auth-service, instalación limpia**: la auditoría final detectó que `npm install` desde el lockfile lanzaba un `node-gyp rebuild` de better-sqlite3 y fallaba sin Visual Studio. Se agregó `auth-service/.npmrc` con `ignore-scripts=true`, porque los dos módulos nativos traen binarios precompilados.
 - **coordinator, qué se tomó del base**: el `coordinator/index.js` del base no cumplía (sin token, sin upgrade, sin close, manejaba workers) y se reescribió. Se reutilizaron `send()` con el chequeo `readyState === OPEN`, la idea de `broadcast()`, la estructura por secciones y HTTP + WS en el mismo puerto. Se eliminaron roles, workers, pulsos de aplicación, `/status`, el dashboard estático y `cors()`.
 - **coordinator, mensajes**: son planos, `{ type: "players_update", players: [...] }`, como pide el enunciado, en vez del sobre `{ type, data }` del base. `broadcastPlayers()` recorre el `Map` y no `wss.clients`, para no enviar la lista a sockets rechazados que aún se están cerrando.
 - **coordinator, contenido del token**: además de `userId` y `username` como texto, el payload debe traer `exp` numérico; si no, se rechaza con 4001.
