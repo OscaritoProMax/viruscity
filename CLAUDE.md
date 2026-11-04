@@ -40,3 +40,13 @@ Tres procesos separados: auth-service (HTTP, puerto 4000, SQLite + JWT), coordin
 
 ## Decisiones tomadas durante el desarrollo
 (agregar aquí cualquier decisión nueva, una línea cada una, incluyendo qué se reutilizó del base y qué se corrigió; la fase del README las usará)
+- Fase 0: los archivos del base estaban copiados en la raíz (commit `3182f36 inicial`); eran idénticos al repo de GitHub, se movieron a _base-ref/ y se quitaron del repo en el commit de estructura.
+- Fase 1 (base): el base no tiene auth; no se copió ningún archivo. Solo se reutilizó el patrón `app.listen(PORT, (err) => …)` de Express 5 (`coordinator/index.js`) y el formato `res.status(4xx).json({ error })` (`worker/index.js`). No se reutilizó `parseArgs` ni `--env-file-if-exists` (requiere Node >= 22.9); se usa dotenv.
+- auth-service: dotenv se carga con `{ quiet: true }` para que no imprima su propio mensaje en consola.
+- auth-service: DB_PATH se resuelve relativo a la carpeta del servicio (`path.resolve(__dirname, …)`), no al directorio desde donde se lanza.
+- auth-service: además del mínimo 10, BCRYPT_ROUNDS tiene máximo 31 (límite de bcrypt) y PORT se valida entre 1 y 65535.
+- auth-service: el middleware de log va antes de `express.json()` para que también se registren los 400/413 de JSON roto o cuerpo grande.
+- auth-service: /login no aplica trim ni reglas de formato al username (solo string no vacío ≤ 1000); el cliente debe enviar el username ya recortado.
+- auth-service: la longitud 6–72 de password se mide en caracteres; bcrypt trunca a 72 bytes, así que con caracteres multibyte (tildes, emojis) los bytes sobrantes no cuentan.
+- auth-service: el cierre ordenado fuerza la salida a los 5 s si alguna conexión no termina.
+- auth-service: bcrypt 6.0.0 trae binarios precompilados (win32-x64); npm 11 avisa que no ejecutó su script de instalación, pero el módulo carga y funciona sin compilar.
