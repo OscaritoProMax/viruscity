@@ -68,11 +68,10 @@ const INVALID_CREDENTIALS = { error: "Credenciales inválidas" };
 
 // ---------- HTTP ----------
 const app = express();
-app.use(cors());
-app.use(express.json({ limit: "10kb" }));
 
 // Log de cada petición: solo fecha, método, ruta (sin query ni body) y status.
 // Nunca se registran contraseñas, hashes, tokens ni cuerpos de peticiones.
+// Va primero para que también queden registradas las peticiones que fallan al parsear el JSON.
 app.use((req, res, next) => {
     res.on("finish", () => {
         const route = req.originalUrl.split("?")[0];
@@ -80,6 +79,9 @@ app.use((req, res, next) => {
     });
     next();
 });
+
+app.use(cors());
+app.use(express.json({ limit: "10kb" }));
 
 app.get("/health", (req, res) => {
     res.status(200).json({ status: "ok" });
@@ -152,6 +154,30 @@ app.post("/login", async (req, res) => {
     res.status(200).json({ token, username: row.username });
 });
 
+// ---------- Errores ----------
+
+// Cualquier ruta no definida
+app.use((req, res) => {
+    res.status(404).json({ error: "Ruta no encontrada" });
+});
+
+// Manejador de errores central (Express 5 también envía aquí los errores de rutas async)
+app.use((err, req, res, next) => {
+    if (res.headersSent) return next(err);
+
+    if (err.type === "entity.parse.failed") {
+        return res.status(400).json({ error: "JSON inválido" });
+    }
+    if (err.type === "entity.too.large") {
+        return res.status(413).json({ error: "Cuerpo demasiado grande" });
+    }
+
+    // Solo el mensaje: sin stack ni body, para no filtrar datos sensibles a los logs
+    console.error(`Error interno: ${err.message}`);
+    res.status(500).json({ error: "Error interno del servidor" });
+});
+
+// ---------- Arranque ----------
 const server = app.listen(PORT, (err) => {
     if (err) {
         // p. ej. puerto ocupado
@@ -160,3 +186,27 @@ const server = app.listen(PORT, (err) => {
     }
     console.log(`Auth service en puerto ${PORT}`);
 });
+
+// ---------- Cierre ordenado ----------
+let shuttingDown = false;
+
+function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`${signal} recibido, cerrando auth service...`);
+
+    server.close(() => {
+        db.close();
+        console.log("Servidor HTTP y base de datos cerrados");
+        process.exit(0);
+    });
+
+    // Si alguna conexión no se cierra a tiempo, se fuerza la salida
+    setTimeout(() => {
+        console.error("Cierre forzado por tiempo de espera");
+        process.exit(1);
+    }, 5000).unref();
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
