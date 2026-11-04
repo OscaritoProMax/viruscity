@@ -12,6 +12,7 @@ require("dotenv").config({ quiet: true }); // quiet: evita que dotenv imprima su
 const http = require("node:http");
 const express = require("express");
 const { WebSocketServer } = require("ws");
+const jwt = require("jsonwebtoken");
 
 // ---------- Configuración ----------
 
@@ -71,6 +72,55 @@ const server = http.createServer(app);
 // noServer: el handshake se acepta a mano en el evento 'upgrade', después de verificar el token.
 // maxPayload: el cliente no necesita enviar nada; se limita el tamaño de cualquier mensaje entrante.
 const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 });
+
+// Devuelve el payload si el token es válido; null si falta, está malformado, vencido,
+// firmado con otra clave o le faltan datos. Nunca registra el token.
+function verifyToken(token) {
+    try {
+        const payload = jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] });
+        const complete =
+            typeof payload.userId === "string" &&
+            typeof payload.username === "string" &&
+            typeof payload.exp === "number"; // exp se necesita para programar el cierre por expiración
+        if (!complete) {
+            console.log("Conexión rechazada: payload del token incompleto");
+            return null;
+        }
+        return payload;
+    } catch (err) {
+        // Los mensajes de jsonwebtoken ("jwt expired", "invalid signature"...) no incluyen el token
+        console.log(`Conexión rechazada: ${err.message}`);
+        return null;
+    }
+}
+
+// El handshake se valida aquí, antes de aceptar la conexión
+server.on("upgrade", (req, socket, head) => {
+    socket.on("error", () => {}); // un reset del cliente durante el handshake no debe tumbar el proceso
+
+    const url = new URL(req.url, "http://localhost");
+    if (url.pathname !== "/connect") {
+        socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+        socket.destroy();
+        return;
+    }
+
+    const payload = verifyToken(url.searchParams.get("token"));
+
+    if (!payload) {
+        // Se completa el handshake y se cierra con 4001 en vez de responder 401 por HTTP:
+        // el navegador no puede leer el status de un upgrade rechazado, pero sí el código de cierre.
+        wss.handleUpgrade(req, socket, head, (ws) => {
+            ws.on("error", () => {});
+            ws.close(4001, "invalid token");
+        });
+        return;
+    }
+
+    wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit("connection", ws, payload);
+    });
+});
 
 // ---------- Arranque ----------
 server.on("error", (err) => {
