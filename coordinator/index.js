@@ -213,6 +213,7 @@ server.listen(PORT, () => {
 
 // ---------- Cierre ordenado ----------
 let shuttingDown = false;
+const SHUTDOWN_TIMEOUT_MS = 5 * 1000; // espera máxima antes de forzar la salida
 
 function shutdown(signal) {
     if (shuttingDown) return;
@@ -234,7 +235,7 @@ function shutdown(signal) {
         for (const ws of wss.clients) ws.terminate();
         console.error("Cierre forzado por tiempo de espera");
         process.exit(1);
-    }, 5000).unref();
+    }, SHUTDOWN_TIMEOUT_MS).unref();
 }
 
 process.on("SIGINT", () => shutdown("SIGINT"));
