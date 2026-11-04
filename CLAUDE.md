@@ -59,3 +59,10 @@ Tres procesos separados: auth-service (HTTP, puerto 4000, SQLite + JWT), coordin
 - coordinator: el socket crudo recibe un manejador de 'error' vacío al empezar el upgrade, para que un reset del cliente durante el handshake no tumbe el proceso.
 - coordinator: 404 y 500 HTTP como JSON `{ error }`; el apagado ordenado fuerza la salida a los 5 s (terminate) si algún cliente no completa el cierre.
 - coordinator: smoke-test usa B con un token de 3 s para S10 (B ya está desconectado), así no reemplaza la sesión de A ni de C.
+- Fase 3 (base): `dashboard/style.css` se copió a client/public/css/style.css y se adaptó (se conservan paleta, modo oscuro, tarjetas, pills, botones e inputs; se quitaron grid de servidores, consolas y logs; se agregaron formularios, mensajes verde/rojo, banner y lista del lobby). De `dashboard/common.js` solo se tomó el atajo `$`; `card()`/`esc()` no se usan porque arman HTML como texto. `setStatus()` del lobby adapta `setWsStatus()` de `coordinator/public/index.html` (tres estados en vez de dos).
+- client: PORT también es obligatorio en .env (sin valor por defecto), para no tener puertos escritos en server.js; AUTH_URL debe ser http(s) y COORDINATOR_WS_URL ws(s), si no el servidor no arranca.
+- client: 404 como JSON `{ error }` y cierre ordenado con SIGINT/SIGTERM.
+- client: el formulario envía el username con trim (el /login del auth-service no recorta espacios).
+- client: si la respuesta del auth-service no es JSON (p. ej. una página de ngrok) se muestra "Error inesperado del servidor (status)".
+- client: detrás de ngrok el cliente se sirve por HTTPS, así que COORDINATOR_WS_URL debe ser `wss://…` (el navegador bloquea ws:// desde una página https).
+- Pruebas en Windows: los procesos se levantan con `Start-Process -PassThru` y se detienen por PID. En la Fase 2 quedó vivo un coordinator porque el PID leído de `netstat` en Git Bash traía `\r` y `taskkill` falló sin aviso; se detectó y detuvo en la Fase 3.
