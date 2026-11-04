@@ -154,7 +154,20 @@ wss.on("connection", (ws, payload) => {
     }
     broadcastPlayers();
 
+    // Heartbeat: se marca vivo al conectar y cada vez que responde un ping
+    ws.isAlive = true;
+    ws.on("pong", () => {
+        ws.isAlive = true;
+    });
+
+    // Si el token vence con el socket abierto, se cierra con 4001 "token expired".
+    // setTimeout acepta como máximo 2^31-1 ms (~24,8 días).
+    const msLeft = payload.exp * 1000 - Date.now();
+    const expiryTimer = setTimeout(() => ws.close(4001, "token expired"), Math.max(0, Math.min(msLeft, 2147483647)));
+
     ws.on("close", (code) => {
+        clearTimeout(expiryTimer);
+
         // Solo se elimina si este es el socket vigente: el cierre de una sesión reemplazada
         // no debe borrar a la conexión nueva del mismo usuario.
         if (players.get(userId)?.socket !== ws) return;
@@ -171,6 +184,22 @@ wss.on("connection", (ws, payload) => {
     ws.on("message", () => {});
 });
 
+// ---------- Heartbeat ----------
+// Cada HEARTBEAT_INTERVAL_MS se hace ping; quien no respondió al ping anterior se termina
+// (detecta conexiones muertas que nunca enviaron el cierre, p. ej. sin red).
+const heartbeat = setInterval(() => {
+    for (const ws of wss.clients) {
+        if (!ws.isAlive) {
+            ws.terminate(); // dispara 'close', que lo quita del Map y avisa a los demás
+            continue;
+        }
+        ws.isAlive = false;
+        ws.ping();
+    }
+}, HEARTBEAT_INTERVAL_MS);
+
+wss.on("close", () => clearInterval(heartbeat));
+
 // ---------- Arranque ----------
 server.on("error", (err) => {
     // p. ej. puerto ocupado
@@ -181,3 +210,32 @@ server.on("error", (err) => {
 server.listen(PORT, () => {
     console.log(`Coordinator en puerto ${PORT} (HTTP y WebSocket en /connect)`);
 });
+
+// ---------- Cierre ordenado ----------
+let shuttingDown = false;
+
+function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`${signal} recibido, cerrando coordinator...`);
+
+    // 1001 = "going away": el servidor se está apagando
+    for (const ws of wss.clients) ws.close(1001, "server shutting down");
+    clearInterval(heartbeat);
+    wss.close();
+
+    server.close(() => {
+        console.log("Servidor HTTP y WebSocket cerrados");
+        process.exit(0);
+    });
+
+    // Si algún cliente no completa el cierre a tiempo, se terminan los sockets y se sale
+    setTimeout(() => {
+        for (const ws of wss.clients) ws.terminate();
+        console.error("Cierre forzado por tiempo de espera");
+        process.exit(1);
+    }, 5000).unref();
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
