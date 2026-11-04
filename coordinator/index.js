@@ -122,6 +122,55 @@ server.on("upgrade", (req, socket, head) => {
     });
 });
 
+// ---------- Jugadores ----------
+
+// Envía un mensaje JSON solo si el socket sigue abierto (adaptado de send() del código base)
+function send(ws, message) {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message));
+}
+
+// Envía la lista actual de jugadores a TODOS los jugadores conectados (incluido el recién llegado).
+// A diferencia del broadcast() del base, recorre el Map y no wss.clients: así no se envía
+// nada a sockets rechazados con 4001 que aún no terminaron de cerrarse.
+function broadcastPlayers() {
+    const message = {
+        type: "players_update",
+        players: [...players].map(([userId, p]) => ({ userId, username: p.username })),
+    };
+    for (const { socket } of players.values()) send(socket, message);
+}
+
+wss.on("connection", (ws, payload) => {
+    const { userId, username } = payload;
+
+    // Sesión duplicada: se queda la conexión nueva y se cierra la anterior con 4002
+    const previous = players.get(userId);
+    players.set(userId, { username, socket: ws, connectedAt: new Date().toISOString() });
+    if (previous) {
+        previous.socket.close(4002, "replaced by new session");
+        console.log(`Sesión reemplazada: ${username} (${userId})`);
+    } else {
+        console.log(`Jugador conectado: ${username} (${userId}) · jugadores: ${players.size}`);
+    }
+    broadcastPlayers();
+
+    ws.on("close", (code) => {
+        // Solo se elimina si este es el socket vigente: el cierre de una sesión reemplazada
+        // no debe borrar a la conexión nueva del mismo usuario.
+        if (players.get(userId)?.socket !== ws) return;
+        players.delete(userId);
+        console.log(`Jugador desconectado: ${username} (${userId}) código ${code} · jugadores: ${players.size}`);
+        broadcastPlayers();
+    });
+
+    ws.on("error", (err) => {
+        console.error(`Error en el socket de ${username} (${userId}): ${err.message}`);
+    });
+
+    // El cliente no necesita enviar nada en esta parte: cualquier mensaje entrante se ignora
+    ws.on("message", () => {});
+});
+
 // ---------- Arranque ----------
 server.on("error", (err) => {
     // p. ej. puerto ocupado
