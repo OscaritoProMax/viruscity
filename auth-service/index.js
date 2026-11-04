@@ -12,6 +12,7 @@ const path = require("node:path");
 const express = require("express");
 const cors = require("cors");
 const Database = require("better-sqlite3");
+const bcrypt = require("bcrypt");
 
 // ---------- Configuración ----------
 
@@ -47,6 +48,17 @@ db.exec(
     "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)"
 );
 
+// Consultas preparadas: los valores siempre van como parámetros, nunca concatenados al SQL
+const findUserByName = db.prepare("SELECT id, username, password_hash FROM users WHERE username = ?");
+const insertUser = db.prepare("INSERT INTO users (username, password_hash) VALUES (?, ?)");
+
+// Reglas de formato del registro (ver decisiones fijas en CLAUDE.md)
+const USERNAME_REGEX = /^[A-Za-z0-9_]+$/;
+const USERNAME_MIN = 3;
+const USERNAME_MAX = 30;
+const PASSWORD_MIN = 6;
+const PASSWORD_MAX = 72; // límite de bcrypt
+
 // ---------- HTTP ----------
 const app = express();
 app.use(cors());
@@ -64,6 +76,46 @@ app.use((req, res, next) => {
 
 app.get("/health", (req, res) => {
     res.status(200).json({ status: "ok" });
+});
+
+// Registro de usuario: valida, guarda el hash bcrypt y responde 201 con userId (string) y username
+app.post("/register", async (req, res) => {
+    const { username: rawUsername, password } = req.body ?? {}; // Express 5 deja body undefined si no hay JSON
+
+    if (typeof rawUsername !== "string" || typeof password !== "string") {
+        return res.status(400).json({ error: "username y password son obligatorios y deben ser texto" });
+    }
+
+    const username = rawUsername.trim();
+    if (username.length < USERNAME_MIN || username.length > USERNAME_MAX || !USERNAME_REGEX.test(username)) {
+        return res
+            .status(400)
+            .json({ error: "username debe tener entre 3 y 30 caracteres y solo letras, números o guion bajo" });
+    }
+
+    if (password.length < PASSWORD_MIN || password.length > PASSWORD_MAX) {
+        return res.status(400).json({ error: "password debe tener entre 6 y 72 caracteres" });
+    }
+
+    if (findUserByName.get(username)) {
+        return res.status(409).json({ error: "El nombre de usuario ya existe" });
+    }
+
+    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+
+    let info;
+    try {
+        info = insertUser.run(username, passwordHash);
+    } catch (err) {
+        // Condición de carrera: otro registro con el mismo nombre entró entre el SELECT y el INSERT
+        if (err.code === "SQLITE_CONSTRAINT_UNIQUE") {
+            return res.status(409).json({ error: "El nombre de usuario ya existe" });
+        }
+        throw err;
+    }
+
+    // Nunca se devuelve el hash
+    res.status(201).json({ userId: String(info.lastInsertRowid), username });
 });
 
 const server = app.listen(PORT, (err) => {
