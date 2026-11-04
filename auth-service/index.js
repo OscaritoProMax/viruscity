@@ -13,6 +13,7 @@ const express = require("express");
 const cors = require("cors");
 const Database = require("better-sqlite3");
 const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
 
 // ---------- Configuración ----------
 
@@ -58,6 +59,12 @@ const USERNAME_MIN = 3;
 const USERNAME_MAX = 30;
 const PASSWORD_MIN = 6;
 const PASSWORD_MAX = 72; // límite de bcrypt
+const LOGIN_FIELD_MAX = 1000; // tope de tamaño en el login, sin aplicar las reglas de formato del registro
+
+// Hash de relleno: si el usuario no existe se compara contra él igualmente,
+// para que la respuesta tarde lo mismo y no revele qué usuarios existen.
+const DUMMY_HASH = bcrypt.hashSync("dummy", BCRYPT_ROUNDS);
+const INVALID_CREDENTIALS = { error: "Credenciales inválidas" };
 
 // ---------- HTTP ----------
 const app = express();
@@ -116,6 +123,33 @@ app.post("/register", async (req, res) => {
 
     // Nunca se devuelve el hash
     res.status(201).json({ userId: String(info.lastInsertRowid), username });
+});
+
+// Inicio de sesión: si las credenciales son válidas responde 200 con un JWT { userId, username }
+app.post("/login", async (req, res) => {
+    const { username, password } = req.body ?? {};
+
+    const validField = (v) => typeof v === "string" && v.length > 0 && v.length <= LOGIN_FIELD_MAX;
+    if (!validField(username) || !validField(password)) {
+        return res.status(400).json({ error: "username y password son obligatorios" });
+    }
+
+    const row = findUserByName.get(username);
+    if (!row) {
+        await bcrypt.compare(password, DUMMY_HASH); // mismo costo que con un usuario real
+        return res.status(401).json(INVALID_CREDENTIALS);
+    }
+
+    const ok = await bcrypt.compare(password, row.password_hash);
+    if (!ok) return res.status(401).json(INVALID_CREDENTIALS);
+
+    // iat y exp los agrega jsonwebtoken
+    const token = jwt.sign({ userId: String(row.id), username: row.username }, JWT_SECRET, {
+        algorithm: "HS256",
+        expiresIn: JWT_EXPIRES_IN,
+    });
+
+    res.status(200).json({ token, username: row.username });
 });
 
 const server = app.listen(PORT, (err) => {
