@@ -50,3 +50,12 @@ Tres procesos separados: auth-service (HTTP, puerto 4000, SQLite + JWT), coordin
 - auth-service: la longitud 6–72 de password se mide en caracteres; bcrypt trunca a 72 bytes, así que con caracteres multibyte (tildes, emojis) los bytes sobrantes no cuentan.
 - auth-service: el cierre ordenado fuerza la salida a los 5 s si alguna conexión no termina.
 - auth-service: bcrypt 6.0.0 trae binarios precompilados (win32-x64); npm 11 avisa que no ejecutó su script de instalación, pero el módulo carga y funciona sin compilar.
+- Fase 2 (base): coordinator/index.js del base no cumple (sin token, sin upgrade, sin close, maneja workers) y se reescribió. Se reutilizaron `send()` (chequeo `readyState === OPEN`) y la idea de `broadcast()`, la estructura por secciones y HTTP + WS en el mismo puerto. Se eliminaron roles, workers, pulsos de aplicación, `/status`, dashboard estático y `cors()`.
+- coordinator: los mensajes son planos `{ type: "players_update", players: [...] }` como pide el enunciado, no el sobre `{ type, data }` del base.
+- coordinator: broadcastPlayers recorre el Map y no `wss.clients`, para no enviar la lista a sockets rechazados con 4001 que aún se están cerrando.
+- coordinator: además de userId y username string, el payload debe traer `exp` numérico; sin él el token se rechaza con 4001 (si no, el temporizador de expiración recibiría NaN y cerraría al instante).
+- coordinator: HEARTBEAT_INTERVAL_MS se valida como entero positivo; PORT entre 1 y 65535; dotenv con `{ quiet: true }`.
+- coordinator: log HTTP solo con método, ruta sin query y status (la query de /connect lleva el token); los rechazos registran solo el mensaje de jsonwebtoken ("jwt expired", "invalid signature"...).
+- coordinator: el socket crudo recibe un manejador de 'error' vacío al empezar el upgrade, para que un reset del cliente durante el handshake no tumbe el proceso.
+- coordinator: 404 y 500 HTTP como JSON `{ error }`; el apagado ordenado fuerza la salida a los 5 s (terminate) si algún cliente no completa el cierre.
+- coordinator: smoke-test usa B con un token de 3 s para S10 (B ya está desconectado), así no reemplaza la sesión de A ni de C.
