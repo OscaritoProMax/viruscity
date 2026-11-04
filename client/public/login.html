@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Iniciar sesión</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<main>
+    <!-- Aviso que deja el lobby al cerrar la sesión (token vencido, sesión duplicada, conexión perdida) -->
+    <div id="sessionBanner" class="banner" role="alert" hidden></div>
+
+    <header>
+        <h1>Bienvenido</h1>
+        <p class="muted">Crea una cuenta o inicia sesión para entrar al lobby.</p>
+    </header>
+
+    <div class="cards">
+        <section class="card">
+            <h2>Iniciar sesión</h2>
+            <form id="loginForm" novalidate>
+                <label>Usuario
+                    <input name="username" autocomplete="username" required>
+                </label>
+                <label>Contraseña
+                    <input name="password" type="password" autocomplete="current-password" required>
+                </label>
+                <button class="primary" type="submit">Entrar</button>
+                <p class="msg" id="loginMessage" aria-live="polite"></p>
+            </form>
+        </section>
+
+        <section class="card">
+            <h2>Crear cuenta</h2>
+            <form id="registerForm" novalidate>
+                <label>Usuario
+                    <input name="username" autocomplete="username" required>
+                </label>
+                <label>Contraseña
+                    <input name="password" type="password" autocomplete="new-password" required>
+                </label>
+                <p class="muted">Usuario de 3 a 30 caracteres (letras, números o guion bajo). Contraseña de 6 a 72 caracteres.</p>
+                <button type="submit">Registrarme</button>
+                <p class="msg" id="registerMessage" aria-live="polite"></p>
+            </form>
+        </section>
+    </div>
+</main>
+
+<script src="/config.js"></script>
+<script src="/js/login.js"></script>
+</body>
+</html>
