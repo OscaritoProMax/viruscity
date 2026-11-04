@@ -1,7 +1,7 @@
 // Lobby: se conecta al coordinator por WebSocket con el token guardado en el login
 // y muestra en vivo la lista de jugadores conectados.
 // Si la conexión se cierra sin que el usuario cierre sesión, vuelve al login con un mensaje.
-// Todo el texto dinámico se inserta con textContent (nunca innerHTML).
+// Todo el texto dinámico se inserta con textContent: nunca se interpreta texto como HTML.
 
 const $ = (id) => document.getElementById(id); // atajo tomado de dashboard/common.js del código base
 

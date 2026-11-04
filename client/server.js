@@ -76,9 +76,11 @@ const server = app.listen(PORT, (err) => {
 });
 
 // Cierre ordenado con Ctrl+C o una señal de terminación
+const SHUTDOWN_TIMEOUT_MS = 3 * 1000; // espera máxima antes de forzar la salida
+
 function shutdown() {
     server.close(() => process.exit(0));
-    setTimeout(() => process.exit(1), 3000).unref();
+    setTimeout(() => process.exit(1), SHUTDOWN_TIMEOUT_MS).unref();
 }
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);

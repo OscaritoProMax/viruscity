@@ -1,6 +1,6 @@
 // Pantalla de login y registro.
 // Las URLs vienen de window.APP_CONFIG, que genera el servidor del cliente en /config.js desde .env.
-// Todo el texto dinámico se inserta con textContent (nunca innerHTML).
+// Todo el texto dinámico se inserta con textContent: nunca se interpreta texto como HTML.
 
 const $ = (id) => document.getElementById(id); // atajo tomado de dashboard/common.js del código base
 
