@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lobby</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<main>
+    <header class="lobby-header">
+        <div>
+            <h1 id="greeting">Hola</h1>
+            <p class="muted">Estado: <span id="status" class="pill muted">Conectando…</span></p>
+        </div>
+        <button id="logoutButton" type="button">Cerrar sesión</button>
+    </header>
+
+    <section class="card">
+        <h2>Jugadores en línea (<span id="playerCount">0</span>)</h2>
+        <ul id="playerList" class="players"></ul>
+    </section>
+</main>
+
+<script src="/config.js"></script>
+<script src="/js/lobby.js"></script>
+</body>
+</html>

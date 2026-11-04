@@ -58,3 +58,11 @@ button:disabled { opacity: 0.6; cursor: wait; }
 
 .pill { font-size: 12px; font-weight: 600; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+
+/* Lobby */
+.lobby-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; text-align: left; }
+.lobby-header p { margin: 4px 0 0; }
+.players { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.players li { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; overflow-wrap: anywhere; }
+.players li.me { border-color: var(--accent); font-weight: 600; }
+.players:empty::after { content: "Nadie conectado todavía."; color: var(--muted); }
