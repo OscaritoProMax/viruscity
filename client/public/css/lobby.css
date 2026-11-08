@@ -1,0 +1,219 @@
+/* Lobby (sala de espera) de Viruscity.
+   Solo var(--...) para colores, espacios, radios, tipografía y tiempos.
+   Medidas fijas de componente: punto de estado de 8px, logo de 28px, ancho máximo de 1100px,
+   cortes responsive en 900px y 480px, y desplazamiento de entrada de 8px. */
+
+/* ---------- Barra superior fija ---------- */
+.topbar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3) var(--space-4);
+    padding: var(--space-3) var(--space-5);
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--bg-elev) 92%, transparent);
+    backdrop-filter: blur(6px);
+}
+
+.topbar__brand {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.topbar__wordmark {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    letter-spacing: .24em;
+    color: var(--text);
+}
+
+.topbar__city { color: var(--accent); }
+
+.topbar__actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+}
+
+/* Pastilla de estado de conexión */
+.status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--panel);
+    color: var(--text);
+    font-size: var(--fs-s);
+    font-weight: 600;
+}
+
+.status-pill__dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+}
+
+.status-pill[data-state="connecting"] .status-pill__dot { background: var(--cure); }
+
+.status-pill[data-state="connected"] .status-pill__dot {
+    background: var(--accent);
+    box-shadow: var(--shadow-glow);
+}
+
+.status-pill[data-state="disconnected"] .status-pill__dot { background: var(--danger); }
+
+.status-pill[data-state="preview"] .status-pill__dot { background: var(--muted); }
+
+/* Chip del usuario actual */
+.user-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+}
+
+.user-chip__name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+}
+
+/* ---------- Contenido ---------- */
+.lobby {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: var(--space-6) var(--space-5);
+    display: grid;
+    gap: var(--space-5);
+    align-items: start;
+}
+
+@media (min-width: 900px) {
+    .lobby { grid-template-columns: 1fr 1fr; }
+
+    .notice { grid-column: 1 / -1; }
+}
+
+.lobby__panel {
+    padding: var(--space-5);
+    display: grid;
+    gap: var(--space-4);
+}
+
+.lobby__desc { color: var(--muted); }
+
+/* Aviso informativo de la página */
+.notice {
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-m);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    color: var(--text);
+    font-size: var(--fs-s);
+}
+
+/* ---------- Sala de espera ---------- */
+.waiting {
+    display: grid;
+    gap: var(--space-3);
+}
+
+.waiting__count {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xl);
+    font-weight: 700;
+    letter-spacing: .06em;
+}
+
+.waiting__count #waitingCount { color: var(--cure); }
+
+.waiting__text { color: var(--muted); font-size: var(--fs-s); }
+
+.waiting__text.is-ready {
+    color: var(--cure);
+    font-weight: 600;
+}
+
+/* ---------- Lista de jugadores ---------- */
+.players {
+    list-style: none;
+    padding: 0;
+    display: grid;
+    gap: var(--space-2);
+}
+
+.player {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--panel-2);
+    transition: border-color var(--t-fast) var(--ease), background-color var(--t-fast) var(--ease);
+}
+
+.player:hover {
+    border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+    background: color-mix(in srgb, var(--accent) 5%, var(--panel-2));
+}
+
+.player.me { border-color: var(--accent); }
+
+.player__name {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-weight: 600;
+}
+
+.players__empty {
+    padding: var(--space-5);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-m);
+    color: var(--muted);
+    text-align: center;
+}
+
+/* Entrada de un jugador nuevo */
+@keyframes player-enter {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .player.enter { animation: player-enter var(--t-med) var(--ease) both; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .player { transition: opacity var(--t-fast) linear; }
+}
+
+/* ---------- Pantallas de menos de 900px: una columna, jugadores primero ---------- */
+@media (max-width: 899.98px) {
+    .lobby__players { order: -1; }
+
+    .notice { order: -2; }
+
+    .lobby { padding: var(--space-5) var(--space-4); }
+}
+
+@media (max-width: 479.98px) {
+    .topbar { padding: var(--space-3) var(--space-4); }
+
+    .topbar__wordmark { display: none; }
+
+    .user-chip__name { max-width: 9em; }
+}
