@@ -78,6 +78,7 @@ Tres procesos separados: auth-service (HTTP, puerto 4000, SQLite + JWT), coordin
 - Sin dependencias externas: nada de CDN, fuentes web, imágenes remotas ni frameworks. Todo local (SVG/CSS/JS plano con módulos ES).
 - Texto dinámico siempre con textContent o fillText (nunca innerHTML en JS). El marcado estático va en los .html.
 - Todo el texto visible en español.
+- En la rama taller-5 SÍ se permite tocar auth-service/, coordinator/ y client/server.js, según lo indiquen las fases T1-T3.
 
 ### Estética
 Ciudad de noche con neón biológico. Tokens en css/tokens.css (única fuente de colores, espacios, radios y tipografía; ningún color ni tamaño suelto en otros CSS, solo var(--...)). Títulos en var(--font-mono), mayúsculas y letter-spacing .12em. Cuerpo en var(--font-ui). Semántica de color: cian = acento/acciones/sano; verde = infectado; dorado = cura/progreso; rojo = error/peligro. Bordes de 1px var(--border), radios m/l, sombras suaves; el glow cian solo en el foco y en elementos principales.
@@ -98,3 +99,28 @@ ui-config.js, avatar.js, toast.js, modal.js, lobby-view.js, hud.js, end-overlay.
 
 ### Vista previa (solo diseño)
 Con ?preview=1 (o ?preview=<estado>) las páginas muestran datos de ejemplo sin red ni token. Existe una bandera UI.PREVIEW_ENABLED en ui-config.js (true mientras se diseña; DEBE ponerse en false antes de la entrega).
+
+## TALLER 5 – PROYECTO FINAL PARTE II (prevalece sobre decisiones anteriores en caso de conflicto)
+
+### Objetivo
+(1) Juego en vivo: el SERVIDOR es la autoridad; el cliente NO calcula su posición, solo manda intenciones. (2) Login con Google además de usuario/contraseña; ambos producen el mismo JWT y conviven en una sola tabla users.
+
+### Decisiones fijas
+1. Tabla única, esquema EXACTO:
+   CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, provider TEXT NOT NULL CHECK(provider IN ('local','google')), password_hash TEXT, google_sub TEXT UNIQUE, email TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)
+   Invariantes que se hacen cumplir en el código: local → tiene password_hash y NO google_sub; google → tiene google_sub y email y NO password_hash. Un username no se repite entre providers. En SQL, strings siempre con comillas simples.
+2. Stack del auth: node:sqlite (DatabaseSync), bcryptjs, google-auth-library, express, cors, jsonwebtoken, dotenv. Se retiran better-sqlite3 y bcrypt.
+3. username 3-32 con ^[a-zA-Z0-9_]+$ (distingue mayúsculas); password 6-72; JWT_SECRET de al menos 32 caracteres; BCRYPT_ROUNDS >= 10.
+4. JWT HS256 con payload { userId (string), username, provider ('local'|'google') } + iat/exp (JWT_EXPIRES_IN, por defecto 1h; "30s" para la demo).
+5. Autenticación con Google: Opción A (Google Identity Services). El cliente manda POST /auth/google { idToken, username? }. El servidor verifica con client.verifyIdToken({ idToken, audience: GOOGLE_CLIENT_ID }), exige email_verified === true, usa sub como llave (google_sub), nunca el email.
+6. Respuestas de /auth/google (códigos EXACTOS): 200 { token, username }; 409 { error:"username_required", hint:"..." }; 409 { error:"username_taken" }; 401 { error:"invalid_id_token" }; 401 { error:"email_not_verified" }; 400 { error:"idToken requerido" } o mensaje de validación del username.
+7. /login con un usuario provider 'google' → 401 { error:"Credenciales inválidas" } idéntico al de contraseña incorrecta (sin revelar que existe; se hace un bcrypt.compare ficticio para igualar tiempos).
+8. NUNCA registrar en logs: idToken, token, email, contraseña ni err.message de la verificación de Google (esa librería incluye el token en algunos mensajes).
+9. Coordinador autoritativo: estado por jugador { username, provider, socket, connectedAt, x, y, intent:{x,y}, extras:{} }; game loop a TICK_RATE Hz (20 por defecto) con dt calculado con Date.now() (acotado a 0.25 s) que aplica intenciones normalizadas con Math.hypot, mantiene al jugador dentro del mundo y hace UN broadcast del state por tick (no hay broadcast en los handlers de mensajes). El handler de mensajes solo guarda intent/extras, jamás mueve.
+10. Mensajes cliente→servidor: { type:"intent", intent:{ dir:{ x, y } } } (valores numéricos finitos, se sanean con Math.sign a -1/0/1) y { type:"extras_update", extras:{...} } (objeto no-array, máximo MAX_EXTRAS_BYTES=1024 bytes serializado; si trae color debe cumplir ^#[0-9a-fA-F]{6}$ o se ignora el mensaje; el color se guarda en minúsculas; extras se REEMPLAZA completo). Mensajes inválidos se ignoran sin responder ni caer. ws con maxPayload 2048 y límite de MAX_MSGS_PER_SEC=60 por socket (el exceso se descarta en silencio).
+11. Mensajes servidor→cliente: welcome { type, you:{userId,username,provider}, world:{width,height,playerRadius,tickRate} }; state { type:"state", t:number, players:[{userId,username,provider,x,y,extras}] }; y se conservan los de Taller 4 (players_update al entrar/salir, cierres 4001 "invalid token" / "token expired", 4002 "replaced by new session", heartbeat, política de sesión duplicada). provider en el state lo pone el servidor desde el JWT (no es un extra del cliente).
+12. Valores por defecto: WORLD_WIDTH 1200, WORLD_HEIGHT 800, PLAYER_RADIUS 16, PLAYER_SPEED 200, TICK_RATE 20. Todo configurable por .env del coordinador.
+13. Cliente: la página del juego es play.html (con css/play.css y js/play/). El estado más reciente del servidor vive en la variable GLOBAL window.lastState (el mensaje state completo). El cliente no calcula posiciones: dibuja lo que dice lastState (con suavizado solo visual) y manda intenciones. Tras el login (usuario/contraseña o Google) se redirige a play.html. lobby.html del Taller 4 queda como legado, sin referencias.
+14. Excepción a "sin dependencias externas": se permite SOLO el script https://accounts.google.com/gsi/client en login.html. El GOOGLE_CLIENT_ID es público y viaja en /config.js; el Client Secret no se usa ni se guarda.
+15. El mínimo de 4 jugadores de Viruscity NO aplica en este taller (la demo es con dos pestañas). Nada de lógica de Viruscity aquí.
+16. Pruebas: node:test en cada servicio (`npm test`). Las pruebas de Google usan un verificador falso inyectado; ningún modo de prueba existe en el código de producción.
