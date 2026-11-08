@@ -3,7 +3,9 @@
 // Si la conexión se cierra sin que el usuario cierre sesión, vuelve al login con un mensaje.
 // Se carga como módulo: la parte visual la pinta ui/lobby-view.js (siempre con textContent).
 
+import { UI } from "./ui/ui-config.js";
 import { createLobbyView } from "./ui/lobby-view.js";
+import { startLobbyPreview } from "./ui/preview.js";
 
 const $ = (id) => document.getElementById(id); // atajo tomado de dashboard/common.js del código base
 
@@ -83,10 +85,17 @@ function startLobby(token) {
     });
 }
 
-// Sin token no hay sesión: directo al login
-const token = localStorage.getItem("token");
-if (!token) {
-    window.location.href = "login.html";
+// Vista previa de diseño (?preview): datos de ejemplo, sin token ni WebSocket
+const isPreview = UI.PREVIEW_ENABLED && new URLSearchParams(location.search).has("preview");
+
+if (isPreview) {
+    startLobbyPreview(view);
 } else {
-    startLobby(token);
+    // Sin token no hay sesión: directo al login
+    const token = localStorage.getItem("token");
+    if (!token) {
+        window.location.href = "login.html";
+    } else {
+        startLobby(token);
+    }
 }
