@@ -1,0 +1,253 @@
+/* Componentes compartidos de Viruscity: avatar, chip, badge, progreso, título de panel,
+   toasts y modal. Solo var(--...) para colores, espacios, radios, tipografía y tiempos.
+   Medidas fijas de componente: tamaños de avatar (28/36/48px), ancho de toast (360px),
+   ancho máximo del modal (560px), alto de la barra de progreso (8px) y bordes de 1-4px. */
+
+/* ---------- Avatar ---------- */
+.avatar {
+    flex: none;
+    display: inline-grid;
+    place-items: center;
+    border-radius: 50%;
+    color: var(--accent-ink);
+    font-family: var(--font-mono);
+    font-weight: 700;
+    line-height: 1;
+    user-select: none;
+}
+
+.avatar--s { width: 28px; height: 28px; font-size: var(--fs-s); }
+
+.avatar--m { width: 36px; height: 36px; font-size: var(--fs-s); }
+
+.avatar--l { width: 48px; height: 48px; font-size: var(--fs-m); }
+
+/* ---------- Chip ---------- */
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--panel);
+    color: var(--muted);
+    font-size: var(--fs-s);
+}
+
+.chip--accent {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+/* ---------- Badge (etiqueta corta) ---------- */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-s);
+    background: var(--panel-2);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: var(--fs-s);
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+}
+
+.badge--accent { background: var(--accent); color: var(--accent-ink); }
+
+.badge--cure { background: var(--cure); color: var(--accent-ink); }
+
+.badge--infected { background: var(--infected); color: var(--accent-ink); }
+
+.badge--danger { background: var(--danger); color: var(--accent-ink); }
+
+/* ---------- Título de panel ---------- */
+.panel-title {
+    font-family: var(--font-mono);
+    font-size: var(--fs-s);
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+/* ---------- Progreso (relleno dorado = avance hacia la cura / el inicio) ---------- */
+.progress {
+    height: 8px;
+    border-radius: var(--radius-s);
+    background: var(--panel-2);
+    overflow: hidden;
+}
+
+.progress__fill {
+    height: 100%;
+    background: var(--cure);
+    border-radius: inherit;
+    transition: width var(--t-med) var(--ease);
+}
+
+/* Variante segmentada: un segmento por paso */
+.progress--segmented {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    gap: var(--space-1);
+    background: none;
+    overflow: visible;
+}
+
+.progress__seg {
+    border-radius: var(--radius-s);
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    transition: background-color var(--t-med) var(--ease), border-color var(--t-med) var(--ease);
+}
+
+.progress__seg.is-on {
+    background: var(--cure);
+    border-color: var(--cure);
+}
+
+/* ---------- Toasts ---------- */
+.toasts {
+    position: fixed;
+    top: var(--space-4);
+    right: var(--space-4);
+    z-index: 50;
+    display: grid;
+    gap: var(--space-2);
+    width: min(360px, calc(100vw - 2 * var(--space-4)));
+    pointer-events: none;
+}
+
+.toast {
+    pointer-events: auto;
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-2) var(--space-3) var(--space-4);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: var(--radius-m);
+    background: var(--panel-2);
+    box-shadow: var(--shadow-1);
+    color: var(--text);
+    font-size: var(--fs-s);
+    opacity: 0;
+    transform: translateY(-8px);
+    transition: opacity var(--t-med) var(--ease), transform var(--t-med) var(--ease);
+}
+
+.toast.is-visible { opacity: 1; transform: none; }
+
+.toast.is-leaving { opacity: 0; transform: translateX(16px); }
+
+.toast--info { border-left-color: var(--accent); }
+
+.toast--success { border-left-color: var(--cure); }
+
+.toast--danger { border-left-color: var(--danger); }
+
+.toast--infect { border-left-color: var(--infected); }
+
+.toast__text { flex: 1; padding-top: var(--space-1); }
+
+.toast__close {
+    flex: none;
+    width: 44px;
+    height: 44px;
+    margin: calc(-1 * var(--space-2)) 0; /* objetivo táctil de 44px sin agrandar el aviso */
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: var(--radius-s);
+    background: transparent;
+    color: var(--muted);
+}
+
+.toast__close:hover { color: var(--text); background: var(--panel); }
+
+/* En pantallas angostas los avisos salen abajo al centro */
+@media (max-width: 599.98px) {
+    .toasts {
+        top: auto;
+        bottom: var(--space-4);
+        right: 50%;
+        transform: translateX(50%);
+    }
+
+    .toast { transform: translateY(8px); }
+}
+
+/* ---------- Modal ---------- */
+.has-modal { overflow: hidden; }
+
+.modal {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: grid;
+    place-items: center;
+    padding: var(--space-4);
+    background: color-mix(in srgb, var(--bg) 75%, transparent);
+    backdrop-filter: blur(4px);
+    animation: modal-fade var(--t-med) var(--ease) both;
+}
+
+.modal__box {
+    width: 100%;
+    max-width: 560px;
+    max-height: calc(100dvh - 2 * var(--space-4));
+    overflow: auto;
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--panel);
+    box-shadow: var(--shadow-1), var(--shadow-glow);
+    animation: modal-in var(--t-med) var(--ease) both;
+}
+
+.modal__box:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.modal__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+}
+
+.modal__title { color: var(--text); font-size: var(--fs-m); }
+
+.modal__close {
+    flex: none;
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: transparent;
+    color: var(--muted);
+}
+
+.modal__close:hover { color: var(--text); border-color: var(--accent); }
+
+@keyframes modal-fade { from { opacity: 0; } }
+
+@keyframes modal-in { from { opacity: 0; transform: translateY(8px) scale(.98); } }
+
+/* ---------- Movimiento reducido: solo opacidad ---------- */
+@media (prefers-reduced-motion: reduce) {
+    .toast,
+    .toast.is-leaving,
+    .toast.is-visible { transform: none; transition: opacity var(--t-med) linear; }
+
+    .modal__box { animation-name: modal-fade; }
+
+    .progress__fill,
+    .progress__seg { transition: opacity var(--t-fast) linear; }
+}
