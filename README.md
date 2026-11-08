@@ -80,13 +80,14 @@ Cada servicio se expone a Internet con su propio túnel **ngrok**. El cliente us
     ├── server.js             # Express estático + /config.js desde .env
     ├── package.json
     ├── package-lock.json
-    └── public/
-        ├── login.html
-        ├── lobby.html
-        ├── css/style.css
-        └── js/
-            ├── login.js
-            └── lobby.js
+    ├── public/               # login, lobby y juego (detalle en la sección 11)
+    │   ├── login.html
+    │   ├── lobby.html
+    │   ├── game.html
+    │   ├── css/              # tokens.css, base.css, components.css, login.css, lobby.css, game.css
+    │   ├── img/              # logo.svg, favicon.svg
+    │   └── js/               # login.js, lobby.js, login-ui.js, game-shell.js y ui/ (módulos de interfaz)
+    └── test/                 # pruebas de la interfaz (npm test)
 ```
 
 Archivos que existen solo en tu equipo y están ignorados por git: `*/.env`, `*/node_modules/` y `auth-service/users.db` (se crea al arrancar el auth-service).
@@ -393,6 +394,8 @@ Los nombres de usuario y los mensajes del servidor se insertan siempre con `text
   - se agregaron formularios, mensajes verde/rojo, el banner y la lista.
 
   De `dashboard/common.js` solo se tomó el atajo `$`. `setStatus()` del lobby adapta `setWsStatus()` del dashboard del base.
+
+  Más tarde, la interfaz de Viruscity (sección 11) reemplazó esa hoja de estilos por `tokens.css` y sus componentes, y `style.css` se retiró.
 - **client, configuración**: `PORT` también es obligatorio (sin puertos escritos en `server.js`). `AUTH_URL` debe ser http(s) y `COORDINATOR_WS_URL` debe ser ws(s). Responde 404 como JSON y tiene cierre ordenado.
 - **client, respuestas raras**: si la respuesta del auth-service no es JSON (por ejemplo, una página de ngrok), se muestra "Error inesperado del servidor (status)".
 - **Pruebas en Windows**: los procesos de prueba se levantan con `Start-Process -PassThru` y se detienen por PID, porque el PID leído de `netstat` en Git Bash puede traer un `\r` y hacer fallar `taskkill` sin aviso.
@@ -452,7 +455,7 @@ En el lobby, abre DevTools → Application → Local Storage, cambia unos caract
 | Manejo del close | [coordinator/index.js](coordinator/index.js#L168) | `ws.on("close")`: limpia el timer de expiración, borra solo si `players.get(userId)?.socket === ws` y vuelve a hacer broadcast |
 | Expiración y heartbeat | [coordinator/index.js](coordinator/index.js#L166) | el `setTimeout` con `4001 "token expired"` y el `setInterval` de ping/pong ([línea 190](coordinator/index.js#L190)) |
 | Emisión del token (si preguntan) | [auth-service/index.js](auth-service/index.js#L131) | `POST /login`: `DUMMY_HASH`, `bcrypt.compare`, `jwt.sign` |
-| Reacción del cliente | [client/public/js/lobby.js](client/public/js/lobby.js#L81) | `ws.onclose`: mensaje según 4001/4002/otro, `sessionStorage` y vuelta al login |
+| Reacción del cliente | [client/public/js/lobby.js](client/public/js/lobby.js#L72) | `ws.onclose`: mensaje según 4001/4002/otro, `sessionStorage` y vuelta al login |
 
 **(e) Preguntas, 3 min.** Respuestas cortas a preguntas probables:
 
@@ -469,6 +472,143 @@ En el lobby, abre DevTools → Application → Local Storage, cambia unos caract
 
 ---
 
+## 11. Interfaz de Viruscity
+
+La capa visual del cliente: login, sala de espera y pantalla de juego. Es solo presentación. No cambia la lógica de red ni de sesión del Taller 4 (fetch al auth-service, `localStorage`, WebSocket a `/connect?token=`, cierres 4001/4002) y no usa dependencias externas: todo es HTML, CSS y JS plano con módulos ES, sin CDN, fuentes web ni imágenes remotas.
+
+### Dirección de arte y tokens
+
+**Ciudad de noche con neón biológico.** Los títulos van en fuente monoespaciada, en mayúsculas y con espaciado amplio; el cuerpo, en la fuente del sistema. Los bordes son de 1 px, las esquinas redondeadas y las sombras suaves. El brillo cian se reserva para el foco y los elementos principales.
+
+`client/public/css/tokens.css` es la **única fuente** de colores, espacios, radios, sombras, tipografía y tiempos de animación. Los demás CSS solo usan `var(--…)`, y el canvas lee los mismos tokens con `getComputedStyle`.
+
+| Token | Valor | Uso |
+|---|---|---|
+| `--bg` | `#0b1020` | Fondo de la página y del mapa |
+| `--bg-elev` | `#101733` | Superficies elevadas (barra superior, pestañas) |
+| `--panel` | `#121a33` | Tarjetas y paneles |
+| `--panel-2` | `#18223f` | Campos, filas de jugador, edificios |
+| `--border` | `#2a3560` | Bordes de 1 px |
+| `--text` | `#e6e9f5` | Texto principal y anillo del jugador local |
+| `--muted` | `#8f9bc4` | Etiquetas, ayudas y texto secundario |
+| `--accent` | `#4dd2ff` | **Cian**: acciones, foco, estado sano, mensajes correctos |
+| `--accent-ink` | `#06121c` | Texto sobre colores llenos (botones, chips) |
+| `--infected` | `#7cff6b` | **Verde**: infectado (solo el estado propio) |
+| `--danger` | `#ff4d6d` | **Rojo**: errores y peligro |
+| `--cure` | `#ffd166` | **Dorado**: cura, progreso y tareas hechas |
+
+El resto de tokens:
+- **Espacios:** de `--space-1` (4 px) a `--space-7` (48 px).
+- **Radios:** `--radius-s`, `--radius-m` y `--radius-l`.
+- **Sombras:** `--shadow-1` y `--shadow-glow`.
+- **Tipografía:** `--font-ui`, `--font-mono` y los tamaños de `--fs-s` a `--fs-hero`.
+- **Movimiento:** `--ease`, `--t-fast` y `--t-med`.
+
+### Estructura de `client/public`
+
+```
+public/
+├── login.html · lobby.html · game.html
+├── css/
+│   ├── tokens.css      # tokens de diseño (única fuente)
+│   ├── base.css        # reset, foco visible, .btn, .field, .card, .msg, .sr-only
+│   ├── components.css  # avatar, chip, badge, progreso, título de panel, toasts, modal
+│   └── login.css · lobby.css · game.css
+├── img/
+│   └── logo.svg · favicon.svg
+└── js/
+    ├── login.js        # lógica de login/registro (Taller 4)
+    ├── lobby.js        # lógica del lobby: token, WebSocket, cierres (Taller 4)
+    ├── login-ui.js     # pestañas, ojo de contraseña, partículas
+    ├── game-shell.js   # arranque de la página del juego
+    └── ui/             # módulos de interfaz (ES modules, sin red)
+        ├── ui-config.js     # constantes visuales y UI.PREVIEW_ENABLED
+        ├── avatar.js        # iniciales y color estable por id
+        ├── toast.js · modal.js
+        ├── lobby-view.js    # vista del lobby
+        ├── city-layout.js   # edificios, calles y plaza (decorativo)
+        ├── scene-renderer.js# cámara y dibujo del mapa en canvas
+        ├── hud.js · end-overlay.js
+        ├── particles.js     # partículas del login
+        └── preview.js       # datos de ejemplo de la vista previa
+```
+
+### Contrato de datos de la interfaz
+
+Los módulos de `js/ui/` **no conocen el WebSocket**: solo reciben datos planos por parámetros. La integración con la partida real solo tiene que alimentarlos.
+
+```js
+scene = {
+  world: { width, height },          // tamaño del mundo en px
+  playerRadius: number,              // radio de los jugadores (por defecto UI.PLAYER_RADIUS_DEFAULT)
+  me: { userId } | null,             // jugador local (la cámara lo sigue)
+  status: "healthy" | "infected" | null,   // SOLO el estado del jugador local
+  players: [{ userId, username, x, y, color?, badge? }],
+}
+```
+
+La interfaz **nunca recibe ni dibuja el estado de infección de otros jugadores**; `status` solo cambia la pantalla del jugador local (viñeta y aspecto verde).
+
+| Módulo | Funciones |
+|---|---|
+| `scene-renderer.js` | `createSceneRenderer(canvas)` → `{ resize(), draw(scene, nowMs) }` · `computeCamera(me, viewW, viewH, world)` |
+| `hud.js` | `createHud(root)` → `setMe({ username, status })`, `setCure(pct)`, `setPlayerCount(n)`, `setTasks([{ id, label, done }])`, `setHint(texto \| null)`, `setInfectCooldown(segundos \| null)`, `setConnection("ok" \| "unstable" \| "lost")`, `showRoleIntro({ status, ms }, onDone)`, `toast(texto, { kind, ms })` |
+| `end-overlay.js` | `showEndOverlay(root, { winner, reason, players, youWon }, { onBack })` → `{ close() }` |
+| `lobby-view.js` | `createLobbyView(root)` → `setUser`, `setStatus`, `setPlayers(players, meUsername)`, `showNotice` |
+| `toast.js` / `modal.js` | `createToaster(contenedor).show(texto, { kind })` · `createModal().open({ title, content, onClose, dismissible })` |
+
+### Vista previa (solo diseño)
+
+Mientras `UI.PREVIEW_ENABLED` sea `true` en `js/ui/ui-config.js`, estas URLs muestran datos de ejemplo sin red ni token:
+
+| URL | Qué muestra |
+|---|---|
+| `/lobby.html?preview=1` | Jugadores que entran uno a uno, barra hacia 4, una salida y un reingreso, y un toast |
+| `/game.html?preview=1` | Ciudad con 6 edificios, 6 jugadores y el HUD completo, más el panel de controles |
+| `/game.html?preview=infected` | El mismo juego con el jugador local infectado |
+| `/game.html?preview=end` | La pantalla de fin de partida abierta |
+
+En el juego, el panel "VISTA PREVIA · SOLO DISEÑO" se pliega con su botón y se muestra u oculta con la **tecla H**. Sus controles cubren:
+- **Estado:** sano o infectado.
+- **HUD:** cura, tareas, toasts, pista y enfriamiento.
+- **Ventanas:** modal, pantalla de rol y las dos pantallas de fin.
+- **Conexión:** estable, inestable o perdida.
+
+Sin `?preview`, `game.html` vuelve al lobby.
+
+### Accesibilidad
+
+- **Contraste AA** de los tokens, comprobado con `client/test/contrast.test.mjs`: 4.5:1 en texto. Los bordes de los campos también llegan a 3:1.
+- **Foco visible** en todo elemento interactivo: anillo cian de 2 px con 2 px de separación. Ningún CSS quita el `outline` sin reemplazo.
+- **Formularios:** cada campo tiene su `<label>`, con `autocomplete` correcto y textos de ayuda enlazados con `aria-describedby`.
+- **Botones:** los que solo tienen icono llevan `aria-label`, y todos miden al menos 44 px de alto.
+- **Avisos y diálogos:** los mensajes de login, los avisos del lobby y los toasts usan `aria-live`; `role="alert"` está solo en el aviso de sesión del login. Los modales y pantallas de rol o fin usan `role="dialog"` y `aria-modal`, atrapan o retienen el foco y lo devuelven al cerrar. Las pestañas siguen el patrón ARIA (flechas, Inicio y Fin).
+- **`prefers-reduced-motion`:** las partículas y el balanceo de la vista previa quedan quietos; las entradas animadas y las transiciones se reducen a opacidad.
+- **Texto dinámico:** se inserta siempre con `textContent` (DOM) o `fillText` (canvas), nunca con `innerHTML`.
+- **Pantallas pequeñas:** login, lobby y juego funcionan desde 360 px de ancho; el HUD se compacta por debajo de 700 px.
+- **Limitación conocida:** las iniciales de algunos avatares (tonos azules y violetas) tienen poco contraste. El avatar es decorativo (`aria-hidden`) y el nombre siempre aparece al lado.
+
+### Pruebas de la interfaz
+
+```bash
+cd client
+npm test
+```
+
+Ejecuta con `node:test` 19 pruebas de funciones puras: avatar (hash, color e iniciales), cámara (centrado, bordes y mundo pequeño) y contraste de tokens.
+
+### Pendiente para el Taller 5
+
+- **Partida real:** en [client/public/js/game-shell.js](client/public/js/game-shell.js#L21), bloque "INTEGRACIÓN REAL", la lógica de red debe:
+  - armar `scene` con cada actualización del servidor y llamar a `renderer.draw(scene, performance.now())`;
+  - llamar al HUD: `hud.setMe`, `setCure`, `setPlayerCount`, `setTasks`, `setHint`, `setInfectCooldown` y `setConnection`;
+  - mostrar `hud.showRoleIntro({ status })` al empezar y `showEndOverlay(...)` al terminar.
+- **Google login:** el contenedor `<div id="googleSlot" hidden>` de [login.html](client/public/login.html#L94) está reservado para el botón de Google; hoy no dibuja nada.
+- **Reglas del servidor:** `UI.MIN_PLAYERS_TO_START` y las longitudes de usuario y contraseña de `ui-config.js` solo se usan en textos de ayuda; la autoridad es el servidor.
+- **Antes de la entrega:** poner `UI.PREVIEW_ENABLED = false` en [ui-config.js](client/public/js/ui/ui-config.js#L6) para desactivar la vista previa.
+
+---
+
 ## Créditos
 
 Basado en el código de referencia **SSD-CommsWS** (<https://github.com/Draklif/SSD-CommsWS>).
@@ -477,7 +617,7 @@ Basado en el código de referencia **SSD-CommsWS** (<https://github.com/Draklif/
   - La estructura de `coordinator/index.js` (HTTP + WebSocket en el mismo puerto, secciones comentadas).
   - La función `send()` con chequeo de `readyState` y la idea de `broadcast()`.
   - El patrón `app.listen(PORT, (err) => …)` de Express 5.
-  - Los estilos de `dashboard/style.css` (paleta, modo oscuro, tarjetas, botones).
+  - Los estilos de `dashboard/style.css` (paleta, modo oscuro, tarjetas, botones) en la primera versión del cliente; la interfaz de Viruscity los reemplazó por su propio sistema de diseño.
   - El atajo `$` de `dashboard/common.js`.
   - El indicador de estado del WebSocket del dashboard.
 - **Cambiado o agregado**:
