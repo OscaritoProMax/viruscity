@@ -1,0 +1,536 @@
+/* Página del juego de Viruscity: canvas a pantalla completa, HUD, pantalla de rol y de fin.
+   Solo var(--...) para colores, espacios, radios, tipografía y tiempos.
+   Medidas fijas de componente: ancho de la barra de cura (420px), panel de tareas (300px),
+   corte responsive en 700px y bordes de 1-2px. */
+
+/* ---------- Página: sin scroll, canvas de fondo ---------- */
+html:has(body.game),
+body.game {
+    height: 100dvh;
+    overflow: hidden;
+}
+
+#gameCanvas {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100dvh;
+    display: block;
+}
+
+/* ---------- Capa del HUD ---------- */
+.hud {
+    position: fixed;
+    inset: 0;
+    z-index: 5;
+    pointer-events: none; /* el canvas queda accesible salvo donde hay paneles */
+}
+
+.hud-box {
+    pointer-events: auto;
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--bg); /* respaldo sólido si no hay backdrop-filter */
+    box-shadow: var(--shadow-1);
+    transition: border-color var(--t-med) var(--ease);
+}
+
+@supports (backdrop-filter: blur(6px)) {
+    .hud-box,
+    .hud-hint {
+        background: color-mix(in srgb, var(--bg) 75%, transparent);
+        backdrop-filter: blur(6px);
+    }
+}
+
+/* Modo infectado: borde verde sutil en los paneles y viñeta interior */
+.hud.is-infected .hud-box { border-color: color-mix(in srgb, var(--infected) 45%, var(--border)); }
+
+.hud-vignette {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    box-shadow: inset 0 0 64px color-mix(in srgb, var(--infected) 35%, transparent);
+    transition: opacity var(--t-med) var(--ease);
+}
+
+.hud.is-infected .hud-vignette { opacity: 1; }
+
+/* ---------- Banda de conexión ---------- */
+.hud-conn {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    padding: var(--space-1) var(--space-3);
+    text-align: center;
+    font-size: var(--fs-s);
+    font-weight: 600;
+}
+
+.hud-conn--unstable {
+    background: color-mix(in srgb, var(--cure) 18%, var(--bg));
+    border-bottom: 1px solid var(--cure);
+    color: var(--text);
+}
+
+.hud-conn--lost {
+    background: var(--danger);
+    color: var(--accent-ink);
+}
+
+/* La barra superior baja cuando la banda está visible */
+.hud-conn:not([hidden]) + .hud-top { top: var(--space-7); }
+
+/* ---------- Arriba: tarjeta propia · cura · contador ---------- */
+.hud-top {
+    position: absolute;
+    top: var(--space-4);
+    left: var(--space-4);
+    right: var(--space-4);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 420px) minmax(0, 1fr);
+    grid-template-areas: "me cure count";
+    align-items: start;
+    gap: var(--space-4);
+}
+
+.hud-me {
+    grid-area: me;
+    justify-self: start;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+}
+
+.hud-me__info { min-width: 0; }
+
+.hud-me__name {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 700;
+}
+
+.hud-me__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-1);
+}
+
+.hud-status {
+    padding: 0 var(--space-2);
+    font-family: var(--font-mono);
+    font-weight: 700;
+    letter-spacing: .12em;
+}
+
+.hud-status--healthy {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.hud-status--infected {
+    border-color: var(--infected);
+    color: var(--infected);
+}
+
+.hud-cooldown {
+    font-family: var(--font-mono);
+    font-size: var(--fs-s);
+    color: var(--infected);
+}
+
+.hud-cooldown.is-ready { font-weight: 700; }
+
+.hud-cure { grid-area: cure; }
+
+.hud-cure__head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: var(--space-2);
+}
+
+.hud-cure__pct {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    color: var(--cure);
+}
+
+.hud-count {
+    grid-area: count;
+    justify-self: end;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+/* ---------- Abajo-izquierda: tareas ---------- */
+.hud-tasks {
+    position: absolute;
+    left: var(--space-4);
+    bottom: var(--space-4);
+    width: min(300px, calc(100vw - 2 * var(--space-4)));
+    padding-top: var(--space-1);
+    padding-bottom: var(--space-1);
+}
+
+/* Plegado: solo ocupa lo que mide su cabecera */
+.hud-tasks.is-collapsed { width: auto; }
+
+.hud-tasks__head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.hud-tasks__head .panel-title { flex: 1; }
+
+.hud-tasks__progress {
+    font-family: var(--font-mono);
+    font-size: var(--fs-s);
+    color: var(--cure);
+}
+
+.hud-tasks__toggle {
+    width: 44px;
+    height: 44px;
+    margin-right: calc(-1 * var(--space-2));
+    border: 0;
+    border-radius: var(--radius-s);
+    background: transparent;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: var(--fs-l);
+}
+
+.hud-tasks__toggle:hover { color: var(--text); }
+
+.hud-tasks__list {
+    list-style: none;
+    padding: 0 0 var(--space-3);
+    display: grid;
+    gap: var(--space-2);
+}
+
+.hud-task {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    font-size: var(--fs-s);
+}
+
+.hud-task__mark {
+    flex: none;
+    width: 1.25em;
+    text-align: center;
+    font-family: var(--font-mono);
+    color: var(--muted);
+}
+
+.hud-task.is-done .hud-task__mark { color: var(--cure); }
+
+.hud-task.is-done .hud-task__label {
+    color: var(--muted);
+    text-decoration: line-through;
+}
+
+/* ---------- Abajo-centro: pista ---------- */
+.hud-hint {
+    pointer-events: none;
+    position: absolute;
+    left: 50%;
+    bottom: var(--space-4);
+    transform: translateX(-50%);
+    max-width: calc(100vw - 2 * var(--space-4));
+    padding: var(--space-2) var(--space-4);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-l);
+    background: var(--bg);
+    font-family: var(--font-mono);
+    font-size: var(--fs-s);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Los avisos del juego salen bajo la barra superior */
+body.game .toasts { top: calc(var(--space-7) * 2); }
+
+/* ---------- Pantalla de rol ---------- */
+.role-intro {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    display: grid;
+    place-content: center;
+    gap: var(--space-4);
+    padding: var(--space-5);
+    text-align: center;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(6px);
+    cursor: pointer;
+    animation: role-in var(--t-med) var(--ease) both;
+}
+
+.role-intro:focus-visible { outline: none; }
+
+.role-intro__title {
+    font-size: var(--fs-hero);
+    letter-spacing: .12em;
+}
+
+.role-intro--healthy .role-intro__title { color: var(--accent); }
+
+.role-intro--infected .role-intro__title { color: var(--infected); }
+
+.role-intro__text {
+    display: grid;
+    gap: var(--space-1);
+    font-size: var(--fs-l);
+}
+
+.role-intro__skip {
+    color: var(--muted);
+    font-size: var(--fs-s);
+}
+
+@keyframes role-in {
+    from {
+        opacity: 0;
+        transform: scale(.98);
+    }
+}
+
+/* ---------- Pantalla de fin ---------- */
+.end-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    display: grid;
+    place-items: center;
+    padding: var(--space-4);
+    overflow: auto;
+    background: color-mix(in srgb, var(--bg) 85%, transparent);
+    backdrop-filter: blur(6px);
+    animation: role-in var(--t-med) var(--ease) both;
+}
+
+.end-overlay__box {
+    width: 100%;
+    max-width: 560px;
+    display: grid;
+    gap: var(--space-4);
+    padding: var(--space-6);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--panel);
+    box-shadow: var(--shadow-1);
+}
+
+.end-overlay__title { font-size: var(--fs-xl); }
+
+.end-overlay--healthy .end-overlay__title { color: var(--cure); }
+
+.end-overlay--infected .end-overlay__title { color: var(--infected); }
+
+.end-overlay__reason { color: var(--muted); }
+
+.end-overlay__result {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+}
+
+.end-overlay__result.is-win { color: var(--cure); }
+
+.end-overlay__result.is-loss { color: var(--danger); }
+
+.end-overlay__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--fs-s);
+}
+
+.end-overlay__table th {
+    padding: var(--space-2);
+    border-bottom: 1px solid var(--border);
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-align: left;
+    text-transform: uppercase;
+}
+
+.end-overlay__table td {
+    padding: var(--space-2);
+    border-bottom: 1px solid var(--border);
+    overflow-wrap: anywhere;
+}
+
+.end-overlay__table tr.is-me td { color: var(--text); font-weight: 700; }
+
+.role-chip--healthy {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.role-chip--infected {
+    border-color: var(--infected);
+    color: var(--infected);
+}
+
+/* ---------- Panel de vista previa (solo diseño; se quita con UI.PREVIEW_ENABLED = false) ---------- */
+.preview-panel {
+    position: fixed;
+    right: var(--space-4);
+    bottom: var(--space-4);
+    z-index: 30;
+    width: min(320px, calc(100vw - 2 * var(--space-4)));
+    max-height: calc(100dvh - 2 * var(--space-4));
+    overflow: auto;
+    padding: var(--space-2) var(--space-4) var(--space-4);
+    border: 1px dashed var(--cure);
+    border-radius: var(--radius-m);
+    background: var(--panel);
+    box-shadow: var(--shadow-1);
+}
+
+.preview-panel.is-collapsed { width: auto; }
+
+.preview-panel__head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.preview-panel__head .panel-title {
+    flex: 1;
+    color: var(--cure);
+}
+
+.preview-panel__toggle {
+    width: 44px;
+    height: 44px;
+    border: 0;
+    border-radius: var(--radius-s);
+    background: transparent;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: var(--fs-l);
+}
+
+.preview-panel__body {
+    display: grid;
+    gap: var(--space-3);
+}
+
+.preview-panel__hint {
+    color: var(--muted);
+    font-size: var(--fs-s);
+}
+
+.preview-panel__row {
+    display: grid;
+    gap: var(--space-1);
+    font-size: var(--fs-s);
+}
+
+.preview-panel__row label { color: var(--muted); font-weight: 600; }
+
+.preview-panel__grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-2);
+}
+
+.preview-panel .btn {
+    padding: var(--space-1) var(--space-3);
+    font-size: var(--fs-s);
+}
+
+.preview-panel input[type="range"] {
+    width: 100%;
+    min-height: 44px;
+    accent-color: var(--cure);
+}
+
+.preview-panel select {
+    min-height: 44px;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid color-mix(in srgb, var(--muted) 60%, var(--border));
+    border-radius: var(--radius-m);
+    background: var(--panel-2);
+    color: var(--text);
+}
+
+/* ---------- Movimiento reducido: solo opacidad ---------- */
+@keyframes role-fade { from { opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+    .role-intro,
+    .end-overlay { animation-name: role-fade; }
+
+    .hud-box,
+    .hud-vignette { transition: opacity var(--t-fast) linear; }
+}
+
+/* ---------- Pantallas de menos de 700px: HUD compacto ---------- */
+@media (max-width: 699.98px) {
+    .hud-top {
+        top: var(--space-2);
+        left: var(--space-2);
+        right: var(--space-2);
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas:
+            "me count"
+            "cure cure";
+        column-gap: 0;
+        row-gap: var(--space-2);
+    }
+
+    /* El contador se une a la tarjeta propia */
+    .hud-me {
+        justify-self: stretch;
+        border-right: 0;
+        border-radius: var(--radius-m) 0 0 var(--radius-m);
+    }
+
+    .hud-count {
+        justify-self: stretch;
+        align-self: stretch;
+        display: flex;
+        align-items: center;
+        border-left: 0;
+        border-radius: 0 var(--radius-m) var(--radius-m) 0;
+        font-size: var(--fs-s);
+    }
+
+    .hud-tasks {
+        left: var(--space-2);
+        bottom: var(--space-2);
+    }
+
+    /* Abajo se apilan: tareas (fila 1), panel de vista previa (fila 2) y la pista encima */
+    .hud-hint { bottom: calc(var(--space-7) * 3); }
+
+    .preview-panel {
+        right: var(--space-2);
+        bottom: calc(var(--space-7) + var(--space-5));
+        max-height: calc(100dvh - var(--space-7) * 4);
+    }
+
+    /* Los avisos salen bajo la barra superior compacta */
+    body.game .toasts {
+        top: calc(var(--space-7) * 3 + var(--space-4));
+        bottom: auto;
+    }
+}
