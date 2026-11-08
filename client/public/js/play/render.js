@@ -93,7 +93,7 @@ export function createRenderer(canvas) {
         ctx.strokeRect(px(1), px(1), world.width - px(2), world.height - px(2));
     }
 
-    function drawPlayer(p, pos, radius, isMe) {
+    function drawPlayer(p, pos, radius, isMe, world) {
         // Anillo claro del jugador local
         if (isMe) {
             ctx.beginPath();
@@ -121,8 +121,15 @@ export function createRenderer(canvas) {
         const padX = px(6);
         const pillH = fontSize + px(6);
         const pillW = ctx.measureText(name).width + padX * 2;
-        const pillX = pos.x - pillW / 2;
-        const pillY = pos.y - radius - px(8) - pillH;
+        const hasBadge = p.provider === "google" || p.provider === "local";
+        const labelW = pillW + (hasBadge ? px(4) + pillH : 0); // píldora + insignia
+
+        // La etiqueta se mantiene dentro del mundo: se desplaza en horizontal cerca de los bordes
+        // y pasa debajo del círculo si el jugador está pegado al borde superior
+        const margin = px(2);
+        const pillX = Math.min(Math.max(pos.x - pillW / 2, margin), world.width - labelW - margin);
+        const above = pos.y - radius - px(8) - pillH;
+        const pillY = above >= margin ? above : pos.y + radius + px(8);
 
         ctx.save();
         ctx.globalAlpha = 0.7;
@@ -136,7 +143,7 @@ export function createRenderer(canvas) {
         ctx.fillText(name, pillX + padX, pillY + pillH / 2);
 
         // Insignia del proveedor a la derecha del nombre (el provider lo pone el servidor)
-        if (p.provider === "google" || p.provider === "local") {
+        if (hasBadge) {
             const r = pillH / 2;
             const cx = pillX + pillW + px(4) + r;
             const cy = pillY + pillH / 2;
@@ -179,7 +186,7 @@ export function createRenderer(canvas) {
         const present = new Set();
         for (const p of players) {
             present.add(p.userId);
-            drawPlayer(p, smoothedPosition(p, dt), radius, p.userId === meId);
+            drawPlayer(p, smoothedPosition(p, dt), radius, p.userId === meId, world);
         }
         // Se olvidan las posiciones de quienes ya no están
         for (const id of renderPos.keys()) if (!present.has(id)) renderPos.delete(id);
