@@ -398,6 +398,8 @@ Los nombres de usuario y los mensajes del servidor se insertan siempre con `text
   Más tarde, la interfaz de Viruscity (sección 11) reemplazó esa hoja de estilos por `tokens.css` y sus componentes, y `style.css` se retiró.
 - **client, configuración**: `PORT` también es obligatorio (sin puertos escritos en `server.js`). `AUTH_URL` debe ser http(s) y `COORDINATOR_WS_URL` debe ser ws(s). Responde 404 como JSON y tiene cierre ordenado.
 - **client, respuestas raras**: si la respuesta del auth-service no es JSON (por ejemplo, una página de ngrok), se muestra "Error inesperado del servidor (status)".
+- **Nombres de usuario sin distinguir mayúsculas**: "Oscar", "osCar" y "OSCAR" son la misma cuenta. El registro responde 409 si el nombre ya existe con otras mayúsculas, y el login acepta cualquier combinación y devuelve el nombre tal como se registró. Un índice único `COLLATE NOCASE` lo garantiza aunque lleguen dos registros a la vez.
+- **Token corrupto con la sesión abierta**: el coordinator solo valida el token al conectar, así que el lobby revisa cada segundo el token guardado (y escucha el evento `storage` entre pestañas). Si cambia o desaparece, cierra la conexión y vuelve al login con un mensaje. Al cerrar, solo borra el token si sigue siendo el de esa pestaña, para no tumbar la sesión de otra.
 - **Pruebas en Windows**: los procesos de prueba se levantan con `Start-Process -PassThru` y se detienen por PID, porque el PID leído de `netstat` en Git Bash puede traer un `\r` y hacer fallar `taskkill` sin aviso.
 
 ---
@@ -412,7 +414,7 @@ Los nombres de usuario y los mensajes del servidor se insertan siempre con `text
 - **Contraseñas con bcrypt**: se guardan como hash bcrypt (`$2b$10$…`), nunca en texto plano.
 - **`.env` fuera de git**: `.gitignore` excluye `.env`, `*.db` y `node_modules/`. Solo se versiona `.env.example`, sin secretos reales.
 - **Validación de entrada**:
-  - Tipos y longitudes de `username` (3–30, `^[A-Za-z0-9_]+$`) y `password` (6–72).
+  - Tipos y longitudes de `username` (3–30, `^[A-Za-z0-9_]+$`, único sin distinguir mayúsculas: "Oscar" y "oscar" son la misma cuenta) y `password` (6–72).
   - Consultas SQL preparadas.
   - JWT verificado con `algorithms: ["HS256"]` y payload completo (`userId`, `username`, `exp`).
   - Las URLs del cliente se validan al arrancar.

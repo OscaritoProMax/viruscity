@@ -29,7 +29,7 @@ Tres procesos separados: auth-service (HTTP, puerto 4000, SQLite + JWT), coordin
 - Fuera de alcance por ahora: lógica de juego, protocolo WebSocket nuevo, Google login, servidores. Se permite SOLO la capa visual (UI) de Viruscity en client/public.
 
 ## Decisiones fijas (no cambiar sin preguntarme)
-1. username: se aplica trim; 3 a 30 caracteres; regex ^[A-Za-z0-9_]+$; distingue mayúsculas/minúsculas.
+1. username: se aplica trim; 3 a 30 caracteres; regex ^[A-Za-z0-9_]+$; único SIN distinguir mayúsculas ("Oscar", "osCar" y "OSCAR" son la misma cuenta; se guarda y se muestra como se registró; el login acepta cualquier combinación de mayúsculas). Cambiado a pedido del usuario.
 2. password: 6 a 72 caracteres (72 es el límite de bcrypt).
 3. bcrypt: rounds configurables con BCRYPT_ROUNDS, valor por defecto 10, mínimo permitido 10.
 4. JWT: algoritmo HS256; payload { userId (string), username }; iat y exp los agrega jsonwebtoken; expiración con JWT_EXPIRES_IN (por defecto "1h"; debo poder cambiarlo a "30s" solo editando .env).
@@ -67,6 +67,8 @@ Tres procesos separados: auth-service (HTTP, puerto 4000, SQLite + JWT), coordin
 - client: detrás de ngrok el cliente se sirve por HTTPS, así que COORDINATOR_WS_URL debe ser `wss://…` (el navegador bloquea ws:// desde una página https).
 - Fase 5: la instalación limpia falló porque npm 11 ejecuta `node-gyp rebuild` de better-sqlite3 al instalar desde package-lock.json (sin Visual Studio no compila). Con autorización del usuario se agregó auth-service/.npmrc con `ignore-scripts=true`; bcrypt y better-sqlite3 cargan sus binarios precompilados. Regenerar el lockfile no lo resolvía.
 - Fase 5: el tiempo de apagado de auth-service y coordinator pasó a la constante SHUTDOWN_TIMEOUT_MS (el literal 5000 parecía el puerto del coordinator).
+- Corrección (antes del Taller 5): usernames únicos sin distinguir mayúsculas. Se busca con `WHERE username = ? COLLATE NOCASE` (registro y login) y un índice aparte `users_username_nocase` (UNIQUE, COLLATE NOCASE) cubre registros simultáneos sin cambiar el esquema de la tabla. Si una base antigua ya tiene duplicados, el servicio avisa por stderr y sigue validando los registros nuevos.
+- Corrección (antes del Taller 5): el lobby vigila el token guardado (cada 1 s y con el evento `storage`). Si cambia o desaparece con la sesión abierta, cierra el WebSocket y vuelve al login con "El token de tu sesión no es válido." o "Tu sesión se cerró.". Al cerrar, solo borra el token si sigue siendo el de esa pestaña, y nunca con 4002 (el token ya es de la sesión nueva). La página de juego del Taller 5 (play.html) debe hacer lo mismo.
 - Pruebas en Windows: los procesos se levantan con `Start-Process -PassThru` y se detienen por PID. En la Fase 2 quedó vivo un coordinator porque el PID leído de `netstat` en Git Bash traía `\r` y `taskkill` falló sin aviso; se detectó y detuvo en la Fase 3.
 
 ## VIRUSCITY – INTERFAZ (solo estética)
@@ -110,7 +112,7 @@ Con ?preview=1 (o ?preview=<estado>) las páginas muestran datos de ejemplo sin 
    CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, provider TEXT NOT NULL CHECK(provider IN ('local','google')), password_hash TEXT, google_sub TEXT UNIQUE, email TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)
    Invariantes que se hacen cumplir en el código: local → tiene password_hash y NO google_sub; google → tiene google_sub y email y NO password_hash. Un username no se repite entre providers. En SQL, strings siempre con comillas simples.
 2. Stack del auth: node:sqlite (DatabaseSync), bcryptjs, google-auth-library, express, cors, jsonwebtoken, dotenv. Se retiran better-sqlite3 y bcrypt.
-3. username 3-32 con ^[a-zA-Z0-9_]+$ (distingue mayúsculas); password 6-72; JWT_SECRET de al menos 32 caracteres; BCRYPT_ROUNDS >= 10.
+3. username 3-32 con ^[a-zA-Z0-9_]+$ (único SIN distinguir mayúsculas entre todos los providers: Oscar = oscar; se conserva como se registró; cambiado a pedido del usuario); password 6-72; JWT_SECRET de al menos 32 caracteres; BCRYPT_ROUNDS >= 10.
 4. JWT HS256 con payload { userId (string), username, provider ('local'|'google') } + iat/exp (JWT_EXPIRES_IN, por defecto 1h; "30s" para la demo).
 5. Autenticación con Google: Opción A (Google Identity Services). El cliente manda POST /auth/google { idToken, username? }. El servidor verifica con client.verifyIdToken({ idToken, audience: GOOGLE_CLIENT_ID }), exige email_verified === true, usa sub como llave (google_sub), nunca el email.
 6. Respuestas de /auth/google (códigos EXACTOS): 200 { token, username }; 409 { error:"username_required", hint:"..." }; 409 { error:"username_taken" }; 401 { error:"invalid_id_token" }; 401 { error:"email_not_verified" }; 400 { error:"idToken requerido" } o mensaje de validación del username.
