@@ -18,6 +18,11 @@ const CLOSE_MESSAGES = {
 };
 const DEFAULT_CLOSE_MESSAGE = "Se perdió la conexión con el coordinador. Inicia sesión de nuevo.";
 
+// Vigilancia del token guardado mientras la sesión está abierta
+const TOKEN_CHECK_MS = 1000;
+const TOKEN_CHANGED_MESSAGE = "El token de tu sesión no es válido. Inicia sesión de nuevo.";
+const TOKEN_REMOVED_MESSAGE = "Tu sesión se cerró. Inicia sesión de nuevo.";
+
 // Lee el payload del JWT sin verificar la firma (la verificación la hace el coordinator).
 // Solo se usa para saber quién soy en la lista. Devuelve null si no se puede leer.
 function decodeTokenPayload(token) {
@@ -40,8 +45,10 @@ function setStatus(state) {
     view.setStatus(state, texts[state]);
 }
 
-// Borra la sesión guardada en el navegador
-function clearSession() {
+// Borra la sesión guardada en el navegador, pero solo si el token guardado sigue siendo el de
+// esta pestaña: todas las pestañas comparten localStorage y no se debe borrar la sesión de otra.
+function clearSession(token) {
+    if (localStorage.getItem("token") !== token) return;
     localStorage.removeItem("token");
     localStorage.removeItem("username");
 }
@@ -68,20 +75,39 @@ function startLobby(token) {
         if (msg && msg.type === "players_update" && Array.isArray(msg.players)) view.setPlayers(msg.players, myUsername);
     };
 
-    // Cierre inesperado: se guarda el motivo, se borra la sesión y se vuelve al login (sin reconexión)
+    // Cierre inesperado: se guarda el motivo, se borra la sesión y se vuelve al login (sin reconexión).
+    // Con 4002 el token guardado ya es el de la sesión nueva (otra pestaña): no se borra.
     ws.onclose = (event) => {
         setStatus("disconnected");
+        clearInterval(tokenWatch);
         if (loggingOut) return;
         sessionStorage.setItem("sessionMessage", CLOSE_MESSAGES[event.code] || DEFAULT_CLOSE_MESSAGE);
-        clearSession();
+        if (event.code !== 4002) clearSession(token);
         window.location.href = "login.html";
     };
 
     $("logoutButton").addEventListener("click", () => {
         loggingOut = true;
-        clearSession();
+        clearSession(token);
         ws.close(1000, "logout");
         window.location.href = "login.html";
+    });
+
+    // El coordinator solo valida el token al conectar. Si el token guardado cambia o desaparece con la
+    // sesión abierta (por ejemplo, alguien lo edita o lo borra en DevTools), esta sesión ya no es válida:
+    // se cierra y se vuelve al login con un mensaje. Se revisa cada segundo y, entre pestañas, con "storage".
+    function checkStoredToken() {
+        const stored = localStorage.getItem("token");
+        if (loggingOut || stored === token) return;
+        loggingOut = true; // el cierre del socket ya no se trata como inesperado
+        clearInterval(tokenWatch);
+        sessionStorage.setItem("sessionMessage", stored === null ? TOKEN_REMOVED_MESSAGE : TOKEN_CHANGED_MESSAGE);
+        ws.close(1000, "invalid token");
+        window.location.href = "login.html";
+    }
+    const tokenWatch = setInterval(checkStoredToken, TOKEN_CHECK_MS);
+    window.addEventListener("storage", (event) => {
+        if (event.key === "token" || event.key === null) checkStoredToken();
     });
 }
 
