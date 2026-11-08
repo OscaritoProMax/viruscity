@@ -530,6 +530,7 @@ public/
         ├── scene-renderer.js# cámara y dibujo del mapa en canvas
         ├── hud.js · end-overlay.js
         ├── particles.js     # partículas del login
+        ├── bouncing-virus.js# virus animado del login (rebota, se aplasta, salta al pulsarlo)
         └── preview.js       # datos de ejemplo de la vista previa
 ```
 
@@ -595,7 +596,16 @@ cd client
 npm test
 ```
 
-Ejecuta con `node:test` 19 pruebas de funciones puras: avatar (hash, color e iniciales), cámara (centrado, bordes y mundo pequeño) y contraste de tokens.
+Ejecuta con `node:test` 27 pruebas de funciones puras: avatar (hash, color e iniciales), cámara (centrado, bordes y mundo pequeño), contraste de tokens y física del virus animado del login (rebote estable, aplastamiento, salto que no se sale del escenario y antenas que se amortiguan).
+
+### Virus animado del login
+
+El hero del login muestra el logo como un virus "blando" que rebota contra el suelo. Está basado en la animación de referencia `virus_city_loading_screen.html`:
+- **Movimiento:** se aplasta y se estira, sus 8 antenas oscilan con inercia, suelta esporas al caer y proyecta una sombra luminosa.
+- **Salto:** con clic, toque, Enter o Espacio da un salto potente.
+- **Fondo:** el hero suma una cuadrícula "cyber", líneas de barrido y un título con brillo de neón.
+
+De la referencia **no** se usaron Tailwind, Google Fonts, Font Awesome, el sonido ni la barra de carga. Los colores salen de los tokens; la física usa un paso fijo de 1/60 s y se escala al tamaño del escenario (300 px de alto en escritorio y 170 px en móvil). Con movimiento reducido el virus queda quieto y deja de ser interactivo.
 
 ### Pendiente para el Taller 5
 
