@@ -60,6 +60,7 @@ $("registerForm").addEventListener("submit", (event) => {
                 // No se inicia sesión automáticamente: el usuario debe hacer login
                 showMessage(message, "Registro exitoso. Ahora inicia sesión.", true);
                 form.reset();
+                document.dispatchEvent(new CustomEvent("viruscity:registered", { detail: { username: data.username } }));
             } else {
                 showMessage(message, data.error || `Error inesperado del servidor (${status})`, false);
             }
