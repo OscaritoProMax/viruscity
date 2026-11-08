@@ -279,7 +279,11 @@ body.game .toasts { top: calc(var(--space-7) * 2); }
     animation: role-in var(--t-med) var(--ease) both;
 }
 
-.role-intro:focus-visible { outline: none; }
+/* La pantalla de rol recibe el foco al abrirse: anillo cian por dentro del borde de la pantalla */
+.role-intro:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: calc(-1 * var(--space-2));
+}
 
 .role-intro__title {
     font-size: var(--fs-hero);
