@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Viruscity">
+  <!-- Núcleo -->
+  <circle cx="32" cy="32" r="6" fill="#4dd2ff"/>
+  <!-- Anillo -->
+  <circle cx="32" cy="32" r="16" fill="none" stroke="#4dd2ff" stroke-width="4"/>
+  <!-- 8 púas cada 45°, del radio 18 al 24 -->
+  <g stroke="#4dd2ff" stroke-width="3" stroke-linecap="round">
+    <line x1="50" y1="32" x2="56" y2="32"/>
+    <line x1="44.73" y1="44.73" x2="48.97" y2="48.97"/>
+    <line x1="32" y1="50" x2="32" y2="56"/>
+    <line x1="19.27" y1="44.73" x2="15.03" y2="48.97"/>
+    <line x1="14" y1="32" x2="8" y2="32"/>
+    <line x1="19.27" y1="19.27" x2="15.03" y2="15.03"/>
+    <line x1="32" y1="14" x2="32" y2="8"/>
+    <line x1="44.73" y1="19.27" x2="48.97" y2="15.03"/>
+  </g>
+  <!-- Puntas: círculos r=3 en el radio 26 -->
+  <g fill="#4dd2ff">
+    <circle cx="58" cy="32" r="3"/>
+    <circle cx="50.38" cy="50.38" r="3"/>
+    <circle cx="32" cy="58" r="3"/>
+    <circle cx="13.62" cy="50.38" r="3"/>
+    <circle cx="6" cy="32" r="3"/>
+    <circle cx="13.62" cy="13.62" r="3"/>
+    <circle cx="32" cy="6" r="3"/>
+    <circle cx="50.38" cy="13.62" r="3"/>
+  </g>
+</svg>

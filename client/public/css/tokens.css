@@ -1,0 +1,49 @@
+/* Tokens de diseño de Viruscity: única fuente de colores, espacios, radios, sombras,
+   tipografía y movimiento. Los demás CSS solo deben usar var(--...). */
+:root {
+    /* Color: ciudad de noche con neón biológico */
+    --bg: #0b1020;
+    --bg-elev: #101733;
+    --panel: #121a33;
+    --panel-2: #18223f;
+    --border: #2a3560;
+    --text: #e6e9f5;
+    --muted: #8f9bc4;
+    --accent: #4dd2ff;      /* cian: acento, acciones, sano */
+    --accent-ink: #06121c;  /* texto sobre el acento */
+    --infected: #7cff6b;    /* verde: infectado */
+    --danger: #ff4d6d;      /* rojo: error, peligro */
+    --cure: #ffd166;        /* dorado: cura, progreso */
+
+    /* Espaciado */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
+    --space-6: 32px;
+    --space-7: 48px;
+
+    /* Radios */
+    --radius-s: 8px;
+    --radius-m: 12px;
+    --radius-l: 20px;
+
+    /* Sombras */
+    --shadow-1: 0 4px 16px rgba(0,0,0,.35);
+    --shadow-glow: 0 0 24px rgba(77,210,255,.25);
+
+    /* Tipografía */
+    --font-ui: system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --font-mono: ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+    --fs-s: .8125rem;
+    --fs-m: 1rem;
+    --fs-l: 1.25rem;
+    --fs-xl: 1.75rem;
+    --fs-hero: clamp(2rem,6vw,3.5rem);
+
+    /* Movimiento */
+    --ease: cubic-bezier(.2,.8,.2,1);
+    --t-fast: 120ms;
+    --t-med: 240ms;
+}
