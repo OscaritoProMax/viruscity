@@ -27,7 +27,7 @@ const JWT_SECRET = process.env.JWT_SECRET;
 const HEARTBEAT_RAW = process.env.HEARTBEAT_INTERVAL_MS || "30000";
 
 if (!JWT_SECRET) fatal("JWT_SECRET es obligatorio");
-if (JWT_SECRET.length < 16) fatal("JWT_SECRET debe tener al menos 16 caracteres");
+if (JWT_SECRET.length < 32) fatal("JWT_SECRET debe tener al menos 32 caracteres");
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) fatal("PORT debe ser un número de puerto válido");
 if (!/^\d+$/.test(HEARTBEAT_RAW) || Number(HEARTBEAT_RAW) < 1) {
     fatal("HEARTBEAT_INTERVAL_MS debe ser un entero positivo (milisegundos)");
