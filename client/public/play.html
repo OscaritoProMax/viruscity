@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<meta name="color-scheme" content="dark">
+<title>Viruscity · Juego en vivo</title>
+<link rel="icon" type="image/svg+xml" href="img/favicon.svg">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/play.css">
+</head>
+<body class="play">
+<header class="play-header">
+    <h1 class="play-title">VIRUS<span class="play-title__city">CITY</span></h1>
+
+    <!-- Estado de la conexión con el coordinador -->
+    <span id="connection" class="play-pill" data-state="connecting">
+        <span class="play-pill__dot" aria-hidden="true"></span>
+        <span id="connectionText" aria-live="polite">Conectando…</span>
+    </span>
+
+    <div class="play-header__actions">
+        <span class="play-user">
+            <span id="meName" class="play-user__name"></span>
+            <span id="meProvider" class="provider-badge" hidden></span>
+        </span>
+        <button id="logoutButton" type="button" class="btn btn--ghost">Cerrar sesión</button>
+    </div>
+</header>
+
+<div id="unstableNotice" class="play-notice" role="status" hidden>Conexión inestable…</div>
+
+<main class="play-main">
+    <section class="play-stage" aria-label="Mapa del juego">
+        <div id="canvasBox" class="play-canvas-box">
+            <canvas id="gameCanvas" role="img" aria-label="Mapa con los jugadores en línea"></canvas>
+        </div>
+        <p class="play-help">Muévete con WASD o las flechas</p>
+    </section>
+
+    <aside class="play-side">
+        <section class="play-panel" aria-labelledby="playersTitle">
+            <h2 id="playersTitle" class="play-panel__title">Jugadores en línea (<span id="playerCount">0</span>)</h2>
+            <ul id="playerList" class="play-players"></ul>
+        </section>
+
+        <section class="play-panel" aria-labelledby="colorTitle">
+            <h2 id="colorTitle" class="play-panel__title">Tu color</h2>
+            <div class="play-color">
+                <label class="play-color__picker" for="colorInput">
+                    <span class="sr-only">Elegir un color personalizado</span>
+                    <input type="color" id="colorInput" value="#4dd2ff">
+                </label>
+                <div class="play-swatches" role="group" aria-label="Colores predefinidos">
+                    <button type="button" class="play-swatch" data-color="#4dd2ff" aria-label="Cian"></button>
+                    <button type="button" class="play-swatch" data-color="#7cff6b" aria-label="Verde"></button>
+                    <button type="button" class="play-swatch" data-color="#ff4d6d" aria-label="Rojo"></button>
+                    <button type="button" class="play-swatch" data-color="#ffd166" aria-label="Dorado"></button>
+                    <button type="button" class="play-swatch" data-color="#b388ff" aria-label="Violeta"></button>
+                    <button type="button" class="play-swatch" data-color="#ff9f43" aria-label="Naranja"></button>
+                </div>
+            </div>
+        </section>
+    </aside>
+</main>
+
+<script src="/config.js"></script>
+<script type="module" src="js/play/play.js"></script>
+</body>
+</html>

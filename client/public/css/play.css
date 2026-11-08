@@ -1,0 +1,262 @@
+/* Página del juego en vivo (Taller 5). Usa los tokens de css/tokens.css con valores de respaldo.
+   Medidas fijas de componente: panel lateral de 260px, corte responsive en 800px, muestras de color
+   de 44px, punto de estado de 8px y bordes de 1-2px. */
+
+body.play {
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    background: var(--bg, #0b1020);
+    color: var(--text, #e6e9f5);
+    font-family: var(--font-ui, system-ui, sans-serif);
+}
+
+/* ---------- Barra superior ---------- */
+.play-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3, 12px) var(--space-4, 16px);
+    padding: var(--space-3, 12px) var(--space-5, 24px);
+    border-bottom: 1px solid var(--border, #2a3560);
+    background: var(--bg-elev, #101733);
+}
+
+.play-title {
+    margin: 0;
+    font-family: var(--font-mono, monospace);
+    font-size: var(--fs-l, 1.25rem);
+    letter-spacing: .24em;
+}
+
+.play-title__city { color: var(--accent, #4dd2ff); }
+
+.play-header__actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3, 12px);
+    min-width: 0;
+}
+
+.play-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2, 8px);
+    padding: var(--space-1, 4px) var(--space-3, 12px);
+    border: 1px solid var(--border, #2a3560);
+    border-radius: var(--radius-l, 20px);
+    background: var(--panel, #121a33);
+    font-size: var(--fs-s, .8125rem);
+    font-weight: 600;
+}
+
+.play-pill__dot {
+    width: var(--space-2, 8px);
+    height: var(--space-2, 8px);
+    border-radius: 50%;
+    background: var(--cure, #ffd166);
+}
+
+.play-pill[data-state="connected"] .play-pill__dot { background: var(--accent, #4dd2ff); }
+
+.play-pill[data-state="disconnected"] .play-pill__dot { background: var(--danger, #ff4d6d); }
+
+.play-user {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2, 8px);
+    min-width: 0;
+}
+
+.play-user__name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 700;
+}
+
+/* Insignia del proveedor de la cuenta (viene del servidor) */
+.provider-badge {
+    padding: 0 var(--space-2, 8px);
+    border: 1px solid var(--border, #2a3560);
+    border-radius: var(--radius-s, 8px);
+    color: var(--muted, #8f9bc4);
+    font-family: var(--font-mono, monospace);
+    font-size: var(--fs-s, .8125rem);
+    font-weight: 700;
+}
+
+.provider-badge[data-provider="google"] {
+    border-color: var(--accent, #4dd2ff);
+    color: var(--accent, #4dd2ff);
+}
+
+/* Aviso de conexión inestable */
+.play-notice {
+    padding: var(--space-2, 8px) var(--space-4, 16px);
+    border-bottom: 1px solid var(--cure, #ffd166);
+    background: color-mix(in srgb, var(--cure, #ffd166) 15%, var(--bg, #0b1020));
+    color: var(--text, #e6e9f5);
+    font-size: var(--fs-s, .8125rem);
+    text-align: center;
+}
+
+/* ---------- Contenido: canvas + panel lateral ---------- */
+.play-main {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 260px;
+    gap: var(--space-4, 16px);
+    padding: var(--space-4, 16px);
+}
+
+.play-stage {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2, 8px);
+}
+
+/* El canvas se ajusta (con computeFit) al tamaño de esta caja */
+.play-canvas-box {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+}
+
+.play-canvas-box canvas {
+    display: block;
+    border-radius: var(--radius-m, 12px);
+}
+
+.play-help {
+    margin: 0;
+    color: var(--muted, #8f9bc4);
+    font-size: var(--fs-s, .8125rem);
+    text-align: center;
+}
+
+.play-side {
+    display: grid;
+    align-content: start;
+    gap: var(--space-4, 16px);
+}
+
+.play-panel {
+    display: grid;
+    gap: var(--space-3, 12px);
+    padding: var(--space-4, 16px);
+    border: 1px solid var(--border, #2a3560);
+    border-radius: var(--radius-l, 20px);
+    background: var(--panel, #121a33);
+}
+
+.play-panel__title {
+    margin: 0;
+    color: var(--muted, #8f9bc4);
+    font-family: var(--font-mono, monospace);
+    font-size: var(--fs-s, .8125rem);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+}
+
+.play-players {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: var(--space-2, 8px);
+}
+
+.play-player {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2, 8px);
+    min-width: 0;
+    font-size: var(--fs-s, .8125rem);
+}
+
+.play-player__dot {
+    flex: none;
+    width: var(--space-3, 12px);
+    height: var(--space-3, 12px);
+    border-radius: 50%;
+    border: 1px solid var(--bg, #0b1020);
+}
+
+.play-player__name {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.play-player.is-me .play-player__name { font-weight: 700; }
+
+.play-players:empty::after {
+    content: "Nadie conectado todavía";
+    color: var(--muted, #8f9bc4);
+    font-size: var(--fs-s, .8125rem);
+}
+
+/* ---------- Color propio ---------- */
+.play-color {
+    display: grid;
+    gap: var(--space-3, 12px);
+}
+
+.play-color__picker input {
+    width: 100%;
+    min-height: 44px;
+    padding: var(--space-1, 4px);
+    border: 1px solid var(--border, #2a3560);
+    border-radius: var(--radius-m, 12px);
+    background: var(--panel-2, #18223f);
+    cursor: pointer;
+}
+
+.play-swatches {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: var(--space-2, 8px);
+}
+
+.play-swatch {
+    min-height: 44px;
+    border: 2px solid var(--border, #2a3560);
+    border-radius: var(--radius-s, 8px);
+    cursor: pointer;
+}
+
+.play-swatch[aria-pressed="true"] { border-color: var(--text, #e6e9f5); }
+
+/* Las muestras toman su color del atributo data-color (sin estilos en línea) */
+.play-swatch[data-color="#4dd2ff"] { background: #4dd2ff; }
+.play-swatch[data-color="#7cff6b"] { background: #7cff6b; }
+.play-swatch[data-color="#ff4d6d"] { background: #ff4d6d; }
+.play-swatch[data-color="#ffd166"] { background: #ffd166; }
+.play-swatch[data-color="#b388ff"] { background: #b388ff; }
+.play-swatch[data-color="#ff9f43"] { background: #ff9f43; }
+
+/* Foco visible aunque base.css no esté */
+.play :focus-visible {
+    outline: 2px solid var(--accent, #4dd2ff);
+    outline-offset: 2px;
+}
+
+/* ---------- Pantallas de menos de 800px: el panel pasa debajo del canvas ---------- */
+@media (max-width: 799.98px) {
+    .play-main { grid-template-columns: minmax(0, 1fr); }
+
+    .play-canvas-box {
+        flex: none;
+        height: min(60dvh, 70vw);
+    }
+
+    .play-header { padding: var(--space-3, 12px) var(--space-4, 16px); }
+}
