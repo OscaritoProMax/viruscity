@@ -14,7 +14,7 @@ const http = require("node:http");
 const express = require("express");
 const { WebSocketServer } = require("ws");
 const jwt = require("jsonwebtoken");
-const { createConfig, randomSpawn, sanitizeIntent, sanitizeExtras } = require("./game.js");
+const { createConfig, randomSpawn, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot } = require("./game.js");
 
 // ---------- Configuración ----------
 
@@ -65,7 +65,7 @@ app.use((req, res, next) => {
 });
 
 app.get("/health", (req, res) => {
-    res.status(200).json({ status: "ok", players: players.size });
+    res.status(200).json({ status: "ok", players: players.size, tickRate: cfg.TICK_RATE });
 });
 
 // Cualquier otra ruta HTTP
@@ -266,6 +266,43 @@ const heartbeat = setInterval(() => {
 
 wss.on("close", () => clearInterval(heartbeat));
 
+// ---------- Game loop ----------
+// A TICK_RATE Hz: aplica las intenciones guardadas (dt real medido con Date.now(), acotado a 0.25 s)
+// y envía UN mensaje state por tick a todos los jugadores. Es el único lugar donde se mueve a alguien.
+let lastTick = Date.now();
+
+function tick() {
+    const now = Date.now();
+    const dt = clampDt(now - lastTick);
+    lastTick = now;
+    if (players.size === 0) return;
+
+    stepPlayers(players, dt, cfg);
+
+    // El JSON se arma una sola vez por tick y se reutiliza para todos los sockets
+    const message = JSON.stringify({ type: "state", t: now, players: snapshot(players) });
+    for (const { socket } of players.values()) {
+        if (socket.readyState === socket.OPEN) socket.send(message);
+    }
+}
+
+// Programación con hora objetivo en vez de setInterval: en Windows los temporizadores tienen una
+// granularidad de ~15,6 ms y setInterval(50) dispara cada ~60 ms (≈16,5 Hz). Apuntando cada tick a
+// "objetivo += TICK_MS", los retrasos se compensan y la media queda en TICK_RATE Hz.
+let nextTickAt = Date.now() + cfg.TICK_MS;
+let gameLoop = null;
+
+function scheduleTick() {
+    gameLoop = setTimeout(() => {
+        tick();
+        nextTickAt += cfg.TICK_MS;
+        // Si el proceso se atrasó mucho (p. ej. estuvo pausado), no se recupera con una ráfaga de ticks
+        if (nextTickAt < Date.now() - cfg.TICK_MS) nextTickAt = Date.now();
+        scheduleTick();
+    }, Math.max(0, nextTickAt - Date.now()));
+}
+scheduleTick();
+
 // ---------- Arranque ----------
 server.on("error", (err) => {
     // p. ej. puerto ocupado
@@ -274,7 +311,7 @@ server.on("error", (err) => {
 });
 
 server.listen(PORT, () => {
-    console.log(`Coordinator en puerto ${PORT} (HTTP y WebSocket en /connect)`);
+    console.log(`Coordinator en puerto ${PORT} (HTTP y WebSocket en /connect) · game loop a ${cfg.TICK_RATE} Hz`);
 });
 
 // ---------- Cierre ordenado ----------
@@ -288,6 +325,7 @@ function shutdown(signal) {
 
     // 1001 = "going away": el servidor se está apagando
     for (const ws of wss.clients) ws.close(1001, "server shutting down");
+    clearTimeout(gameLoop);
     clearInterval(heartbeat);
     wss.close();
 
