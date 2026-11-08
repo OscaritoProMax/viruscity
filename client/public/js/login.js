@@ -82,7 +82,7 @@ $("loginForm").addEventListener("submit", (event) => {
             if (status === 200 && data.token) {
                 localStorage.setItem("token", data.token);
                 localStorage.setItem("username", data.username);
-                window.location.href = "lobby.html";
+                window.location.href = "play.html";
             } else {
                 showMessage(message, data.error || `Error inesperado del servidor (${status})`, false);
             }
