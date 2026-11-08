@@ -49,8 +49,20 @@ db.exec(
     "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)"
 );
 
-// Consultas preparadas: los valores siempre van como parámetros, nunca concatenados al SQL
-const findUserByName = db.prepare("SELECT id, username, password_hash FROM users WHERE username = ?");
+// Los nombres de usuario son únicos SIN distinguir mayúsculas: "Oscar", "osCar" y "OSCAR" son la misma cuenta.
+// El índice único con COLLATE NOCASE lo garantiza también ante dos registros simultáneos.
+// (Los usernames solo admiten letras ASCII, así que NOCASE cubre todos los casos.)
+try {
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS users_username_nocase ON users (username COLLATE NOCASE)");
+} catch {
+    // Una base creada antes de esta regla puede tener nombres que solo difieren en mayúsculas.
+    // El servicio sigue funcionando: los registros nuevos se validan igual con la consulta de abajo.
+    console.error("Aviso: hay usuarios cuyo nombre solo difiere en mayúsculas; no se pudo crear el índice único sin mayúsculas");
+}
+
+// Consultas preparadas: los valores siempre van como parámetros, nunca concatenados al SQL.
+// La búsqueda por nombre ignora mayúsculas (registro y login) y devuelve el nombre tal como se registró.
+const findUserByName = db.prepare("SELECT id, username, password_hash FROM users WHERE username = ? COLLATE NOCASE");
 const insertUser = db.prepare("INSERT INTO users (username, password_hash) VALUES (?, ?)");
 
 // Reglas de formato del registro (ver decisiones fijas en CLAUDE.md)
