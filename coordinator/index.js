@@ -1,6 +1,7 @@
-// Coordinator: mantiene en memoria la lista de jugadores conectados por WebSocket
-// y se la envía a todos cada vez que cambia. HTTP y WebSocket comparten el mismo puerto.
-// Solo acepta conexiones en /connect?token=XXX con un JWT válido emitido por el auth-service.
+// Coordinator (Taller 5): servidor autoritativo del juego en vivo.
+// Los jugadores se conectan por WebSocket en /connect?token=XXX con un JWT válido del auth-service.
+// Los clientes solo mandan intenciones (dirección) y extras; el servidor mueve a todos en un game loop
+// y envía el estado completo en cada tick. HTTP y WebSocket comparten el mismo puerto.
 //
 // Configuración: variables de entorno cargadas desde .env (ver .env.example).
 // JWT_SECRET es obligatorio y debe ser idéntico al del auth-service.
@@ -13,6 +14,7 @@ const http = require("node:http");
 const express = require("express");
 const { WebSocketServer } = require("ws");
 const jwt = require("jsonwebtoken");
+const { createConfig, randomSpawn, sanitizeIntent, sanitizeExtras } = require("./game.js");
 
 // ---------- Configuración ----------
 
@@ -34,8 +36,20 @@ if (!/^\d+$/.test(HEARTBEAT_RAW) || Number(HEARTBEAT_RAW) < 1) {
 }
 const HEARTBEAT_INTERVAL_MS = Number(HEARTBEAT_RAW);
 
+// Mundo, velocidad, tick y límites de mensajes (game.js valida cada valor)
+let cfg;
+try {
+    cfg = createConfig(process.env);
+} catch (err) {
+    fatal(err.message);
+}
+
+const PROVIDERS = new Set(["local", "google"]);
+const RATE_WINDOW_MS = 1000;
+
 // ---------- Estado ----------
-const players = new Map(); // userId (string) -> { username, socket, connectedAt }
+// userId (string) -> { username, provider, socket, connectedAt, x, y, intent:{x,y}, extras:{} }
+const players = new Map();
 
 // ---------- HTTP ----------
 const app = express();
@@ -70,8 +84,8 @@ const server = http.createServer(app);
 
 // ---------- WebSocket ----------
 // noServer: el handshake se acepta a mano en el evento 'upgrade', después de verificar el token.
-// maxPayload: el cliente no necesita enviar nada; se limita el tamaño de cualquier mensaje entrante.
-const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 });
+// maxPayload: los mensajes del cliente (intent, extras_update) son pequeños; más de 2048 bytes cierra el socket.
+const wss = new WebSocketServer({ noServer: true, maxPayload: 2048 });
 
 // Devuelve el payload si el token es válido; null si falta, está malformado, vencido,
 // firmado con otra clave o le faltan datos. Nunca registra el token.
@@ -81,6 +95,7 @@ function verifyToken(token) {
         const complete =
             typeof payload.userId === "string" &&
             typeof payload.username === "string" &&
+            PROVIDERS.has(payload.provider) && // Taller 5: el JWT trae provider 'local' o 'google'
             typeof payload.exp === "number"; // exp se necesita para programar el cierre por expiración
         if (!complete) {
             console.log("Conexión rechazada: payload del token incompleto");
@@ -141,17 +156,34 @@ function broadcastPlayers() {
 }
 
 wss.on("connection", (ws, payload) => {
-    const { userId, username } = payload;
+    const { userId, username, provider } = payload;
 
     // Sesión duplicada: se queda la conexión nueva y se cierra la anterior con 4002
     const previous = players.get(userId);
-    players.set(userId, { username, socket: ws, connectedAt: new Date().toISOString() });
+    const { x, y } = randomSpawn(cfg);
+    players.set(userId, {
+        username,
+        provider, // lo pone el servidor desde el JWT (no es un extra del cliente)
+        socket: ws,
+        connectedAt: new Date().toISOString(),
+        x,
+        y,
+        intent: { x: 0, y: 0 },
+        extras: {},
+    });
     if (previous) {
         previous.socket.close(4002, "replaced by new session");
         console.log(`Sesión reemplazada: ${username} (${userId})`);
     } else {
         console.log(`Jugador conectado: ${username} (${userId}) · jugadores: ${players.size}`);
     }
+
+    // Bienvenida: quién soy y cómo es el mundo
+    send(ws, {
+        type: "welcome",
+        you: { userId, username, provider },
+        world: { width: cfg.WORLD_WIDTH, height: cfg.WORLD_HEIGHT, playerRadius: cfg.PLAYER_RADIUS, tickRate: cfg.TICK_RATE },
+    });
     broadcastPlayers();
 
     // Heartbeat: se marca vivo al conectar y cada vez que responde un ping
@@ -180,8 +212,42 @@ wss.on("connection", (ws, payload) => {
         console.error(`Error en el socket de ${username} (${userId}): ${err.message}`);
     });
 
-    // El cliente no necesita enviar nada en esta parte: cualquier mensaje entrante se ignora
-    ws.on("message", () => {});
+    // Mensajes del cliente: solo se GUARDAN la intención y los extras; nunca se mueve aquí
+    // ni se hace broadcast (eso lo hace el game loop). Lo inválido se ignora sin responder,
+    // y nada de lo recibido se registra en logs.
+    let windowStart = Date.now();
+    let messagesInWindow = 0;
+
+    ws.on("message", (raw) => {
+        // Límite de mensajes por segundo y por socket: el exceso se descarta en silencio
+        const now = Date.now();
+        if (now - windowStart >= RATE_WINDOW_MS) {
+            windowStart = now;
+            messagesInWindow = 0;
+        }
+        messagesInWindow += 1;
+        if (messagesInWindow > cfg.MAX_MSGS_PER_SEC) return;
+
+        let msg;
+        try {
+            msg = JSON.parse(raw.toString());
+        } catch {
+            return; // JSON roto
+        }
+
+        // Solo cuenta si este socket sigue siendo la sesión vigente del usuario
+        const p = players.get(userId);
+        if (!p || p.socket !== ws) return;
+
+        if (msg?.type === "intent") {
+            const intent = sanitizeIntent(msg);
+            if (intent) p.intent = intent;
+        } else if (msg?.type === "extras_update") {
+            const extras = sanitizeExtras(msg, cfg);
+            if (extras) p.extras = extras; // reemplazo completo
+        }
+        // Cualquier otro tipo se ignora
+    });
 });
 
 // ---------- Heartbeat ----------
