@@ -1,7 +1,8 @@
 /* Componentes compartidos de Viruscity: avatar, chip, badge, progreso, título de panel,
    toasts y modal. Solo var(--...) para colores, espacios, radios, tipografía y tiempos.
    Medidas fijas de componente: tamaños de avatar (28/36/48px), ancho de toast (360px),
-   ancho máximo del modal (560px), alto de la barra de progreso (8px) y bordes de 1-4px. */
+   ancho máximo del modal (560px), objetivos táctiles de 44px, desenfoque leve del fondo
+   del modal y bordes de 1-3px. */
 
 /* ---------- Avatar ---------- */
 .avatar {
@@ -76,7 +77,7 @@
 
 /* ---------- Progreso (relleno dorado = avance hacia la cura / el inicio) ---------- */
 .progress {
-    height: 8px;
+    height: var(--space-2);
     border-radius: var(--radius-s);
     background: var(--panel-2);
     overflow: hidden;
@@ -130,20 +131,20 @@
     gap: var(--space-2);
     padding: var(--space-3) var(--space-2) var(--space-3) var(--space-4);
     border: 1px solid var(--border);
-    border-left: 4px solid var(--accent);
+    border-left: 3px solid var(--accent);
     border-radius: var(--radius-m);
     background: var(--panel-2);
     box-shadow: var(--shadow-1);
     color: var(--text);
     font-size: var(--fs-s);
     opacity: 0;
-    transform: translateY(-8px);
+    transform: translateY(calc(-1 * var(--space-2)));
     transition: opacity var(--t-med) var(--ease), transform var(--t-med) var(--ease);
 }
 
 .toast.is-visible { opacity: 1; transform: none; }
 
-.toast.is-leaving { opacity: 0; transform: translateX(16px); }
+.toast.is-leaving { opacity: 0; transform: translateX(var(--space-4)); }
 
 .toast--info { border-left-color: var(--accent); }
 
@@ -179,7 +180,7 @@
         transform: translateX(50%);
     }
 
-    .toast { transform: translateY(8px); }
+    .toast { transform: translateY(var(--space-2)); }
 }
 
 /* ---------- Modal ---------- */
@@ -238,7 +239,7 @@
 
 @keyframes modal-fade { from { opacity: 0; } }
 
-@keyframes modal-in { from { opacity: 0; transform: translateY(8px) scale(.98); } }
+@keyframes modal-in { from { opacity: 0; transform: translateY(var(--space-2)) scale(.98); } }
 
 /* ---------- Movimiento reducido: solo opacidad ---------- */
 @media (prefers-reduced-motion: reduce) {

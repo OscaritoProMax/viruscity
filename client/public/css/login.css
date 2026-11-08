@@ -1,7 +1,7 @@
 /* Pantalla de login y registro de Viruscity.
    Solo var(--...) para colores, espacios, radios, tipografía y tiempos.
-   Medidas fijas de componente: logo de 72px, card de 420px, ojo de 44px, icono de 20px,
-   corte responsive en 900px y desplazamiento de entrada de 8px. */
+   Medidas fijas de componente: logo de 72px, card de 420px, ojo de 44px, icono de 20px
+   y corte responsive en 900px. */
 
 /* ---------- Disposición general ---------- */
 .login {
@@ -202,7 +202,7 @@
 @keyframes auth-in {
     from {
         opacity: 0;
-        transform: translateY(8px);
+        transform: translateY(var(--space-2));
     }
 }
 
