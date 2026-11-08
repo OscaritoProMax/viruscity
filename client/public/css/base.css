@@ -1,0 +1,211 @@
+/* Base compartida de Viruscity: reset mínimo y componentes reutilizables.
+   Requiere tokens.css enlazado antes (con <link>, no con @import).
+   Colores, espacios, radios, tipografía y tiempos salen siempre de var(--...).
+   Las únicas medidas fijas son las de componente: borde de 1px, anillo de foco de 2px,
+   alto táctil mínimo de 44px y spinner de 16px. */
+
+/* ---------- Reset mínimo ---------- */
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+* { margin: 0; }
+
+[hidden] { display: none !important; }
+
+html,
+body {
+    min-height: 100dvh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: var(--fs-m);
+    line-height: 1.5;
+}
+
+body { -webkit-font-smoothing: antialiased; }
+
+img,
+svg,
+canvas { display: block; max-width: 100%; }
+
+input,
+button { font: inherit; color: inherit; }
+
+button { cursor: pointer; }
+
+a { color: var(--accent); }
+
+/* Títulos: mono, mayúsculas y espaciado amplio */
+h1,
+h2,
+h3 {
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    line-height: 1.2;
+}
+
+/* ---------- Foco visible en todo elemento interactivo ---------- */
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+/* ---------- Botones ---------- */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    min-height: 44px;
+    padding: var(--space-2) var(--space-5);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-m);
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-weight: 600;
+    text-decoration: none;
+    transition: box-shadow var(--t-fast) var(--ease), background-color var(--t-fast) var(--ease),
+        border-color var(--t-fast) var(--ease);
+}
+
+.btn:hover:not(:disabled) { box-shadow: var(--shadow-glow); }
+
+.btn:focus-visible { box-shadow: var(--shadow-glow); }
+
+.btn--block { width: 100%; }
+
+.btn--ghost {
+    background: transparent;
+    border-color: var(--border);
+    color: var(--text);
+}
+
+.btn--ghost:hover:not(:disabled) {
+    border-color: var(--accent);
+    box-shadow: none;
+}
+
+.btn--danger {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: var(--accent-ink);
+}
+
+.btn--danger:hover:not(:disabled) { box-shadow: var(--shadow-1); }
+
+/* Deshabilitado (p. ej. mientras una petición está en curso): atenuado y con spinner */
+.btn:disabled {
+    opacity: .6;
+    cursor: not-allowed;
+}
+
+.btn:disabled::after {
+    content: "";
+    width: 16px;
+    height: 16px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: btn-spin 800ms linear infinite;
+}
+
+@keyframes btn-spin { to { transform: rotate(1turn); } }
+
+/* ---------- Campos de formulario ---------- */
+.field {
+    display: grid;
+    gap: var(--space-2);
+}
+
+.field > label {
+    color: var(--muted);
+    font-size: var(--fs-s);
+    font-weight: 600;
+}
+
+.field input {
+    width: 100%;
+    min-height: 44px;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--panel-2);
+    color: var(--text);
+    transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+}
+
+.field input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-color: var(--accent);
+    box-shadow: var(--shadow-glow);
+}
+
+.field__hint {
+    color: var(--muted);
+    font-size: var(--fs-s);
+}
+
+/* ---------- Tarjeta ---------- */
+.card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    box-shadow: var(--shadow-1);
+}
+
+/* ---------- Chip ---------- */
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--panel);
+    color: var(--muted);
+    font-size: var(--fs-s);
+}
+
+/* ---------- Mensajes de resultado ----------
+   .msg--ok / .msg--error son las clases del sistema de diseño.
+   .msg.ok / .msg.bad son las que asigna login.js (className = "msg ok|bad") y se ven igual. */
+.msg {
+    min-height: 1.5em;
+    font-size: var(--fs-s);
+}
+
+.msg--ok,
+.msg.ok { color: var(--accent); }
+
+.msg--error,
+.msg.bad { color: var(--danger); }
+
+.msg--ok:not(:empty)::before,
+.msg.ok:not(:empty)::before { content: "✔ "; }
+
+.msg--error:not(:empty)::before,
+.msg.bad:not(:empty)::before { content: "✖ "; }
+
+/* ---------- Solo para lectores de pantalla ---------- */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* ---------- Movimiento reducido: sin animaciones continuas ---------- */
+@media (prefers-reduced-motion: reduce) {
+    .btn:disabled::after { animation: none; }
+
+    .btn,
+    .field input { transition: opacity var(--t-fast) linear; }
+}
