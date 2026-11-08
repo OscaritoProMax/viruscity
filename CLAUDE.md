@@ -26,7 +26,7 @@ Tres procesos separados: auth-service (HTTP, puerto 4000, SQLite + JWT), coordin
 - Commits: uno por paso lógico, mensajes en español con prefijo (feat, fix, chore, docs, test). Antes de cada commit revisa `git status` y agrega archivos por nombre; nunca `git add .` sin revisar. Jamás commitear .env, *.db, node_modules, _base-ref/ ni BASE-ANALISIS.md.
 - Antes de levantar un servicio comprueba que su puerto esté libre. Al terminar las pruebas detén TODO proceso que hayas levantado y borra archivos temporales (por ejemplo users.db de pruebas).
 - Al terminar cada fase: resumen breve de lo hecho, resultado de cada prueba (pasó/falló) y DETENTE. No avances a otra fase por iniciativa propia.
-- No implementes nada fuera del alcance (nada de juego, posiciones ni replicación; eso es de partes futuras).
+- Fuera de alcance por ahora: lógica de juego, protocolo WebSocket nuevo, Google login, servidores. Se permite SOLO la capa visual (UI) de Viruscity en client/public.
 
 ## Decisiones fijas (no cambiar sin preguntarme)
 1. username: se aplica trim; 3 a 30 caracteres; regex ^[A-Za-z0-9_]+$; distingue mayúsculas/minúsculas.
@@ -68,3 +68,33 @@ Tres procesos separados: auth-service (HTTP, puerto 4000, SQLite + JWT), coordin
 - Fase 5: la instalación limpia falló porque npm 11 ejecuta `node-gyp rebuild` de better-sqlite3 al instalar desde package-lock.json (sin Visual Studio no compila). Con autorización del usuario se agregó auth-service/.npmrc con `ignore-scripts=true`; bcrypt y better-sqlite3 cargan sus binarios precompilados. Regenerar el lockfile no lo resolvía.
 - Fase 5: el tiempo de apagado de auth-service y coordinator pasó a la constante SHUTDOWN_TIMEOUT_MS (el literal 5000 parecía el puerto del coordinator).
 - Pruebas en Windows: los procesos se levantan con `Start-Process -PassThru` y se detienen por PID. En la Fase 2 quedó vivo un coordinator porque el PID leído de `netstat` en Git Bash traía `\r` y `taskkill` falló sin aviso; se detectó y detuvo en la Fase 3.
+
+## VIRUSCITY – INTERFAZ (solo estética)
+
+### Alcance y límites
+- Solo se modifican/crean archivos en client/public (HTML, CSS, JS de presentación). Prohibido tocar auth-service/, coordinator/ y client/server.js.
+- NO se cambia la lógica existente: fetch al AUTH_URL, claves de localStorage (token, username), sessionStorage 'sessionMessage', conexión WS a /connect?token=, manejo de cierres 4001/4002/otros, loggingOut. Si un cambio visual exige tocarla, DETENTE y pregunta. Las únicas excepciones permitidas están nombradas en cada fase y hay que reportarlas.
+- No se agregan mensajes WS ni endpoints nuevos.
+- Sin dependencias externas: nada de CDN, fuentes web, imágenes remotas ni frameworks. Todo local (SVG/CSS/JS plano con módulos ES).
+- Texto dinámico siempre con textContent o fillText (nunca innerHTML en JS). El marcado estático va en los .html.
+- Todo el texto visible en español.
+
+### Estética
+Ciudad de noche con neón biológico. Tokens en css/tokens.css (única fuente de colores, espacios, radios y tipografía; ningún color ni tamaño suelto en otros CSS, solo var(--...)). Títulos en var(--font-mono), mayúsculas y letter-spacing .12em. Cuerpo en var(--font-ui). Semántica de color: cian = acento/acciones/sano; verde = infectado; dorado = cura/progreso; rojo = error/peligro. Bordes de 1px var(--border), radios m/l, sombras suaves; el glow cian solo en el foco y en elementos principales.
+
+### Accesibilidad y responsive
+- Contraste AA (4.5:1 texto normal, 3:1 texto grande y gráficos). :focus-visible visible en todo elemento interactivo (anillo cian de 2px con offset 2px). Etiquetas <label> asociadas, atributos autocomplete correctos, aria-live en avisos, roles en pestañas y modales.
+- Respeta prefers-reduced-motion: sin animaciones continuas (partículas, pulsos); las transiciones se reducen a opacidad.
+- Login y lobby funcionan desde 360px de ancho. El juego es de escritorio primero, pero nada se rompe a 360px (el HUD se compacta).
+- Objetivos táctiles de botones >= 44px de alto.
+
+### Contrato de datos de la interfaz (planos, sin red)
+scene = { world:{width,height}, playerRadius:number, me:{userId}|null, status:"healthy"|"infected"|null, players:[{userId,username,x,y,color?,badge?}] }
+- status es SOLO el estado del jugador local. La interfaz NUNCA recibe ni dibuja el estado de infección de otros jugadores.
+- Los módulos de UI no conocen el WebSocket: solo reciben datos por parámetros. Así, la integración posterior solo los alimenta.
+
+### Módulos de UI (client/public/js/ui/, ES modules, con package.json {"type":"module"})
+ui-config.js, avatar.js, toast.js, modal.js, lobby-view.js, hud.js, end-overlay.js, city-layout.js, scene-renderer.js, particles.js, preview.js. Las funciones puras (avatar, cámara, contraste) se prueban con node:test en client/test/.
+
+### Vista previa (solo diseño)
+Con ?preview=1 (o ?preview=<estado>) las páginas muestran datos de ejemplo sin red ni token. Existe una bandera UI.PREVIEW_ENABLED en ui-config.js (true mientras se diseña; DEBE ponerse en false antes de la entrega).
