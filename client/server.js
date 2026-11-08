@@ -3,7 +3,7 @@
 // para que ningún archivo del cliente tenga URLs escritas a mano.
 //
 // Configuración: variables de entorno cargadas desde .env (ver .env.example).
-// PORT, AUTH_URL y COORDINATOR_WS_URL son obligatorios.
+// PORT, AUTH_URL y COORDINATOR_WS_URL son obligatorios; GOOGLE_CLIENT_ID es opcional.
 
 require("dotenv").config({ quiet: true }); // quiet: evita que dotenv imprima su propio mensaje en consola
 
@@ -35,6 +35,8 @@ function checkUrl(name, value, protocols) {
 const PORT = Number(process.env.PORT);
 const AUTH_URL = trimSlash(process.env.AUTH_URL || "");
 const COORDINATOR_WS_URL = trimSlash(process.env.COORDINATOR_WS_URL || "");
+// Client ID público de Google (Taller 5). Opcional: si falta, el login no muestra el botón de Google.
+const GOOGLE_CLIENT_ID = trimSlash((process.env.GOOGLE_CLIENT_ID || "").trim());
 
 if (!process.env.PORT) fatal("PORT es obligatorio");
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) fatal("PORT debe ser un número de puerto válido");
@@ -55,7 +57,7 @@ app.get("/", (req, res) => {
 app.get("/config.js", (req, res) => {
     res.set("Content-Type", "application/javascript; charset=utf-8");
     res.set("Cache-Control", "no-store");
-    res.send("window.APP_CONFIG = " + JSON.stringify({ AUTH_URL, COORDINATOR_WS_URL }) + ";");
+    res.send("window.APP_CONFIG = " + JSON.stringify({ AUTH_URL, COORDINATOR_WS_URL, GOOGLE_CLIENT_ID }) + ";");
 });
 
 app.use(express.static(path.join(__dirname, "public")));
