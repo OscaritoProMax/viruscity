@@ -8,6 +8,12 @@ import { playerColor } from "./colors.js";
 
 const MAX_DPR = 2;
 const GRID_STEP = 100; // unidades del mundo
+const SMOOTHING = 20; // cuanto mayor, más rápido alcanza la posición del servidor
+const SNAP_DISTANCE = 200; // si la diferencia es mayor, se salta directamente (sin suavizar)
+
+// Insignia del proveedor: "G" azul de Google sobre blanco, o "L" sobre gris para cuentas locales
+const GOOGLE_BLUE = "#4285f4";
+const BADGE_WHITE = "#ffffff";
 
 // Lee una variable CSS (tokens.css) con un valor de respaldo
 function cssVar(name, fallback) {
@@ -27,6 +33,24 @@ export function createRenderer(canvas) {
 
     let scale = 1;
     let dpr = 1;
+
+    // Posiciones SOLO para dibujar: se acercan a las del servidor (window.lastState) con un suavizado
+    // exponencial. Nunca se escriben en lastState: si alguien lo edita en DevTools, la vista lo refleja
+    // y el siguiente state del servidor lo corrige.
+    const renderPos = new Map();
+
+    function smoothedPosition(p, dt) {
+        let pos = renderPos.get(p.userId);
+        if (!pos || Math.hypot(p.x - pos.x, p.y - pos.y) > SNAP_DISTANCE) {
+            pos = { x: p.x, y: p.y };
+            renderPos.set(p.userId, pos);
+            return pos;
+        }
+        const k = 1 - Math.exp(-SMOOTHING * dt);
+        pos.x += (p.x - pos.x) * k;
+        pos.y += (p.y - pos.y) * k;
+        return pos;
+    }
 
     // Ajusta el canvas para mostrar el mundo completo en el área disponible
     function resize(world, availW, availH) {
@@ -110,9 +134,26 @@ export function createRenderer(canvas) {
 
         ctx.fillStyle = colors.text;
         ctx.fillText(name, pillX + padX, pillY + pillH / 2);
+
+        // Insignia del proveedor a la derecha del nombre (el provider lo pone el servidor)
+        if (p.provider === "google" || p.provider === "local") {
+            const r = pillH / 2;
+            const cx = pillX + pillW + px(4) + r;
+            const cy = pillY + pillH / 2;
+            const google = p.provider === "google";
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, Math.PI * 2);
+            ctx.fillStyle = google ? BADGE_WHITE : colors.muted;
+            ctx.fill();
+            ctx.fillStyle = google ? GOOGLE_BLUE : colors.bg;
+            ctx.font = `700 ${px(11)}px ${fontMono}`;
+            ctx.textAlign = "center";
+            ctx.fillText(google ? "G" : "L", cx, cy + px(0.5));
+        }
     }
 
-    function draw(lastState, world, me) {
+    // nowMs se recibe por contrato; el suavizado solo necesita dt (segundos desde el cuadro anterior)
+    function draw(lastState, world, me, nowMs, dt = 0) {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         if (!world) return;
@@ -135,7 +176,13 @@ export function createRenderer(canvas) {
         const players = lastState.players.filter((p) => Number.isFinite(p?.x) && Number.isFinite(p?.y));
         // El jugador local se dibuja al final para que quede encima
         players.sort((a, b) => (a.userId === meId) - (b.userId === meId));
-        for (const p of players) drawPlayer(p, { x: p.x, y: p.y }, radius, p.userId === meId);
+        const present = new Set();
+        for (const p of players) {
+            present.add(p.userId);
+            drawPlayer(p, smoothedPosition(p, dt), radius, p.userId === meId);
+        }
+        // Se olvidan las posiciones de quienes ya no están
+        for (const id of renderPos.keys()) if (!present.has(id)) renderPos.delete(id);
     }
 
     return { resize, draw };
