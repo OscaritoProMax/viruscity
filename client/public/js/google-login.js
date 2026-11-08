@@ -12,7 +12,7 @@ const CONFIG = window.APP_CONFIG ?? {};
 const CLIENT_ID = typeof CONFIG.GOOGLE_CLIENT_ID === "string" ? CONFIG.GOOGLE_CLIENT_ID.trim() : "";
 const AUTH_URL = CONFIG.AUTH_URL;
 
-const WAIT_MS = 5000;
+const WAIT_MS = 5 * 1000;
 const POLL_MS = 100;
 const BUTTON_MAX_WIDTH = 320;
 const HEADERS = { "Content-Type": "application/json", "ngrok-skip-browser-warning": "true" };

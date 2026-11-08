@@ -22,7 +22,7 @@ const TOKEN_CHECK_MS = 1000;
 const TOKEN_CHANGED_MESSAGE = "El token de tu sesión no es válido. Inicia sesión de nuevo.";
 const TOKEN_REMOVED_MESSAGE = "Tu sesión se cerró. Inicia sesión de nuevo.";
 
-const UNSTABLE_AFTER_MS = 3000; // sin state durante más de 3 s → aviso
+const UNSTABLE_AFTER_MS = 3 * 1000; // sin state durante más de 3 s → aviso
 const MAX_FRAME_DT = 0.05;
 const PROVIDER_LABELS = { google: "Google", local: "Local" };
 

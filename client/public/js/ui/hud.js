@@ -11,7 +11,7 @@ import { createAvatar } from "./avatar.js";
 import { createToaster } from "./toast.js";
 
 const MOBILE_QUERY = "(max-width: 699.98px)";
-const ROLE_INTRO_MS = 4000;
+const ROLE_INTRO_MS = 4 * 1000;
 
 const ROLE_TEXT = {
     healthy: {

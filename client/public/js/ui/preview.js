@@ -5,7 +5,7 @@ import { createToaster } from "./toast.js";
 import { showEndOverlay } from "./end-overlay.js";
 
 const STEP_MS = 1200; // un jugador nuevo cada 1.2 s
-const LEAVE_AFTER_MS = 3000; // Bruno sale 3 s después del último ingreso
+const LEAVE_AFTER_MS = 3 * 1000; // Bruno sale 3 s después del último ingreso
 const RETURN_AFTER_MS = 2000; // y vuelve 2 s después
 
 // Lobby de ejemplo: entran Ana, Bruno, Carla, Diego y Elena; Bruno sale y vuelve; luego se detiene.
