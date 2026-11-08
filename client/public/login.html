@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="css/base.css">
 <link rel="stylesheet" href="css/components.css">
 <link rel="stylesheet" href="css/login.css">
+<link rel="stylesheet" href="css/google-login.css">
 </head>
 <body>
 <main class="login">
@@ -99,7 +100,7 @@
             </form>
         </div>
 
-        <!-- Reservado para el inicio de sesión con Google (Taller 5): no se dibuja nada todavía -->
+        <!-- Inicio de sesión con Google (Taller 5): js/google-login.js lo llena y lo muestra si hay GOOGLE_CLIENT_ID -->
         <div id="googleSlot" hidden></div>
 
         <footer class="auth__footer">Proyecto final · Sistemas Distribuidos · Universidad de Boyacá</footer>
@@ -109,5 +110,8 @@
 <script src="/config.js"></script>
 <script src="js/login.js"></script>
 <script type="module" src="js/login-ui.js"></script>
+<!-- Única dependencia externa permitida (Taller 5): Google Identity Services para el botón de Google -->
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script type="module" src="js/google-login.js"></script>
 </body>
 </html>

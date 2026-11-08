@@ -1,0 +1,64 @@
+/* Inicio de sesión con Google en el login (Taller 5).
+   Usa los tokens de css/tokens.css con valores de respaldo por si esa hoja no está.
+   Medidas fijas de componente: ancho máximo del botón de Google (320px), alto mínimo de 44px y bordes de 1px. */
+
+.google-slot {
+    display: grid;
+    gap: var(--space-4, 16px);
+}
+
+/* Separador "o continúa con" */
+.google-separator {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3, 12px);
+    color: var(--muted, #8f9bc4);
+    font-size: var(--fs-s, .8125rem);
+}
+
+.google-separator::before,
+.google-separator::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--border, #2a3560);
+}
+
+/* Contenedor del botón que dibuja Google */
+.google-button {
+    display: flex;
+    justify-content: center;
+    min-height: 44px;
+    max-width: 320px;
+    width: 100%;
+    margin: 0 auto;
+}
+
+/* Panel para elegir username en el primer ingreso con Google */
+.google-username {
+    display: grid;
+    gap: var(--space-3, 12px);
+    padding: var(--space-4, 16px);
+    border: 1px solid var(--border, #2a3560);
+    border-radius: var(--radius-m, 12px);
+    background: var(--panel, #121a33);
+    color: var(--text, #e6e9f5);
+}
+
+/* Respaldo de campo y botón si base.css no estuviera */
+.google-username input {
+    width: 100%;
+    min-height: 44px;
+    padding: var(--space-2, 8px) var(--space-3, 12px);
+    border: 1px solid var(--border, #2a3560);
+    border-radius: var(--radius-m, 12px);
+    background: var(--bg, #0b1020);
+    color: var(--text, #e6e9f5);
+}
+
+.google-username input:focus-visible {
+    outline: 2px solid var(--accent, #4dd2ff);
+    outline-offset: 2px;
+}
+
+.google-status:empty { display: none; }
