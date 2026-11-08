@@ -21,8 +21,11 @@ const PASSWORD_MIN = 6;
 const PASSWORD_MAX = 72; // límite de bcrypt
 const LOGIN_FIELD_MAX = 1000; // tope de tamaño en el login, sin aplicar las reglas de formato del registro
 
+const ID_TOKEN_MAX = 4096;
+
 const INVALID_CREDENTIALS = { error: "Credenciales inválidas" };
 const USERNAME_TAKEN = { error: "El nombre de usuario ya existe" };
+const GOOGLE_HINT = "Primer login con Google: elige un username.";
 
 // Devuelve null si el username es válido, o el mensaje de error en español
 function validateUsername(username) {
@@ -128,6 +131,74 @@ function createApp({ db, jwtSecret, jwtExpiresIn = "1h", bcryptRounds = 10, veri
         if (!ok) return res.status(401).json(INVALID_CREDENTIALS);
 
         res.status(200).json({ token: emitToken(row), username: row.username });
+    });
+
+    // ---------- Login con Google (Google Identity Services) ----------
+    // Recibe { idToken, username? }. La llave de la cuenta es payload.sub (google_sub), nunca el email.
+    // Nunca se devuelven ni se registran el idToken, el email ni el sub.
+    app.post("/auth/google", async (req, res) => {
+        const { idToken, username: rawUsername } = req.body ?? {};
+
+        // (1) idToken presente
+        if (typeof idToken !== "string" || idToken === "" || idToken.length > ID_TOKEN_MAX) {
+            return res.status(400).json({ error: "idToken requerido" });
+        }
+
+        // (2) Verificación con Google (firma, expiración, emisor y audience)
+        let payload;
+        try {
+            payload = await verifyGoogle(idToken);
+        } catch {
+            console.error("verificación de ID token fallida"); // texto fijo: el error puede incluir el token
+            return res.status(401).json({ error: "invalid_id_token" });
+        }
+        if (!payload || typeof payload !== "object") return res.status(401).json({ error: "invalid_id_token" });
+
+        // (3) Email verificado y datos mínimos
+        if (payload.email_verified !== true) return res.status(401).json({ error: "email_not_verified" });
+        const { sub, email } = payload;
+        if (typeof sub !== "string" || sub === "" || typeof email !== "string" || email === "") {
+            return res.status(401).json({ error: "invalid_id_token" });
+        }
+
+        try {
+            // (4) Cuenta ya vinculada: entra con su username (se ignora el que venga en el body)
+            const existing = users.findByGoogle(sub);
+            if (existing) return res.status(200).json({ token: emitToken(existing), username: existing.username });
+
+            // (5) Primer login: hace falta elegir username
+            if (rawUsername === undefined || rawUsername === null || rawUsername === "") {
+                return res.status(409).json({ error: "username_required", hint: GOOGLE_HINT });
+            }
+
+            // (6) Mismas reglas de formato que el registro local
+            const username = typeof rawUsername === "string" ? rawUsername.trim() : rawUsername;
+            const usernameError = validateUsername(username);
+            if (usernameError) return res.status(400).json({ error: usernameError });
+
+            // Sin distinguir mayúsculas y entre providers ("Alice" local bloquea "alice" de Google)
+            if (users.findByUsername(username)) return res.status(409).json({ error: "username_taken" });
+
+            // (7) Alta de la cuenta de Google
+            let info;
+            try {
+                info = users.insertGoogle(username, sub, email);
+            } catch (err) {
+                if (!isUniqueViolation(err)) throw err;
+                // Dos primeros logins simultáneos del mismo sub: el otro ya la creó → se entra con esa cuenta
+                if (/users\.google_sub/i.test(err.message ?? "")) {
+                    const created = users.findByGoogle(sub);
+                    if (created) return res.status(200).json({ token: emitToken(created), username: created.username });
+                }
+                return res.status(409).json({ error: "username_taken" });
+            }
+
+            const user = { id: info.lastInsertRowid, username, provider: "google" };
+            return res.status(200).json({ token: emitToken(user), username });
+        } catch {
+            console.error("error interno en /auth/google"); // texto fijo, sin detalles
+            return res.status(500).json({ error: "internal" });
+        }
     });
 
     // ---------- Errores ----------
