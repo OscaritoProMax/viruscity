@@ -129,7 +129,8 @@ h3 {
     width: 100%;
     min-height: 44px;
     padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--border);
+    /* --border solo da 1.45:1 sobre la tarjeta; esta mezcla llega a 3.66:1 (AA para controles) */
+    border: 1px solid color-mix(in srgb, var(--muted) 60%, var(--border));
     border-radius: var(--radius-m);
     background: var(--panel-2);
     color: var(--text);
