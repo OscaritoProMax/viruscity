@@ -18,10 +18,19 @@
     <section class="hero" aria-hidden="false">
         <canvas id="heroParticles" class="hero__particles" aria-hidden="true"></canvas>
         <div class="hero__content">
-            <img class="hero__logo" src="img/logo.svg" width="72" height="72" alt="Logo de Viruscity">
+            <!-- Virus animado que rebota (ui/bouncing-virus.js). Sin JS se ve el logo estático.
+                 Con movimiento permitido, login-ui.js lo vuelve interactivo (clic, toque, Enter o Espacio). -->
+            <div id="heroVirus" class="hero__virus" role="img" aria-label="Logo de Viruscity">
+                <img class="hero__virus-fallback" src="img/logo.svg" width="72" height="72" alt="">
+                <canvas id="heroVirusCanvas" class="hero__virus-canvas" aria-hidden="true"></canvas>
+            </div>
+            <p id="heroVirusHint" class="hero__hint" aria-hidden="true" hidden>
+                <span class="hero__hint-long">Toca o haz clic en el virus para hacerlo saltar</span><span class="hero__hint-short">Toca el virus para que salte</span>
+            </p>
             <h1 class="wordmark" aria-label="Viruscity">
                 <span class="wordmark__virus" aria-hidden="true">VIRUS</span><span class="wordmark__city" aria-hidden="true">CITY</span>
             </h1>
+            <p class="hero__protocol">Protocolo de contagio activo</p>
             <p class="hero__tagline">Encuentra al infectado. Fabrica la cura.</p>
             <ul class="hero__chips" aria-label="Características">
                 <li class="chip">4+ jugadores</li>

@@ -1,7 +1,10 @@
 /* Pantalla de login y registro de Viruscity.
    Solo var(--...) para colores, espacios, radios, tipografía y tiempos.
-   Medidas fijas de componente: logo de 72px, card de 420px, ojo de 44px, icono de 20px
-   y corte responsive en 900px. */
+   Medidas fijas de componente: escenario del virus animado (380x300px; 170px de alto en móvil),
+   logo de respaldo de 72px, card de 420px, ojo de 44px, icono de 20px, líneas de 1px de la
+   cuadrícula y corte responsive en 900px.
+   El hero toma de virus_city_loading_screen.html la cuadrícula, las líneas de barrido,
+   el brillo de neón del título y el virus que rebota. */
 
 /* ---------- Disposición general ---------- */
 .login {
@@ -31,6 +34,21 @@
         var(--bg);
 }
 
+/* Cuadrícula "cyber" y líneas de barrido (scanlines), muy tenues */
+.hero::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+        repeating-linear-gradient(to bottom,
+            transparent 0 calc(var(--space-1) / 2),
+            color-mix(in srgb, var(--accent) 3%, transparent) calc(var(--space-1) / 2) var(--space-1)),
+        linear-gradient(to right, color-mix(in srgb, var(--accent) 5%, transparent) 1px, transparent 1px),
+        linear-gradient(to bottom, color-mix(in srgb, var(--accent) 5%, transparent) 1px, transparent 1px);
+    background-size: auto, var(--space-6) var(--space-6), var(--space-6) var(--space-6);
+}
+
 /* Viñeta: oscurece los bordes del hero */
 .hero::after {
     content: "";
@@ -50,18 +68,57 @@
 .hero__content {
     position: relative;
     z-index: 1;
+    width: 100%; /* el escenario del virus usa todo el ancho disponible (hasta 380px) */
     display: grid;
     justify-items: center;
     gap: var(--space-4);
     text-align: center;
 }
 
-.hero__logo {
+/* Escenario del virus que rebota */
+.hero__virus {
+    position: relative;
+    width: min(380px, 100%);
+    height: 300px;
+    border-radius: var(--radius-l);
+}
+
+.hero__virus.is-interactive { cursor: pointer; }
+
+.hero__virus-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+/* Logo estático: se ve si el JS no arranca; se oculta cuando el virus animado está activo */
+.hero__virus-fallback {
+    position: absolute;
+    inset: 0;
+    margin: auto;
     width: 72px;
     height: 72px;
     filter: drop-shadow(var(--shadow-glow));
 }
 
+.hero__virus.is-live .hero__virus-fallback { display: none; }
+
+/* Pista para hacer saltar al virus */
+.hero__hint {
+    margin-top: calc(-1 * var(--space-3));
+    padding: var(--space-1) var(--space-4);
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    border-radius: var(--radius-l);
+    background: color-mix(in srgb, var(--bg) 60%, transparent);
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: var(--fs-s);
+}
+
+.hero__hint-short { display: none; }
+
+/* Título con brillo de neón */
 .wordmark {
     font-size: var(--fs-hero);
     letter-spacing: .24em;
@@ -69,9 +126,28 @@
     margin-right: -.24em;
 }
 
-.wordmark__virus { color: var(--text); }
+.wordmark__virus {
+    color: var(--text);
+    text-shadow:
+        0 0 var(--space-3) color-mix(in srgb, var(--text) 70%, transparent),
+        0 0 var(--space-5) color-mix(in srgb, var(--text) 25%, transparent);
+}
 
-.wordmark__city { color: var(--accent); }
+.wordmark__city {
+    color: var(--accent);
+    text-shadow:
+        0 0 var(--space-3) color-mix(in srgb, var(--accent) 80%, transparent),
+        0 0 var(--space-6) color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.hero__protocol {
+    margin-top: calc(-1 * var(--space-2));
+    color: color-mix(in srgb, var(--accent) 75%, var(--bg));
+    font-family: var(--font-mono);
+    font-size: var(--fs-s);
+    letter-spacing: .2em;
+    text-transform: uppercase;
+}
 
 .hero__tagline {
     color: var(--muted);
@@ -224,12 +300,20 @@
 
 /* ---------- Pantallas de menos de 900px ---------- */
 @media (max-width: 899.98px) {
-    /* El hero se reduce a logo + wordmark */
-    .hero { padding: var(--space-6) var(--space-4) var(--space-2); }
+    /* El hero se reduce a virus animado + wordmark */
+    .hero { padding: var(--space-4) var(--space-4) var(--space-2); }
 
     .hero__tagline,
+    .hero__protocol,
     .hero__chips,
     .hero__particles { display: none; }
+
+    .hero__virus { height: 170px; }
+
+    /* Pista corta para que quepa en una línea */
+    .hero__hint-long { display: none; }
+
+    .hero__hint-short { display: inline; }
 
     .hero__content { gap: var(--space-3); }
 

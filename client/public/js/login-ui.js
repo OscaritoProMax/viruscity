@@ -7,9 +7,11 @@
 //   4) tras un registro exitoso (evento "viruscity:registered"), pasa a "Iniciar sesión"
 //   5) el aviso de sessionStorage "sessionMessage" ya lo muestra y borra login.js en #sessionBanner,
 //      así que aquí no se lee ni se toca (solo tiene estilo en login.css).
+//   6) el virus animado del hero (rebota y salta con clic, toque, Enter o Espacio)
 
 import { UI } from "./ui/ui-config.js";
 import { startParticles } from "./ui/particles.js";
+import { startBouncingVirus } from "./ui/bouncing-virus.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -125,3 +127,26 @@ function syncParticles() {
 
 syncParticles();
 window.addEventListener("resize", syncParticles);
+
+// ---------- Virus animado del hero ----------
+// Rebota solo; con clic, toque, Enter o Espacio da un salto. Con movimiento reducido queda quieto
+// y deja de ser interactivo (vuelve a ser una imagen con su nombre accesible).
+const virusStage = $("heroVirus");
+const virusHint = $("heroVirusHint");
+
+function setVirusInteractive(interactive) {
+    virusStage.classList.toggle("is-interactive", interactive);
+    virusHint.hidden = !interactive;
+    if (interactive) {
+        virusStage.setAttribute("role", "button");
+        virusStage.tabIndex = 0;
+        virusStage.setAttribute("aria-label", "Logo de Viruscity: pulsa para hacer saltar al virus");
+    } else {
+        virusStage.setAttribute("role", "img");
+        virusStage.removeAttribute("tabindex");
+        virusStage.setAttribute("aria-label", "Logo de Viruscity");
+    }
+}
+
+startBouncingVirus(virusStage, $("heroVirusCanvas"), { onInteractiveChange: setVirusInteractive });
+virusStage.classList.add("is-live"); // oculta el logo estático de respaldo
