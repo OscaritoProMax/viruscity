@@ -4,7 +4,8 @@
 //   - envía intenciones de movimiento y extras (color).
 // Todo el texto dinámico va con textContent (DOM) o fillText (canvas).
 
-import { playerColor } from "./colors.js";
+import { computeIntent, MOVEMENT_CODES } from "./intent.js";
+import { isValidColor, playerColor } from "./colors.js";
 import { createRenderer } from "./render.js";
 
 const $ = (id) => document.getElementById(id);
@@ -105,6 +106,9 @@ function startGame(token) {
                 fitCanvas();
             }
             if (msg.you?.userId) me = { userId: String(msg.you.userId) };
+            // Color guardado de sesiones anteriores
+            const saved = localStorage.getItem("playColor");
+            if (isValidColor(saved)) applyColor(saved);
         } else if (msg.type === "state") {
             if (!Array.isArray(msg.players)) return;
             window.lastState = msg;
@@ -146,6 +150,65 @@ function startGame(token) {
     window.addEventListener("storage", (event) => {
         if (event.key === "token" || event.key === null) checkStoredToken();
     });
+
+    // ---------- Entrada: solo INTENCIONES (la posición la decide el servidor) ----------
+    const keys = new Set();
+    let lastIntent = { x: 0, y: 0 };
+
+    // Envía la intención solo si cambió respecto a la última enviada
+    function pushIntent() {
+        const intent = computeIntent(keys);
+        if (intent.x === lastIntent.x && intent.y === lastIntent.y) return;
+        if (ws.readyState !== WebSocket.OPEN) return;
+        lastIntent = intent;
+        sendJson({ type: "intent", intent: { dir: { x: intent.x, y: intent.y } } });
+    }
+
+    const inFormControl = (target) => target instanceof Element && target.closest("input, select, textarea, button");
+
+    window.addEventListener("keydown", (event) => {
+        // Flechas y espacio no desplazan la página (salvo sobre un control: Espacio debe activar botones)
+        if ((MOVEMENT_CODES.has(event.code) || event.code === "Space") && !inFormControl(event.target)) event.preventDefault();
+        if (!MOVEMENT_CODES.has(event.code)) return;
+        keys.add(event.code);
+        pushIntent();
+    });
+    window.addEventListener("keyup", (event) => {
+        if (!keys.delete(event.code)) return;
+        pushIntent();
+    });
+
+    // Al perder el foco o esconder la pestaña se sueltan todas las teclas (intención {0, 0})
+    function releaseAll() {
+        keys.clear();
+        pushIntent();
+    }
+    window.addEventListener("blur", releaseAll);
+    document.addEventListener("visibilitychange", () => {
+        if (document.hidden) releaseAll();
+    });
+
+    // ---------- Extra: color propio ----------
+    const colorInput = $("colorInput");
+    const swatches = [...document.querySelectorAll(".play-swatch")];
+
+    function markSwatch(color) {
+        for (const button of swatches) button.setAttribute("aria-pressed", String(button.dataset.color === color));
+    }
+
+    // Valida, guarda y envía el color (extras se reemplaza completo en el servidor)
+    function applyColor(color) {
+        if (!isValidColor(color)) return;
+        const value = color.toLowerCase();
+        localStorage.setItem("playColor", value);
+        colorInput.value = value;
+        markSwatch(value);
+        sendJson({ type: "extras_update", extras: { color: value } });
+    }
+
+    colorInput.addEventListener("change", () => applyColor(colorInput.value));
+    for (const button of swatches) button.addEventListener("click", () => applyColor(button.dataset.color));
+    markSwatch(null);
 
     // ---------- Lista de jugadores (solo cuando cambia) ----------
     let listSignature = "";
