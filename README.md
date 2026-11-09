@@ -547,6 +547,79 @@ setInterval(() => { const j = lastState.players.find(p => p.username === localSt
 
 Esa pestaña te dibuja en (100, 100), en el bosque de la esquina (la cámara te sigue hasta allí), porque edita su copia local de `lastState`. **En la otra pestaña no pasa nada**: el servidor sigue con tu posición real. Al recargar (o al detener el intervalo), el siguiente `state` del servidor corrige la vista.
 
+**(c2) Intentar hacer trampa desde el navegador (opcional, 3–4 min)**
+
+Abre dos navegadores: A es el tramposo y B el observador. En A abre DevTools (F12) → **Consola**. Si Chrome o Edge piden escribir `allow pasting`, escríbelo antes de pegar. Lo que el servidor decide se ve en la pantalla de B, y también en su consola con:
+
+```js
+setInterval(() => console.log(lastState.players.map(p => `${p.username} ${p.provider} (${p.x.toFixed(0)}, ${p.y.toFixed(0)})`).join(" | ")), 1000);
+```
+
+**1. Tomar el WebSocket de la página.** Es lo que haría un tramposo para mandarle al servidor lo que quiera. Después de pegar esto, pulsa una flecha un instante para que la página envíe algo y quede capturado:
+
+```js
+const _send = WebSocket.prototype.send;
+WebSocket.prototype.send = function (d) { window.ws = this; return _send.call(this, d); };
+const enviar = (m) => ws.send(JSON.stringify(m));
+```
+
+**2. Posición.** Mensajes inventados y coordenadas metidas en el intent o en los extras: **no pasa nada**. El servidor solo entiende `intent` (una dirección) y `extras_update`, y la posición la calcula él.
+
+```js
+enviar({ type: "teleport", x: 100, y: 100 });
+enviar({ type: "move", x: 100, y: 100 });
+enviar({ type: "state", players: [{ username: localStorage.username, x: 100, y: 100 }] });
+enviar({ type: "intent", intent: { dir: { x: 0, y: 0 } }, x: 100, y: 100 });
+```
+
+Editar `lastState` (el snippet de la demo (c)) solo cambia el dibujo en la pantalla del tramposo. Recargar la página (F5) tampoco sirve: el servidor recuerda la posición y aparece en el mismo lugar.
+
+**3. Velocidad.** Una dirección enorme, una ráfaga de mensajes o pedir más velocidad en los extras: siempre va a 200 px/s.
+
+```js
+enviar({ type: "extras_update", extras: { speed: 5000 } });
+enviar({ type: "intent", intent: { dir: { x: 9999, y: 0 } } });       // se reduce a 1 con Math.sign
+for (let i = 0; i < 1000; i++) enviar({ type: "intent", intent: { dir: { x: 1, y: 0 } } }); // más de 60/s se descartan
+setTimeout(() => enviar({ type: "intent", intent: { dir: { x: 0, y: 0 } } }), 1000);
+```
+
+Explica por qué: el servidor mueve una vez por tick con `PLAYER_SPEED · dt` y la dirección normalizada; el número de mensajes no importa.
+
+**4. Tamaño.** Pedir una caja diminuta para colarse por las paredes, o un personaje gigante:
+
+```js
+enviar({ type: "extras_update", extras: { radius: 1, size: 20, scale: 10 } });
+```
+
+Camina contra un edificio: se detiene en el mismo punto de siempre, porque la caja de choque es `PLAYER_RADIUS` del servidor. En la pantalla de B se ve del tamaño normal, porque el cliente solo acepta personaje, colores y poder (`resolveLook`).
+
+**5. Identidad.** Fingir ser de Google o cambiar el nombre:
+
+```js
+enviar({ type: "extras_update", extras: { provider: "google", username: "admin" } }); // la insignia sigue en L
+
+// Token falsificado: se cambia el contenido del JWT sin conocer el secreto
+const [h, p, s] = localStorage.token.split(".");
+const datos = JSON.parse(atob(p.replace(/-/g, "+").replace(/_/g, "/")));
+datos.username = "admin"; datos.provider = "google";
+const falso = h + "." + btoa(JSON.stringify(datos)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "") + "." + s;
+const w = new WebSocket(APP_CONFIG.COORDINATOR_WS_URL + "/connect?token=" + encodeURIComponent(falso));
+w.onclose = (e) => console.log("cerrado", e.code, e.reason); // 4001 invalid token: la firma no coincide
+```
+
+**6. Abuso (déjalo para el final: saca al tramposo de la partida).**
+
+```js
+enviar({ type: "extras_update", extras: { pad: "x".repeat(1500) } }); // > 1024 bytes de extras: se ignora
+enviar({ type: "extras_update", extras: { pad: "x".repeat(5000) } }); // > 2048 bytes: el servidor cierra el socket (1009)
+```
+
+**Lo que un tramposo SÍ puede hacer** (y conviene decirlo):
+- Todo lo que es solo de su pantalla: dibujarse en otro lugar, cambiar el zoom, ver los vecinos y coches decorativos, los diálogos y los sonidos.
+- Leer `lastState` completo: ahí están las posiciones de **todos**, incluidos los que están dentro de un local, que la interfaz oculta. El protocolo del taller manda el estado completo a todos. Para ocultarlo de verdad, el servidor tendría que filtrar el `state` de cada jugador según el escenario (gestión de interés).
+
+Probado con dos jugadores en Edge: los 12 intentos quedaron bloqueados, medidos con la posición que el servidor le manda al otro jugador.
+
 **(d) Tour del código · 4 min**
 
 | Punto | Archivo y función |
