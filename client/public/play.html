@@ -35,33 +35,64 @@
 <main class="play-main">
     <section class="play-stage" aria-label="Mapa del juego">
         <div id="canvasBox" class="play-canvas-box">
-            <canvas id="gameCanvas" role="img" aria-label="Mapa con los jugadores en línea"></canvas>
+            <canvas id="gameCanvas" role="img" aria-label="Mapa de Virus City con los jugadores en línea"></canvas>
+
+            <!-- Zona y hora del juego (la hora sale del reloj del servidor: es la misma para todos) -->
+            <div class="play-hud" aria-live="polite">
+                <span class="play-hud__item"><span class="play-hud__label">Zona</span> <span id="hudArea">Virus City</span></span>
+                <span class="play-hud__item"><span id="hudClockIcon" class="play-hud__icon" aria-hidden="true">☀</span> <span id="hudClock">--:--</span></span>
+            </div>
+
+            <!-- Minimapa y zoom (solo visuales) -->
+            <div class="play-map-tools">
+                <canvas id="minimap" class="play-minimap" width="160" height="120" role="img" aria-label="Minimapa: tu posición y la de los demás jugadores"></canvas>
+                <div class="play-zoom" role="group" aria-label="Zoom del mapa">
+                    <button id="zoomOut" type="button" class="play-zoom__btn" aria-label="Alejar">−</button>
+                    <button id="zoomReset" type="button" class="play-zoom__btn play-zoom__value" aria-label="Zoom normal"><span id="zoomText">1.0×</span></button>
+                    <button id="zoomIn" type="button" class="play-zoom__btn" aria-label="Acercar">+</button>
+                </div>
+            </div>
         </div>
-        <p class="play-help">Muévete con WASD o las flechas</p>
+        <p class="play-help">Muévete con WASD o las flechas · el servidor decide tu posición y los choques con la ciudad</p>
     </section>
 
     <aside class="play-side">
         <section class="play-panel" aria-labelledby="playersTitle">
-            <h2 id="playersTitle" class="play-panel__title">Jugadores en línea (<span id="playerCount">0</span>)</h2>
+            <h2 id="playersTitle" class="play-panel__title">Jugadores en línea <span class="play-count" id="playerCount">0</span></h2>
             <ul id="playerList" class="play-players"></ul>
         </section>
 
-        <section class="play-panel" aria-labelledby="colorTitle">
-            <h2 id="colorTitle" class="play-panel__title">Tu color</h2>
-            <div class="play-color">
-                <label class="play-color__picker" for="colorInput">
-                    <span class="sr-only">Elegir un color personalizado</span>
-                    <input type="color" id="colorInput" value="#4dd2ff">
-                </label>
-                <div class="play-swatches" role="group" aria-label="Colores predefinidos">
-                    <button type="button" class="play-swatch" data-color="#4dd2ff" aria-label="Cian"></button>
-                    <button type="button" class="play-swatch" data-color="#7cff6b" aria-label="Verde"></button>
-                    <button type="button" class="play-swatch" data-color="#ff4d6d" aria-label="Rojo"></button>
-                    <button type="button" class="play-swatch" data-color="#ffd166" aria-label="Dorado"></button>
-                    <button type="button" class="play-swatch" data-color="#b388ff" aria-label="Violeta"></button>
-                    <button type="button" class="play-swatch" data-color="#ff9f43" aria-label="Naranja"></button>
-                </div>
+        <section class="play-panel" aria-labelledby="lookTitle">
+            <h2 id="lookTitle" class="play-panel__title">Tu personaje</h2>
+
+            <div class="play-look">
+                <canvas id="lookPreview" class="play-look__preview" width="180" height="180" role="img" aria-label="Vista previa de tu personaje"></canvas>
+                <p class="play-look__name"><strong id="lookName">Explorador</strong><span id="lookDescription" class="play-look__desc"></span></p>
             </div>
+
+            <!-- Las tarjetas se crean desde js/play/look-panel.js (una por personaje) -->
+            <div id="characterCards" class="play-cards" role="radiogroup" aria-label="Personaje"></div>
+
+            <fieldset class="play-field">
+                <legend id="colorLegend" class="play-field__legend">Color</legend>
+                <div id="colorSwatches" class="play-swatches"></div>
+                <label class="play-color__picker" for="colorInput">
+                    <span class="play-color__picker-text">Otro color</span>
+                    <input type="color" id="colorInput" value="#3b4836">
+                </label>
+            </fieldset>
+
+            <fieldset class="play-field">
+                <legend id="detailLegend" class="play-field__legend">Pelo</legend>
+                <div id="detailSwatches" class="play-swatches"></div>
+            </fieldset>
+
+            <fieldset class="play-field">
+                <legend class="play-field__legend">Tono de piel</legend>
+                <div id="skinSwatches" class="play-swatches play-swatches--skin"></div>
+            </fieldset>
+
+            <p class="play-look__note">Tu apariencia viaja en tus <em>extras</em>: el servidor la guarda y todos la ven en el siguiente estado.</p>
         </section>
     </aside>
 </main>

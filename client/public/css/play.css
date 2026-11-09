@@ -1,6 +1,6 @@
-/* Página del juego en vivo (Taller 5). Usa los tokens de css/tokens.css con valores de respaldo.
-   Medidas fijas de componente: panel lateral de 260px, corte responsive en 800px, muestras de color
-   de 44px, punto de estado de 8px y bordes de 1-2px. */
+/* Página del juego en vivo (Taller 5): mapa de Virus City, personajes y jugadores en línea.
+   Usa los tokens de css/tokens.css con valores de respaldo. Medidas fijas de componente: panel
+   lateral de 320px, corte responsive en 900px, muestras de 44px, minimapa de 160×120 y bordes de 1-4px. */
 
 body.play {
     min-height: 100dvh;
@@ -103,12 +103,12 @@ body.play {
     text-align: center;
 }
 
-/* ---------- Contenido: canvas + panel lateral ---------- */
+/* ---------- Contenido: mapa + panel lateral ---------- */
 .play-main {
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 260px;
+    grid-template-columns: minmax(0, 1fr) 320px;
     gap: var(--space-4, 16px);
     padding: var(--space-4, 16px);
 }
@@ -121,18 +121,104 @@ body.play {
     gap: var(--space-2, 8px);
 }
 
-/* El canvas se ajusta (con computeFit) al tamaño de esta caja */
+/* El canvas ocupa toda esta caja; la cámara decide qué parte de la ciudad se ve */
 .play-canvas-box {
+    position: relative;
     flex: 1;
-    min-height: 0;
-    display: grid;
-    place-items: center;
+    min-height: 320px;
+    overflow: hidden;
+    border: 1px solid var(--border, #2a3560);
+    border-radius: var(--radius-l, 20px);
+    background: var(--bg, #0b1020);
+    box-shadow: var(--shadow-1, none);
+}
+
+.play-canvas-box > canvas {
+    position: absolute;
+    inset: 0;
+    display: block;
+}
+
+/* Superpuestos sobre el mapa: paneles translúcidos */
+.play-hud,
+.play-minimap,
+.play-zoom {
+    border: 1px solid var(--border, #2a3560);
+    background: color-mix(in srgb, var(--panel, #121a33) 85%, transparent);
+    backdrop-filter: blur(8px);
+}
+
+.play-hud {
+    position: absolute;
+    top: var(--space-3, 12px);
+    left: var(--space-3, 12px);
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2, 8px) var(--space-4, 16px);
+    max-width: calc(100% - 200px);
+    padding: var(--space-2, 8px) var(--space-3, 12px);
+    border-radius: var(--radius-m, 12px);
+    font-size: var(--fs-s, .8125rem);
+    font-weight: 600;
+}
+
+.play-hud__label {
+    color: var(--muted, #8f9bc4);
+    font-family: var(--font-mono, monospace);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+}
+
+.play-hud__icon { color: var(--cure, #ffd166); }
+
+/* Minimapa arriba a la derecha y zoom abajo a la derecha (lejos del jugador, que va al centro) */
+.play-map-tools {
+    position: absolute;
+    top: var(--space-3, 12px);
+    right: var(--space-3, 12px);
+    bottom: var(--space-3, 12px);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: var(--space-2, 8px);
+    pointer-events: none;
+}
+
+.play-map-tools > * { pointer-events: auto; }
+
+.play-minimap {
+    width: 160px;
+    height: 120px;
+    padding: var(--space-1, 4px);
+    border-radius: var(--radius-m, 12px);
+    image-rendering: pixelated;
+}
+
+.play-zoom {
+    display: flex;
+    border-radius: var(--radius-m, 12px);
     overflow: hidden;
 }
 
-.play-canvas-box canvas {
-    display: block;
-    border-radius: var(--radius-m, 12px);
+.play-zoom__btn {
+    min-width: 44px;
+    min-height: 44px;
+    border: 0;
+    background: transparent;
+    color: var(--text, #e6e9f5);
+    font-family: var(--font-mono, monospace);
+    font-size: var(--fs-m, 1rem);
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.play-zoom__btn:hover { background: color-mix(in srgb, var(--accent, #4dd2ff) 18%, transparent); }
+
+.play-zoom__value {
+    min-width: 64px;
+    color: var(--accent, #4dd2ff);
+    font-size: var(--fs-s, .8125rem);
 }
 
 .play-help {
@@ -142,10 +228,13 @@ body.play {
     text-align: center;
 }
 
+/* ---------- Panel lateral ---------- */
 .play-side {
-    display: grid;
-    align-content: start;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
     gap: var(--space-4, 16px);
+    overflow-y: auto;
 }
 
 .play-panel {
@@ -158,6 +247,9 @@ body.play {
 }
 
 .play-panel__title {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2, 8px);
     margin: 0;
     color: var(--muted, #8f9bc4);
     font-family: var(--font-mono, monospace);
@@ -166,37 +258,73 @@ body.play {
     text-transform: uppercase;
 }
 
+.play-count {
+    min-width: 28px;
+    padding: 0 var(--space-2, 8px);
+    border-radius: var(--radius-l, 20px);
+    background: var(--accent, #4dd2ff);
+    color: var(--accent-ink, #06121c);
+    letter-spacing: 0;
+    text-align: center;
+}
+
+/* ---------- Jugadores en línea ---------- */
 .play-players {
     list-style: none;
     margin: 0;
     padding: 0;
     display: grid;
     gap: var(--space-2, 8px);
+    max-height: 340px;
+    overflow-y: auto;
 }
 
 .play-player {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
-    gap: var(--space-2, 8px);
-    min-width: 0;
-    font-size: var(--fs-s, .8125rem);
+    gap: var(--space-3, 12px);
+    padding: var(--space-2, 8px);
+    border: 1px solid var(--border, #2a3560);
+    border-left: 4px solid var(--player-color, var(--border, #2a3560));
+    border-radius: var(--radius-m, 12px);
+    background: var(--panel-2, #18223f);
 }
 
-.play-player__dot {
-    flex: none;
-    width: var(--space-3, 12px);
-    height: var(--space-3, 12px);
-    border-radius: 50%;
-    border: 1px solid var(--bg, #0b1020);
+.play-player.is-me { border-color: var(--accent, #4dd2ff); border-left-color: var(--player-color, var(--accent, #4dd2ff)); }
+
+.play-player__portrait {
+    width: 48px;
+    height: 48px;
+    border-radius: var(--radius-s, 8px);
+    background: var(--bg, #0b1020);
+}
+
+.play-player__info {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
 }
 
 .play-player__name {
-    flex: 1;
-    min-width: 0;
-    overflow-wrap: anywhere;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 700;
 }
 
-.play-player.is-me .play-player__name { font-weight: 700; }
+.play-player__you {
+    color: var(--accent, #4dd2ff);
+    font-weight: 600;
+}
+
+.play-player__meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted, #8f9bc4);
+    font-size: var(--fs-s, .8125rem);
+}
 
 .play-players:empty::after {
     content: "Nadie conectado todavía";
@@ -204,20 +332,89 @@ body.play {
     font-size: var(--fs-s, .8125rem);
 }
 
-/* ---------- Color propio ---------- */
-.play-color {
+/* ---------- Tu personaje ---------- */
+.play-look {
     display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
     gap: var(--space-3, 12px);
 }
 
-.play-color__picker input {
-    width: 100%;
-    min-height: 44px;
-    padding: var(--space-1, 4px);
+.play-look__preview {
+    width: 96px;
+    height: 96px;
     border: 1px solid var(--border, #2a3560);
     border-radius: var(--radius-m, 12px);
+    background: radial-gradient(circle at 50% 70%, var(--panel-2, #18223f), var(--bg, #0b1020));
+}
+
+.play-look__name {
+    display: grid;
+    gap: var(--space-1, 4px);
+    margin: 0;
+    font-family: var(--font-mono, monospace);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+}
+
+.play-look__desc {
+    color: var(--muted, #8f9bc4);
+    font-family: var(--font-ui, system-ui, sans-serif);
+    font-size: var(--fs-s, .8125rem);
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+.play-cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-2, 8px);
+}
+
+.play-card {
+    display: grid;
+    justify-items: center;
+    gap: var(--space-1, 4px);
+    min-height: 44px;
+    padding: var(--space-2, 8px) var(--space-1, 4px);
+    border: 2px solid var(--border, #2a3560);
+    border-radius: var(--radius-m, 12px);
     background: var(--panel-2, #18223f);
+    color: var(--text, #e6e9f5);
+    font: inherit;
+    font-size: var(--fs-s, .8125rem);
+    font-weight: 600;
     cursor: pointer;
+    transition: border-color var(--t-fast, 120ms) var(--ease, ease), box-shadow var(--t-fast, 120ms) var(--ease, ease);
+}
+
+.play-card:hover { border-color: var(--muted, #8f9bc4); }
+
+.play-card[aria-checked="true"] {
+    border-color: var(--accent, #4dd2ff);
+    box-shadow: var(--shadow-glow, none);
+}
+
+.play-card__canvas {
+    width: 64px;
+    height: 64px;
+}
+
+.play-field {
+    display: grid;
+    gap: var(--space-2, 8px);
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.play-field__legend {
+    padding: 0;
+    margin-bottom: var(--space-2, 8px);
+    color: var(--muted, #8f9bc4);
+    font-size: var(--fs-s, .8125rem);
+    font-weight: 600;
 }
 
 .play-swatches {
@@ -226,22 +423,50 @@ body.play {
     gap: var(--space-2, 8px);
 }
 
+.play-swatches--skin { grid-template-columns: repeat(5, 1fr); }
+
+/* Cada muestra recibe su color en la variable --swatch (desde JS) */
 .play-swatch {
     min-height: 44px;
     border: 2px solid var(--border, #2a3560);
     border-radius: var(--radius-s, 8px);
+    background: var(--swatch, var(--panel-2, #18223f));
     cursor: pointer;
 }
 
-.play-swatch[aria-pressed="true"] { border-color: var(--text, #e6e9f5); }
+.play-swatch[aria-pressed="true"] {
+    border-color: var(--text, #e6e9f5);
+    box-shadow: 0 0 0 2px var(--bg, #0b1020) inset;
+}
 
-/* Las muestras toman su color del atributo data-color (sin estilos en línea) */
-.play-swatch[data-color="#4dd2ff"] { background: #4dd2ff; }
-.play-swatch[data-color="#7cff6b"] { background: #7cff6b; }
-.play-swatch[data-color="#ff4d6d"] { background: #ff4d6d; }
-.play-swatch[data-color="#ffd166"] { background: #ffd166; }
-.play-swatch[data-color="#b388ff"] { background: #b388ff; }
-.play-swatch[data-color="#ff9f43"] { background: #ff9f43; }
+.play-color__picker {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3, 12px);
+    min-height: 44px;
+    padding: var(--space-1, 4px) var(--space-1, 4px) var(--space-1, 4px) var(--space-3, 12px);
+    border: 1px solid var(--border, #2a3560);
+    border-radius: var(--radius-m, 12px);
+    background: var(--panel-2, #18223f);
+    font-size: var(--fs-s, .8125rem);
+    cursor: pointer;
+}
+
+.play-color__picker input {
+    width: 64px;
+    min-height: 36px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+}
+
+.play-look__note {
+    margin: 0;
+    color: var(--muted, #8f9bc4);
+    font-size: var(--fs-s, .8125rem);
+}
 
 /* Foco visible aunque base.css no esté */
 .play :focus-visible {
@@ -249,14 +474,32 @@ body.play {
     outline-offset: 2px;
 }
 
-/* ---------- Pantallas de menos de 800px: el panel pasa debajo del canvas ---------- */
-@media (max-width: 799.98px) {
+@media (prefers-reduced-motion: reduce) {
+    .play-card { transition: opacity var(--t-fast, 120ms) linear; }
+}
+
+/* ---------- Menos de 900px: el panel pasa debajo del mapa ---------- */
+@media (max-width: 899.98px) {
     .play-main { grid-template-columns: minmax(0, 1fr); }
 
     .play-canvas-box {
         flex: none;
-        height: min(60dvh, 70vw);
+        height: min(64dvh, 110vw);
     }
 
+    .play-side { overflow: visible; }
+
     .play-header { padding: var(--space-3, 12px) var(--space-4, 16px); }
+}
+
+/* Pantallas angostas: minimapa más chico y HUD compacto */
+@media (max-width: 479.98px) {
+    .play-minimap {
+        width: 112px;
+        height: 84px;
+    }
+
+    .play-hud { max-width: calc(100% - 150px); }
+
+    .play-hud__label { display: none; }
 }

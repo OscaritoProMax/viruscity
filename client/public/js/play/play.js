@@ -1,12 +1,17 @@
 // Página del juego en vivo (Taller 5).
-// El SERVIDOR es la autoridad: este cliente no calcula posiciones. Solo:
-//   - guarda el último mensaje state en window.lastState y lo dibuja,
-//   - envía intenciones de movimiento y extras (color).
+// El SERVIDOR es la autoridad: este cliente no calcula posiciones ni choques. Solo:
+//   - guarda el último mensaje state en window.lastState y lo dibuja sobre el mapa de Virus City,
+//   - envía intenciones de movimiento y extras (la apariencia de su personaje).
 // Todo el texto dinámico va con textContent (DOM) o fillText (canvas).
 
 import { computeIntent, MOVEMENT_CODES } from "./intent.js";
-import { isValidColor, playerColor } from "./colors.js";
 import { createRenderer } from "./render.js";
+import { createLookPanel } from "./look-panel.js";
+import { createPlayersPanel } from "./players-panel.js";
+import { defaultLook, lookToExtras, parseSavedLook } from "./characters/look.js";
+import { areaName } from "./map/zones.js";
+import { gameMinutes, formatClock, isNight } from "./map/clock.js";
+import { ZOOM_STEP, clampZoom } from "./view.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -24,7 +29,24 @@ const TOKEN_REMOVED_MESSAGE = "Tu sesión se cerró. Inicia sesión de nuevo.";
 
 const UNSTABLE_AFTER_MS = 3 * 1000; // sin state durante más de 3 s → aviso
 const MAX_FRAME_DT = 0.05;
+const HUD_EVERY_MS = 250; // zona, hora y lista se refrescan 4 veces por segundo (no en cada cuadro)
 const PROVIDER_LABELS = { google: "Google", local: "Local" };
+
+// Preferencias solo de este navegador (try/catch: el almacenamiento puede estar bloqueado)
+function readPref(key) {
+    try {
+        return localStorage.getItem(key);
+    } catch {
+        return null;
+    }
+}
+function writePref(key, value) {
+    try {
+        localStorage.setItem(key, value);
+    } catch {
+        // sin almacenamiento: la preferencia dura solo esta visita
+    }
+}
 
 // Estado más reciente del servidor (el mensaje state completo). Es la única fuente de verdad.
 window.lastState = null;
@@ -72,14 +94,23 @@ function startGame(token) {
     }
     setConnection("connecting");
 
-    // ---------- Canvas ----------
+    // ---------- Canvas, minimapa y zoom (solo visuales) ----------
     const canvas = $("gameCanvas");
     const box = $("canvasBox");
-    const renderer = createRenderer(canvas);
-    const fitCanvas = () => {
-        if (world) renderer.resize(world, box.clientWidth, box.clientHeight);
-    };
+    const renderer = createRenderer(canvas, $("minimap"));
+    const fitCanvas = () => renderer.resize(box.clientWidth, box.clientHeight);
     new ResizeObserver(fitCanvas).observe(box);
+    fitCanvas();
+
+    function setZoom(z) {
+        renderer.setZoom(clampZoom(z));
+        $("zoomText").textContent = `${renderer.getZoom().toFixed(2).replace(/0$/, "")}×`;
+        writePref("playZoom", String(renderer.getZoom()));
+    }
+    setZoom(Number(readPref("playZoom")) || 1);
+    $("zoomIn").addEventListener("click", () => setZoom(renderer.getZoom() + ZOOM_STEP));
+    $("zoomOut").addEventListener("click", () => setZoom(renderer.getZoom() - ZOOM_STEP));
+    $("zoomReset").addEventListener("click", () => setZoom(1));
 
     // ---------- WebSocket ----------
     const ws = new WebSocket(`${window.APP_CONFIG.COORDINATOR_WS_URL}/connect?token=${encodeURIComponent(token)}`);
@@ -103,12 +134,11 @@ function startGame(token) {
             if (w && [w.width, w.height, w.playerRadius].every(Number.isFinite)) {
                 world = { width: w.width, height: w.height, playerRadius: w.playerRadius, tickRate: w.tickRate };
                 welcomeAt = performance.now();
-                fitCanvas();
             }
             if (msg.you?.userId) me = { userId: String(msg.you.userId) };
-            // Color guardado de sesiones anteriores
-            const saved = localStorage.getItem("playColor");
-            if (isValidColor(saved)) applyColor(saved);
+            // Apariencia guardada de sesiones anteriores; si no hay, la que le corresponde por su userId
+            const saved = parseSavedLook(readPref("playLook"), readPref("playColor"));
+            applyLook(saved ?? defaultLook(me.userId), Boolean(saved));
         } else if (msg.type === "state") {
             if (!Array.isArray(msg.players)) return;
             window.lastState = msg;
@@ -188,63 +218,35 @@ function startGame(token) {
         if (document.hidden) releaseAll();
     });
 
-    // ---------- Extra: color propio ----------
-    const colorInput = $("colorInput");
-    const swatches = [...document.querySelectorAll(".play-swatch")];
+    // ---------- Extra: apariencia del personaje ----------
+    // Se envía como extras_update (el servidor reemplaza los extras completos y los reenvía a todos).
+    // `color` sigue siendo el color principal: es el único campo que valida el servidor.
+    const lookPanel = createLookPanel({ onChange: (look) => applyLook(look, true) });
 
-    function markSwatch(color) {
-        for (const button of swatches) button.setAttribute("aria-pressed", String(button.dataset.color === color));
+    function applyLook(look, send) {
+        const extras = lookToExtras(look);
+        lookPanel.setLook(extras);
+        if (!send) return;
+        writePref("playLook", JSON.stringify(extras));
+        sendJson({ type: "extras_update", extras });
     }
 
-    // Valida, guarda y envía el color (extras se reemplaza completo en el servidor)
-    function applyColor(color) {
-        if (!isValidColor(color)) return;
-        const value = color.toLowerCase();
-        localStorage.setItem("playColor", value);
-        colorInput.value = value;
-        markSwatch(value);
-        sendJson({ type: "extras_update", extras: { color: value } });
-    }
-
-    colorInput.addEventListener("change", () => applyColor(colorInput.value));
-    for (const button of swatches) button.addEventListener("click", () => applyColor(button.dataset.color));
-    markSwatch(null);
-
-    // ---------- Lista de jugadores (solo cuando cambia) ----------
-    let listSignature = "";
-    function updatePlayerList(state) {
-        const players = state?.players ?? [];
-        const signature = players.map((p) => `${p.userId}|${p.username}|${p.provider}|${playerColor(p)}`).join(";") + `#${me.userId}`;
-        if (signature === listSignature) return;
-        listSignature = signature;
-
-        const rows = players.map((p) => {
-            const li = document.createElement("li");
-            li.className = "play-player";
-            const isMe = p.userId === me.userId;
-            if (isMe) li.classList.add("is-me");
-
-            const dot = document.createElement("span");
-            dot.className = "play-player__dot";
-            dot.style.background = playerColor(p); // único estilo en línea: el color del jugador
-            dot.setAttribute("aria-hidden", "true");
-
-            const name = document.createElement("span");
-            name.className = "play-player__name";
-            name.textContent = isMe ? `${p.username} (tú)` : p.username;
-
-            li.append(dot, name);
-            if (PROVIDER_LABELS[p.provider]) {
-                const badge = document.createElement("span");
-                badge.className = "provider-badge";
-                badge.dataset.provider = p.provider;
-                badge.textContent = PROVIDER_LABELS[p.provider];
-                li.append(badge);
-            }
-            return li;
-        });
-        $("playerList").replaceChildren(...rows);
-        $("playerCount").textContent = String(players.length);
+    // ---------- Lista de jugadores, zona y hora ----------
+    const playersPanel = createPlayersPanel($("playerList"), $("playerCount"));
+    const withMap = () => renderer.hasCity();
+    let lastHud = 0;
+    function updateHud(now) {
+        if (now - lastHud < HUD_EVERY_MS) return;
+        lastHud = now;
+        const state = window.lastState;
+        playersPanel.update(state?.players ?? [], me.userId, (p) => (withMap() && Number.isFinite(p.x) ? areaName(p.x, p.y) : null));
+        $("hudArea").textContent = renderer.area() ?? "Virus City";
+        $("minimap").hidden = !withMap(); // sin mapa (mundo de otro tamaño) no hay minimapa
+        if (state && Number.isFinite(state.t)) {
+            const minutes = gameMinutes(state.t);
+            $("hudClock").textContent = formatClock(minutes);
+            $("hudClockIcon").textContent = isNight(minutes) ? "☾" : "☀";
+        }
     }
 
     // ---------- Bucle de dibujo ----------
@@ -253,7 +255,8 @@ function startGame(token) {
         const dt = Math.min((now - lastFrame) / 1000, MAX_FRAME_DT);
         lastFrame = now;
         renderer.draw(window.lastState, world, me, now, dt);
-        updatePlayerList(window.lastState);
+        lookPanel.tick(now);
+        updateHud(now);
 
         // Aviso discreto si dejan de llegar state
         const since = lastStateAt || welcomeAt;
