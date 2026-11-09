@@ -6,9 +6,9 @@
 
 import { computeIntent, MOVEMENT_CODES } from "./intent.js";
 import { createRenderer } from "./render.js";
-import { createLookPanel } from "./look-panel.js";
+import { createLookPanel, setupCollapsible } from "./look-panel.js";
 import { createPlayersPanel } from "./players-panel.js";
-import { defaultLook, lookToExtras, parseSavedLook } from "./characters/look.js";
+import { defaultLook, lookToExtras, parseSavedLook, POWER_MS } from "./characters/look.js";
 import { areaName } from "./map/zones.js";
 import { gameMinutes, formatClock, isNight } from "./map/clock.js";
 import { ZOOM_STEP, clampZoom } from "./view.js";
@@ -29,6 +29,7 @@ const TOKEN_REMOVED_MESSAGE = "Tu sesión se cerró. Inicia sesión de nuevo.";
 
 const UNSTABLE_AFTER_MS = 3 * 1000; // sin state durante más de 3 s → aviso
 const MAX_FRAME_DT = 0.05;
+const NARROW_QUERY = "(max-width: 699.98px)"; // en pantallas angostas los paneles empiezan plegados
 const HUD_EVERY_MS = 250; // zona, hora y lista se refrescan 4 veces por segundo (no en cada cuadro)
 const PROVIDER_LABELS = { google: "Google", local: "Local" };
 
@@ -197,6 +198,8 @@ function startGame(token) {
     const inFormControl = (target) => target instanceof Element && target.closest("input, select, textarea, button");
 
     window.addEventListener("keydown", (event) => {
+        // E usa el poder (fuera de los campos de formulario)
+        if (event.code === "KeyE" && !event.repeat && !inFormControl(event.target)) usePower();
         // Flechas y espacio no desplazan la página (salvo sobre un control: Espacio debe activar botones)
         if ((MOVEMENT_CODES.has(event.code) || event.code === "Space") && !inFormControl(event.target)) event.preventDefault();
         if (!MOVEMENT_CODES.has(event.code)) return;
@@ -221,7 +224,22 @@ function startGame(token) {
     // ---------- Extra: apariencia del personaje ----------
     // Se envía como extras_update (el servidor reemplaza los extras completos y los reenvía a todos).
     // `color` sigue siendo el color principal: es el único campo que valida el servidor.
-    const lookPanel = createLookPanel({ onChange: (look) => applyLook(look, true) });
+    const lookPanel = createLookPanel({ onChange: (look) => applyLook(look, true), onUsePower: () => usePower() });
+    const narrow = window.matchMedia(NARROW_QUERY).matches;
+    setupCollapsible("lookToggle", "lookBody", "playLookOpen", !narrow);
+    setupCollapsible("playersToggle", "playersBody", "playPlayersOpen", !narrow);
+
+    // Poder: powerOn viaja en los extras durante POWER_MS y luego se apaga. Es solo visual (todos ven
+    // el efecto en el state) y no cambia posiciones. Un uso a la vez.
+    let powerBusyUntil = 0;
+    function usePower() {
+        const look = lookPanel.getLook();
+        const now = performance.now();
+        if (look.power === "none" || now < powerBusyUntil || ws.readyState !== WebSocket.OPEN) return;
+        powerBusyUntil = now + POWER_MS + 100;
+        sendJson({ type: "extras_update", extras: { ...lookToExtras(look), powerOn: true } });
+        setTimeout(() => sendJson({ type: "extras_update", extras: lookToExtras(lookPanel.getLook()) }), POWER_MS);
+    }
 
     function applyLook(look, send) {
         const extras = lookToExtras(look);

@@ -12,89 +12,115 @@
 <link rel="stylesheet" href="css/play.css">
 </head>
 <body class="play">
-<header class="play-header">
-    <h1 class="play-title">VIRUS<span class="play-title__city">CITY</span></h1>
+<!-- El mapa ocupa toda la pantalla; todo lo demás va superpuesto -->
+<main id="canvasBox" class="play-stage">
+    <canvas id="gameCanvas" role="img" aria-label="Mapa de Virus City con los jugadores en línea"></canvas>
 
-    <!-- Estado de la conexión con el coordinador -->
-    <span id="connection" class="play-pill" data-state="connecting">
-        <span class="play-pill__dot" aria-hidden="true"></span>
-        <span id="connectionText" aria-live="polite">Conectando…</span>
-    </span>
-
-    <div class="play-header__actions">
-        <span class="play-user">
-            <span id="meName" class="play-user__name"></span>
-            <span id="meProvider" class="provider-badge" hidden></span>
-        </span>
-        <button id="logoutButton" type="button" class="btn btn--ghost">Cerrar sesión</button>
-    </div>
-</header>
-
-<div id="unstableNotice" class="play-notice" role="status" hidden>Conexión inestable…</div>
-
-<main class="play-main">
-    <section class="play-stage" aria-label="Mapa del juego">
-        <div id="canvasBox" class="play-canvas-box">
-            <canvas id="gameCanvas" role="img" aria-label="Mapa de Virus City con los jugadores en línea"></canvas>
-
+    <!-- Barra superior -->
+    <header class="play-top">
+        <div class="play-top__group">
+            <h1 class="play-title">VIRUS<span class="play-title__city">CITY</span></h1>
+            <span id="connection" class="play-pill" data-state="connecting">
+                <span class="play-pill__dot" aria-hidden="true"></span>
+                <span id="connectionText" aria-live="polite">Conectando…</span>
+            </span>
             <!-- Zona y hora del juego (la hora sale del reloj del servidor: es la misma para todos) -->
-            <div class="play-hud" aria-live="polite">
+            <span class="play-hud" aria-live="polite">
                 <span class="play-hud__item"><span class="play-hud__label">Zona</span> <span id="hudArea">Virus City</span></span>
                 <span class="play-hud__item"><span id="hudClockIcon" class="play-hud__icon" aria-hidden="true">☀</span> <span id="hudClock">--:--</span></span>
+            </span>
+        </div>
+        <div class="play-top__group play-top__session">
+            <span class="play-user">
+                <span id="meName" class="play-user__name"></span>
+                <span id="meProvider" class="provider-badge" hidden></span>
+            </span>
+            <button id="logoutButton" type="button" class="btn btn--ghost play-logout">Cerrar sesión</button>
+        </div>
+    </header>
+
+    <div id="unstableNotice" class="play-notice" role="status" hidden>Conexión inestable…</div>
+
+    <!-- Columna derecha: minimapa y jugadores en línea -->
+    <div class="play-right">
+        <canvas id="minimap" class="play-minimap" width="160" height="120" role="img" aria-label="Minimapa: tu posición y la de los demás jugadores"></canvas>
+        <section class="play-float" aria-labelledby="playersToggle">
+            <h2 class="play-float__head">
+                <button id="playersToggle" type="button" class="play-float__toggle" aria-expanded="true" aria-controls="playersBody">
+                    <span>Jugadores en línea</span>
+                    <span class="play-count" id="playerCount">0</span>
+                    <span class="play-float__chevron" aria-hidden="true"></span>
+                </button>
+            </h2>
+            <div id="playersBody" class="play-float__body">
+                <ul id="playerList" class="play-players"></ul>
+            </div>
+        </section>
+    </div>
+
+    <!-- Abajo a la izquierda: personaje, colores y poder -->
+    <section class="play-float play-look-panel" aria-labelledby="lookToggle">
+        <h2 class="play-float__head">
+            <button id="lookToggle" type="button" class="play-float__toggle" aria-expanded="true" aria-controls="lookBody">
+                <canvas id="lookPreview" class="play-look__preview" width="40" height="40" aria-hidden="true"></canvas>
+                <span class="play-look__title">
+                    <span class="play-look__caption">Tu personaje</span>
+                    <strong id="lookName">Explorador Pop</strong>
+                </span>
+                <span class="play-float__chevron" aria-hidden="true"></span>
+            </button>
+        </h2>
+        <div id="lookBody" class="play-float__body">
+            <div class="play-tabs" role="tablist" aria-label="Opciones del personaje">
+                <button type="button" class="play-tab" role="tab" id="tabCharacter" aria-controls="panelCharacter" aria-selected="true">Personaje</button>
+                <button type="button" class="play-tab" role="tab" id="tabColors" aria-controls="panelColors" aria-selected="false" tabindex="-1">Colores</button>
+                <button type="button" class="play-tab" role="tab" id="tabPower" aria-controls="panelPower" aria-selected="false" tabindex="-1">Poder</button>
             </div>
 
-            <!-- Minimapa y zoom (solo visuales) -->
-            <div class="play-map-tools">
-                <canvas id="minimap" class="play-minimap" width="160" height="120" role="img" aria-label="Minimapa: tu posición y la de los demás jugadores"></canvas>
-                <div class="play-zoom" role="group" aria-label="Zoom del mapa">
-                    <button id="zoomOut" type="button" class="play-zoom__btn" aria-label="Alejar">−</button>
-                    <button id="zoomReset" type="button" class="play-zoom__btn play-zoom__value" aria-label="Zoom normal"><span id="zoomText">1.0×</span></button>
-                    <button id="zoomIn" type="button" class="play-zoom__btn" aria-label="Acercar">+</button>
-                </div>
+            <div id="panelCharacter" class="play-tabpanel" role="tabpanel" aria-labelledby="tabCharacter">
+                <!-- Las tarjetas se crean desde js/play/look-panel.js (una por personaje) -->
+                <div id="characterCards" class="play-cards" role="radiogroup" aria-label="Personaje"></div>
+                <p id="lookDescription" class="play-look__desc"></p>
+            </div>
+
+            <div id="panelColors" class="play-tabpanel" role="tabpanel" aria-labelledby="tabColors" hidden>
+                <fieldset class="play-field">
+                    <legend id="colorLegend" class="play-field__legend">Color</legend>
+                    <div class="play-swatches play-swatches--with-picker">
+                        <div id="colorSwatches" class="play-swatches__list"></div>
+                        <label class="play-color__picker" for="colorInput">
+                            <span class="sr-only">Otro color</span>
+                            <input type="color" id="colorInput" value="#3b4836">
+                        </label>
+                    </div>
+                </fieldset>
+                <fieldset class="play-field">
+                    <legend id="detailLegend" class="play-field__legend">Pelo</legend>
+                    <div id="detailSwatches" class="play-swatches__list"></div>
+                </fieldset>
+                <fieldset class="play-field">
+                    <legend class="play-field__legend">Tono de piel</legend>
+                    <div id="skinSwatches" class="play-swatches__list"></div>
+                </fieldset>
+            </div>
+
+            <div id="panelPower" class="play-tabpanel" role="tabpanel" aria-labelledby="tabPower" hidden>
+                <!-- Opciones creadas desde look-panel.js según el personaje -->
+                <div id="powerOptions" class="play-powers" role="radiogroup" aria-label="Poder"></div>
+                <button id="powerButton" type="button" class="btn btn--block play-power-use">Usar poder <kbd>E</kbd></button>
+                <p class="play-look__desc">El efecto es solo visual: todos lo ven, pero no cambia posiciones.</p>
             </div>
         </div>
-        <p class="play-help">Muévete con WASD o las flechas · el servidor decide tu posición y los choques con la ciudad</p>
     </section>
 
-    <aside class="play-side">
-        <section class="play-panel" aria-labelledby="playersTitle">
-            <h2 id="playersTitle" class="play-panel__title">Jugadores en línea <span class="play-count" id="playerCount">0</span></h2>
-            <ul id="playerList" class="play-players"></ul>
-        </section>
+    <!-- Abajo a la derecha: zoom (solo visual) -->
+    <div class="play-zoom" role="group" aria-label="Zoom del mapa">
+        <button id="zoomOut" type="button" class="play-zoom__btn" aria-label="Alejar">−</button>
+        <button id="zoomReset" type="button" class="play-zoom__btn play-zoom__value" aria-label="Zoom normal"><span id="zoomText">1.0×</span></button>
+        <button id="zoomIn" type="button" class="play-zoom__btn" aria-label="Acercar">+</button>
+    </div>
 
-        <section class="play-panel" aria-labelledby="lookTitle">
-            <h2 id="lookTitle" class="play-panel__title">Tu personaje</h2>
-
-            <div class="play-look">
-                <canvas id="lookPreview" class="play-look__preview" width="180" height="180" role="img" aria-label="Vista previa de tu personaje"></canvas>
-                <p class="play-look__name"><strong id="lookName">Explorador</strong><span id="lookDescription" class="play-look__desc"></span></p>
-            </div>
-
-            <!-- Las tarjetas se crean desde js/play/look-panel.js (una por personaje) -->
-            <div id="characterCards" class="play-cards" role="radiogroup" aria-label="Personaje"></div>
-
-            <fieldset class="play-field">
-                <legend id="colorLegend" class="play-field__legend">Color</legend>
-                <div id="colorSwatches" class="play-swatches"></div>
-                <label class="play-color__picker" for="colorInput">
-                    <span class="play-color__picker-text">Otro color</span>
-                    <input type="color" id="colorInput" value="#3b4836">
-                </label>
-            </fieldset>
-
-            <fieldset class="play-field">
-                <legend id="detailLegend" class="play-field__legend">Pelo</legend>
-                <div id="detailSwatches" class="play-swatches"></div>
-            </fieldset>
-
-            <fieldset class="play-field">
-                <legend class="play-field__legend">Tono de piel</legend>
-                <div id="skinSwatches" class="play-swatches play-swatches--skin"></div>
-            </fieldset>
-
-            <p class="play-look__note">Tu apariencia viaja en tus <em>extras</em>: el servidor la guarda y todos la ven en el siguiente estado.</p>
-        </section>
-    </aside>
+    <p class="play-help">WASD o flechas para moverte · E para usar tu poder · el servidor decide tu posición y los choques</p>
 </main>
 
 <script src="/config.js"></script>

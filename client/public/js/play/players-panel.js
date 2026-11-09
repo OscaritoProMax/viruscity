@@ -1,15 +1,15 @@
-// Lista "Jugadores en línea": retrato del personaje, nombre, zona del mapa e insignia del proveedor.
+// Lista "Jugadores en línea": retrato del personaje, nombre, zona del mapa, poder e insignia del proveedor.
 // Sale de window.lastState (el servidor): no hay otra fuente. Se reconstruye solo cuando cambia algo
 // visible (alguien entra o sale, cambia de apariencia o de zona).
 //
 // createPlayersPanel(listEl, countEl) → { update(players, meId, zoneOf) }
 // zoneOf(player) → nombre de la zona o null. Todo el texto va con textContent.
 
-import { resolveLook } from "./characters/look.js";
+import { resolveLook, powerLabel } from "./characters/look.js";
 import { drawCharacter } from "./characters/index.js";
 
 const PROVIDER_LABELS = { google: "Google", local: "Local" };
-const PORTRAIT = 48; // px CSS
+const PORTRAIT = 36; // px CSS
 
 function portrait(look, dpr) {
     const canvas = document.createElement("canvas");
@@ -33,7 +33,7 @@ export function createPlayersPanel(listEl, countEl) {
         // El jugador local primero; los demás por nombre
         const sorted = [...players].sort((a, b) => (b.userId === meId) - (a.userId === meId) || String(a.username).localeCompare(String(b.username), "es"));
         const rows = sorted.map((p) => ({ p, look: resolveLook(p), zone: zoneOf(p), isMe: p.userId === meId }));
-        const next = rows.map(({ p, look, zone, isMe }) => [p.userId, p.username, p.provider, look.character, look.color, look.detail, look.skin, zone, isMe].join("|")).join(";");
+        const next = rows.map(({ p, look, zone, isMe }) => [p.userId, p.username, p.provider, look.character, look.color, look.detail, look.skin, look.power, zone, isMe].join("|")).join(";");
         if (next === signature) return;
         signature = next;
 
@@ -57,7 +57,9 @@ export function createPlayersPanel(listEl, countEl) {
                 }
                 const meta = document.createElement("span");
                 meta.className = "play-player__meta";
-                meta.textContent = zone ?? "En el mapa";
+                // Zona y poder equipado (el poder viene en sus extras)
+                const power = look.power !== "none" ? powerLabel(look.character, look.power) : "";
+                meta.textContent = [zone ?? "En el mapa", power].filter(Boolean).join(" · ");
                 info.append(name, meta);
 
                 li.append(portrait(look, dpr), info);
