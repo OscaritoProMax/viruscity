@@ -210,6 +210,7 @@ curl -s -w "  HTTP %{http_code}\n" -X POST http://localhost:4000/auth/google -H 
 1. **`dt` real:** se mide con `Date.now()` entre ticks y se acota a 0,25 s (`clampDt`). Así la velocidad no depende del tick rate, y una pausa del proceso no provoca un salto enorme.
 2. **Movimiento normalizado:** `stepPlayers` divide la intención por `Math.hypot(x, y)`, así que la diagonal avanza lo mismo que un eje (200 px/s, no 283).
 3. **Choques con el mapa:** con `MAP_FILE`, el jugador es una caja de `2·radio` y `moveAxis` lo mueve **un eje a la vez**. Si la caja entra en una casilla sólida, se pega al borde de esa casilla (y en diagonal se desliza por la pared). Avanza en pasos de media casilla, así que tampoco atraviesa paredes con un `dt` grande.
+   - **Puertas de los locales (portales):** el mapa trae una lista de `portals` (rectángulos de casillas con un destino). Si el centro del jugador pisa uno, `stepPlayers` lo traslada al destino: la puerta del Burger Neón lleva dentro del local y la salida del local devuelve a la acera. Lo decide el servidor, igual que los choques.
 4. **Límites del mundo:** cada jugador queda dentro de `[radio, ancho − radio]` × `[radio, alto − radio]`.
 5. **Un broadcast por tick:** `snapshot(players)` se serializa **una vez** y se envía a todos. Los handlers de mensajes nunca hacen broadcast.
 6. **20 Hz de verdad:** el loop se programa con una hora objetivo (`scheduleTick`), no con `setInterval`. En Windows `setInterval(50)` dispara cada ~60 ms (≈16,5 Hz).
@@ -219,7 +220,7 @@ curl -s -w "  HTTP %{http_code}\n" -X POST http://localhost:4000/auth/google -H 
 Del servidor al cliente:
 ```json
 { "type": "welcome", "you": { "userId": "4", "username": "alice", "provider": "local" },
-  "world": { "width": 3840, "height": 2880, "playerRadius": 16, "tickRate": 20 } }
+  "world": { "width": 3840, "height": 3840, "playerRadius": 16, "tickRate": 20 } }
 
 { "type": "state", "t": 1794174650735,
   "players": [ { "userId": "4", "username": "alice", "provider": "local", "x": 1708.01, "y": 1189.1,
@@ -235,7 +236,7 @@ Del cliente al servidor:
 { "type": "extras_update", "extras": { "character": "mensajero", "color": "#2563eb", "detail": "#facc15", "skin": "#8d5b3c" } }
 ```
 
-**El mapa en el servidor.** `coordinator/map/virus-city.json` guarda la grilla de 80 × 60 casillas de 48 (1 = sólida) y las casillas donde se puede aparecer. Lo genera `npm run map` (en `client/`) ejecutando **el mismo** `layout.js` que dibuja el cliente, y la prueba `client/test/map.test.mjs` falla si el archivo y el dibujo no coinciden. `parseMap()` valida el archivo al arrancar, el tamaño del mundo sale del mapa (3840 × 2880) y `randomSpawn()` elige una casilla libre del centro. Sin `MAP_FILE`, el mundo es el rectángulo vacío de `WORLD_WIDTH × WORLD_HEIGHT` (1200 × 800 por defecto).
+**El mapa en el servidor.** `coordinator/map/virus-city.json` guarda la grilla de 80 × 80 casillas de 48 (1 = sólida), las casillas donde se puede aparecer y los portales. Las filas 0–59 son la ciudad y las 60–79, la **zona de interiores**, donde están el Burger Neón y el Supermercado rodeados de pared. Así los locales son parte del mismo mundo y la posición sigue siendo solo `(x, y)`: el protocolo no cambia, y cada cliente sabe en qué escenario está cada jugador por sus coordenadas (`sceneAt`). Lo genera `npm run map` (en `client/`) ejecutando **el mismo** trazado que dibuja el cliente (`layout.js` e `interiors.js`), y la prueba `client/test/map.test.mjs` falla si el archivo y el dibujo no coinciden. `parseMap()` valida el archivo al arrancar, el tamaño del mundo sale del mapa (3840 × 3840) y `randomSpawn()` elige una casilla libre del centro de la ciudad. Sin `MAP_FILE`, el mundo es el rectángulo vacío de `WORLD_WIDTH × WORLD_HEIGHT` (1200 × 800 por defecto).
 
 **Validaciones y límites** ([game.js](coordinator/game.js#L125) e [index.js](coordinator/index.js#L242) `ws.on("message")`):
 - **`intent`:** `x` e `y` deben ser `number` finitos; se reducen a −1/0/1 con `Math.sign` (`{9999, -5}` → `{1, -1}`). Strings, NaN, Infinity, arrays o falta de `dir` → se ignora.
@@ -273,7 +274,7 @@ Del cliente al servidor:
 - **Es replicado:** el estado vive en el servidor y todos lo reciben en el mismo mensaje.
 - **Es persistente durante la sesión:** sigue en `p.extras` hasta que el jugador se desconecta. Además el cliente lo guarda en `localStorage` (`playLook`) y lo reenvía al recibir `welcome`, así que se conserva al recargar.
 - **No se confía en los extras de los demás:** el servidor solo valida `color`, así que `resolveLook()` ([characters/look.js](client/public/js/play/characters/look.js#L64)) revisa cada campo que llega en el `state`: el personaje debe ser uno de los tres y los colores deben ser `#rrggbb`. Lo que no sirve se reemplaza por una apariencia **por defecto estable**, derivada del `userId`, así que todos los clientes ven lo mismo aunque alguien no haya elegido nada.
-- **Usar el poder (tecla E o botón "Usar poder"):** el cliente envía los mismos extras con `powerOn: true` y, 700 ms después, sin él. Como `powerOn` viaja en el `state`, **todos** dibujan el efecto: el aura que crece, ondas de radio, esporas, perdigones, corte de espada, chorro de pintura, ráfaga o el salto con la mochila. Es **solo visual**: no cambia posiciones, no daña a nadie y no agrega mensajes al protocolo (hay un uso a la vez, muy por debajo del límite de 60 mensajes/s).
+- **Usar el poder (tecla Q o botón "Usar poder"):** el cliente envía los mismos extras con `powerOn: true` y, 700 ms después, sin él. Como `powerOn` viaja en el `state`, **todos** dibujan el efecto: el aura que crece, ondas de radio, esporas, perdigones, corte de espada, chorro de pintura, ráfaga o el salto con la mochila. Es **solo visual**: no cambia posiciones, no daña a nadie y no agrega mensajes al protocolo (hay un uso a la vez, muy por debajo del límite de 60 mensajes/s).
 - **Compatible con el Taller 5 original:** `color` sigue siendo el color principal. Un cliente que solo envíe `{ color }` se ve con su color.
 
 **Insignia del provider.** Cada jugador del `state` trae `provider`, que pone el servidor desde el JWT. El cliente dibuja a la derecha del nombre una **"G"** azul sobre blanco para Google o una **"L"** sobre gris para cuentas locales. Como sale del servidor, nadie puede hacerse pasar por usuario de Google enviando extras.
@@ -306,7 +307,11 @@ Del cliente al servidor:
   - **Día y noche:** la hora sale del `t` que manda el servidor en cada `state` ([map/clock.js](client/public/js/play/map/clock.js)), no del reloj del navegador. Todos ven la misma hora y la misma luz (farolas, ventanas y neones de noche); un día de juego dura 15 minutos reales.
   - **Ambiente local:** vecinos, un perro y coches recorren la ciudad. Son **decorado de cada cliente**: no viajan por la red, no chocan con nadie y no cambian ninguna posición de juego.
   - **Animación:** la dirección del personaje y el paso se deducen de cómo cambia su posición dibujada (`nextAnim` en [view.js](client/public/js/play/view.js)); no se envían por la red.
-  - **Si el mundo del servidor no mide 3840 × 2880** (coordinator sin `MAP_FILE`), se dibuja la cuadrícula simple de antes, con los mismos personajes.
+  - **Locales (Burger Neón y Supermercado):** al entrar por la puerta, el servidor mueve al jugador a la zona de interiores y el cliente dibuja el local con sus muebles, luces, letrero de neón y vecinos. **Solo se ve a quienes están en el mismo escenario**: si alguien está en el Burger Neón, desde la calle no se le dibuja, pero la lista de jugadores dice dónde está. Dentro de un local no hay minimapa.
+  - **Conversaciones (tecla E):** cerca de un vecino o de un cartel aparece "E Hablar / Mirar". Los diálogos son los de la referencia (vecinos de la ciudad, cajeros, cocinero, clientes, carteles, la rocola). Son **locales**: no viajan por la red. Mientras se conversa el jugador no camina (envía la intención `{0, 0}`) y el vecino se detiene a mirarlo. E avanza y Escape cierra.
+  - **Efectos de sonido** (Web Audio, sintetizados, sin archivos): pasos distintos sobre hierba o piedra, puertas, campana al entrar a un local, el blip de los diálogos, la rocola del Burger Neón y un sonido por poder. Los poderes de los demás se oyen si están en el mismo escenario y más bajo cuanto más lejos.
+  - **Radio Virus 86.6 FM:** tres canciones synthwave de los 80 generadas en el navegador ("Neón en cuarentena", "Avenida Central 1986", "Esporas en la niebla"), con estática y sintonía entre canciones. **Todos escuchan lo mismo**: la canción y el compás se calculan con la hora del servidor (el `t` del `state`, estimando el desfase con el reloj local con la muestra de menor latencia), así que no se transmite audio. Los botones **Radio** y **Efectos** silencian cada cosa y el navegador lo recuerda. El navegador solo deja sonar audio después del primer clic o tecla.
+  - **Si el mundo del servidor no mide 3840 × 3840** (coordinator sin `MAP_FILE`), se dibuja la cuadrícula simple de antes, con los mismos personajes.
   - **Lista de jugadores:** para cada uno muestra un retrato de su personaje, el nombre ("(tú)" para el local), la zona de la ciudad donde está (Plaza Mayor, Avenida Central…) y su insignia. Se reconstruye solo cuando cambia algo visible.
   - **Aviso:** "Conexión inestable…" si pasan más de 3 s sin `state`.
 - **Cierres:**
@@ -343,7 +348,7 @@ Cada servicio tiene su `.env` (ignorado por git) y su `.env.example` (versionado
 | `PORT` | Puerto HTTP + WebSocket (por defecto 5000) | `5000` |
 | `JWT_SECRET` | La misma clave del auth-service (≥ 32 caracteres) | igual que en auth |
 | `HEARTBEAT_INTERVAL_MS` | Cada cuánto se hace ping a los sockets | `30000` |
-| `WORLD_WIDTH` / `WORLD_HEIGHT` | Tamaño del mundo en unidades (por defecto 1200 × 800). Con `MAP_FILE` sale del mapa: si se definen, deben valer 3840 / 2880 o el coordinator no arranca | `3840` / `2880` |
+| `WORLD_WIDTH` / `WORLD_HEIGHT` | Tamaño del mundo en unidades (por defecto 1200 × 800). Con `MAP_FILE` sale del mapa: si se definen, deben valer 3840 / 3840 o el coordinator no arranca | `3840` / `3840` |
 | `MAP_FILE` | Mapa con casillas sólidas, relativo a la carpeta del coordinator. Vacío = mundo sin obstáculos | `./map/virus-city.json` |
 | `PLAYER_RADIUS` | Mitad del lado de la caja del jugador (2·radio < lado menor del mundo; con mapa, menor que 24) | `16` |
 | `PLAYER_SPEED` | Velocidad en unidades por segundo | `200` |
@@ -402,8 +407,8 @@ Los comandos están escritos para Git Bash.
 | Comando | Qué prueba |
 |---|---|
 | `cd auth-service && npm test` | 20 pruebas: registro, login, Google con verificador falso, migración del Taller 4 y que los logs no filtren datos (el resumen dice 21 porque `node --test` también cuenta `test/helpers.js` como un archivo) |
-| `cd coordinator && npm test` | 16 pruebas de la lógica pura del juego: movimiento, saneo, mapa y choques (incluido un paseo al azar por el mapa real que nunca pisa una casilla sólida) |
-| `cd client && npm test` | 54 pruebas: flujo de Google, intención, colores, personajes, cámara, reloj, zonas, que el mapa del servidor coincida con el del cliente y la interfaz de Viruscity |
+| `cd coordinator && npm test` | 18 pruebas de la lógica pura del juego: movimiento, saneo, mapa, choques y portales (incluido un paseo al azar por el mapa real que nunca pisa una casilla sólida) |
+| `cd client && npm test` | 63 pruebas: flujo de Google, intención, colores, personajes y poderes, cámara, reloj, zonas, interiores y portales, conversaciones, programa de la radio, que el mapa del servidor coincida con el del cliente y la interfaz de Viruscity |
 | `cd coordinator && npm run smoke` | Con auth y coordinator levantados: S1–S11 (Taller 4) y G1–G12 (juego en vivo). Con mapa, G5–G7 eligen direcciones libres y G10 comprueba que el jugador se detiene contra la pared donde lo calcula el servidor |
 | `cd client && npm run map` | Regenera `coordinator/map/virus-city.json` si se cambia el trazado de la ciudad (`public/js/play/map/layout.js`) |
 
@@ -469,6 +474,8 @@ y **reinicia el client**: `/config.js` se genera al arrancar. Abre `https://<hos
   - body del auth de 4 kB;
   - idToken de hasta 4096 caracteres.
 - **Choques en el servidor, con el mismo mapa que dibuja el cliente:** si el cliente decidiera los choques, un cliente modificado podría atravesar edificios. El trazado se escribe una sola vez (`layout.js`, puro y determinista); el cliente lo dibuja y `npm run map` exporta su grilla para el coordinator. Una prueba impide que se desincronicen. No se agregó ningún mensaje al protocolo: el mapa es un dato de configuración del servidor (`MAP_FILE`).
+- **Interiores como zona del mismo mundo, con portales en el servidor:** entrar a un local cambia la posición, y la posición es del servidor. En vez de agregar un campo `scene` al protocolo, los locales viven debajo de la ciudad y las puertas son portales de la grilla. El cliente deduce el escenario por las coordenadas y solo dibuja a los del mismo escenario.
+- **Radio sincronizada sin enviar audio:** la música es una partitura determinista que cada navegador sintetiza. La hora del servidor decide qué suena, así que todos oyen lo mismo sin gastar ancho de banda.
 - **Ambiente local fuera de la red:** vecinos, perro y coches son decorado de cada cliente. No chocan ni empujan, porque cualquier cosa que cambie posiciones de juego tendría que vivir en el servidor. Por la misma razón se dejaron fuera los interiores y los diálogos de la referencia.
 - **Hora del juego desde el servidor:** el reloj de día y noche usa el `t` del `state`, no `Date.now()` del navegador, así que todos ven la misma luz aunque sus relojes difieran.
 - **Apariencia en `extras` validada en los dos lados:** el servidor limita tamaño y formato de `color` y el cliente revisa el resto (`resolveLook`). Un extra raro de otro jugador nunca rompe el dibujo.
@@ -511,8 +518,10 @@ Antes de empezar: los tres servicios corriendo (local o con ngrok), `GOOGLE_CLIE
 1. Entra con un usuario en cada navegador: los dos aparecen en el mapa y en "Jugadores en línea (2)".
 2. Muévete con WASD en uno: el otro ve el movimiento en vivo. Muévete en diagonal y explica que va a la misma velocidad. Camina contra un edificio o el estanque: el servidor te frena, y en diagonal te deslizas por la pared.
 3. En "Tu personaje" cambia de personaje, color, pelo o gorra y piel: el otro lo ve al instante en el mapa y en la lista. Recarga: la apariencia se mantiene.
-4. En la pestaña Poder elige uno y pulsa **E**: el efecto se ve en las dos pestañas, porque viaja en los extras del `state`. Explica que es solo visual.
+4. En la pestaña Poder elige uno y pulsa **Q**: el efecto se ve en las dos pestañas, porque viaja en los extras del `state`. Explica que es solo visual.
 5. Señala el reloj del HUD: las dos pestañas muestran la misma hora, porque sale del `t` del servidor.
+6. Entra al Burger Neón por su puerta (Zona Comercial, frente a la Avenida Central): el otro jugador deja de verte en el mapa, pero la lista dice "Burger Neón". Habla con un vecino con **E** y prueba la rocola.
+7. Muestra la radio: las dos pestañas dicen la misma canción. Silencia la radio o los efectos con sus botones.
 
 **(b) Los dos providers · 3 min**
 1. Registra `alice` con contraseña y entra.
@@ -563,6 +572,8 @@ Esa pestaña te dibuja en (100, 100), en el bosque de la esquina (la cámara te 
    Así se envía un mensaje por tick con el estado completo y consistente. Si se difundiera por mensaje, el tráfico dependería de cuántas teclas pulsa cada uno y el estado llegaría a medias.
 8. **¿Qué pasa si alguien manda extras de 10 MB?**
    El servidor ni siquiera lo lee: un mensaje de más de 2048 bytes (`maxPayload`) cierra ese socket. Uno de menos de 2048 pero con extras de más de 1024 bytes se ignora, y más de 60 mensajes por segundo se descartan.
+10. **¿Cómo escuchan todos la misma radio si no se envía audio?**
+   La música es una partitura fija que cada navegador sintetiza. Qué canción y qué compás suenan se calcula con la hora del servidor (el `t` de cada `state`), igual que el reloj del día.
 9. **¿Por qué los choques con los edificios los calcula el servidor y no el cliente?**
    Por la misma razón que la posición: si el cliente decidiera los choques, uno modificado podría atravesar paredes. El servidor tiene la grilla del mapa (`MAP_FILE`), generada desde el mismo trazado que dibuja el cliente, y una prueba verifica que coinciden.
 
