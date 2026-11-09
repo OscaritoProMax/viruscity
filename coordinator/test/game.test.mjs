@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { createConfig, parseMap, boxBlocked, portalAt, randomSpawn, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot } from "../game.js";
+import { createConfig, parseMap, boxBlocked, portalAt, randomSpawn, resumePosition, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot } from "../game.js";
 
 const cfg = createConfig({});
 const R = cfg.PLAYER_RADIUS;
@@ -267,4 +267,19 @@ test("stepPlayers: al pisar un portal (puerta) el servidor traslada al jugador a
     stepPlayers(one(p), 0.05, c, map);
     assert.equal(p.y, 168);
     assert.ok(p.x > 72);
+});
+
+test("resumePosition: se recupera la posición guardada si es válida; si no, aparición al azar", () => {
+    const map = tinyMap();
+    const c = createConfig({}, map);
+    assert.deepEqual(resumePosition({ x: 64, y: 72 }, c, map), { x: 64, y: 72 }, "posición libre guardada");
+    // Sin posición guardada, dentro de una pared, fuera del mundo o con valores raros: aparición al azar
+    for (const saved of [undefined, null, { x: 120, y: 120 }, { x: -5, y: 72 }, { x: 99999, y: 72 }, { x: NaN, y: 1 }, { x: "64", y: 72 }]) {
+        const p = resumePosition(saved, c, map, () => 0);
+        assert.deepEqual(p, randomSpawn(c, () => 0, map), JSON.stringify(saved));
+        assert.equal(boxBlocked(map, p.x, p.y, c.PLAYER_RADIUS), false);
+    }
+    // Sin mapa también respeta los bordes del mundo
+    assert.deepEqual(resumePosition({ x: 600, y: 400 }, cfg), { x: 600, y: 400 });
+    assert.notDeepEqual(resumePosition({ x: 1199, y: 400 }, cfg, null, () => 0.5), { x: 1199, y: 400 });
 });

@@ -248,7 +248,8 @@ Del cliente al servidor:
 
 **Otros puntos**
 - **`provider` lo pone el servidor**, desde el JWT verificado; no es un extra que el cliente pueda falsificar.
-- **Sesión duplicada** (Taller 4): si la misma cuenta abre otra conexión, la anterior se cierra con `4002 "replaced by new session"`. El `close` de la vieja no borra a la nueva.
+- **Sesión duplicada** (Taller 4): si la misma cuenta abre otra conexión, la anterior se cierra con `4002 "replaced by new session"`. El `close` de la vieja no borra a la nueva, y la sesión nueva **sigue en la misma posición**.
+- **Recargar no teletransporta:** al desconectarse, el coordinator guarda la última posición del `userId` (`lastPositions`, en memoria). Al volver a conectarse aparece ahí (`resumePosition` en `game.js`, que comprueba que siga siendo válida); solo la primera conexión aparece al azar. Así el cliente no puede elegir dónde aparecer recargando la página ni abriendo otra pestaña. Si el coordinator se reinicia, esas posiciones se pierden.
 - **Heartbeat:** `ping` cada `HEARTBEAT_INTERVAL_MS`; quien no responde antes del siguiente ciclo se termina.
 - **Expiración:** al conectar se programa el cierre `4001 "token expired"` para el `exp` del token.
 - **`GET /health`:** responde `{ "status": "ok", "players": N, "tickRate": 20, "map": "virus-city" }` (`map: null` sin mapa).
@@ -408,9 +409,9 @@ Los comandos están escritos para Git Bash.
 | Comando | Qué prueba |
 |---|---|
 | `cd auth-service && npm test` | 20 pruebas: registro, login, Google con verificador falso, migración del Taller 4 y que los logs no filtren datos (el resumen dice 21 porque `node --test` también cuenta `test/helpers.js` como un archivo) |
-| `cd coordinator && npm test` | 18 pruebas de la lógica pura del juego: movimiento, saneo, mapa, choques y portales (incluido un paseo al azar por el mapa real que nunca pisa una casilla sólida) |
+| `cd coordinator && npm test` | 19 pruebas de la lógica pura del juego: movimiento, saneo, mapa, choques y portales (incluido un paseo al azar por el mapa real que nunca pisa una casilla sólida) |
 | `cd client && npm test` | 63 pruebas: flujo de Google, intención, colores, personajes y poderes, cámara, reloj, zonas, interiores y portales, conversaciones, programa de la radio, que el mapa del servidor coincida con el del cliente y la interfaz de Viruscity |
-| `cd coordinator && npm run smoke` | Con auth y coordinator levantados: S1–S11 (Taller 4) y G1–G12 (juego en vivo). Con mapa, G5–G7 eligen direcciones libres y G10 comprueba que el jugador se detiene contra la pared donde lo calcula el servidor |
+| `cd coordinator && npm run smoke` | Con auth y coordinator levantados: S1–S11 (Taller 4) y G1–G14 (juego en vivo). Con mapa, G5–G7 eligen direcciones libres y G10 comprueba que el jugador se detiene contra la pared donde lo calcula el servidor. G13 y G14: reconectarse u otra pestaña no cambian la posición |
 | `cd client && npm run map` | Regenera `coordinator/map/virus-city.json` si se cambia el trazado de la ciudad (`public/js/play/map/layout.js`) |
 
 ---

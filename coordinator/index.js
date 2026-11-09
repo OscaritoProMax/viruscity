@@ -16,7 +16,7 @@ const http = require("node:http");
 const express = require("express");
 const { WebSocketServer } = require("ws");
 const jwt = require("jsonwebtoken");
-const { createConfig, parseMap, randomSpawn, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot } = require("./game.js");
+const { createConfig, parseMap, resumePosition, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot } = require("./game.js");
 
 // ---------- Configuración ----------
 
@@ -71,6 +71,10 @@ const RATE_WINDOW_MS = 1000;
 // ---------- Estado ----------
 // userId (string) -> { username, provider, socket, connectedAt, x, y, intent:{x,y}, extras:{} }
 const players = new Map();
+// userId -> { x, y }: última posición de quien se desconectó. Al volver (recargar la página, otra pestaña,
+// reconexión) aparece donde estaba: el cliente no puede elegir dónde aparecer. Vive en memoria: se pierde
+// si el coordinator se reinicia.
+const lastPositions = new Map();
 
 // ---------- HTTP ----------
 const app = express();
@@ -179,9 +183,12 @@ function broadcastPlayers() {
 wss.on("connection", (ws, payload) => {
     const { userId, username, provider } = payload;
 
-    // Sesión duplicada: se queda la conexión nueva y se cierra la anterior con 4002
+    // Sesión duplicada: se queda la conexión nueva y se cierra la anterior con 4002.
+    // La posición NO se elige de nuevo: la sesión nueva sigue donde estaba la anterior (o donde quedó
+    // al desconectarse); solo la primera vez se aparece al azar.
     const previous = players.get(userId);
-    const { x, y } = randomSpawn(cfg, Math.random, map);
+    const saved = previous ? { x: previous.x, y: previous.y } : lastPositions.get(userId);
+    const { x, y } = resumePosition(saved, cfg, map);
     players.set(userId, {
         username,
         provider, // lo pone el servidor desde el JWT (no es un extra del cliente)
@@ -224,6 +231,8 @@ wss.on("connection", (ws, payload) => {
         // Solo se elimina si este es el socket vigente: el cierre de una sesión reemplazada
         // no debe borrar a la conexión nueva del mismo usuario.
         if (players.get(userId)?.socket !== ws) return;
+        const gone = players.get(userId);
+        lastPositions.set(userId, { x: gone.x, y: gone.y });
         players.delete(userId);
         console.log(`Jugador desconectado: ${username} (${userId}) código ${code} · jugadores: ${players.size}`);
         broadcastPlayers();

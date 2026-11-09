@@ -1,5 +1,5 @@
 // Prueba automatizada del coordinator: flujo WebSocket del Taller 4 (S1-S11) y juego en vivo
-// autoritativo del Taller 5 (G1-G12). Requiere el auth-service y el coordinator levantados.
+// autoritativo del Taller 5 (G1-G14). Requiere el auth-service y el coordinator levantados.
 // Si el coordinator usa un mapa (GET /health → map), las pruebas de movimiento eligen direcciones
 // libres y comprueban las colisiones con el mismo archivo coordinator/map/<map>.json.
 // Los usuarios locales se crean en el auth; los tokens con provider 'google' se firman aquí
@@ -416,8 +416,28 @@ async function gameChecks() {
     const goneFromState = await waitFor(() => d.lastState && !playerIn(d, E));
     report("G12", "al desconectar desaparece del state y llega players_update", update !== null && goneFromState, `players_update: ${names(update)}`);
 
+    // G13: recargar la página (cerrar y volver a conectar) NO cambia la posición: el servidor la recuerda
+    const before = playerIn(d, D);
     d.ws.close();
     await withTimeout(d.closed, TIMEOUT_MS, null);
+    await sleep(300);
+    const d2 = connect(D.token);
+    await waitFor(() => playerIn(d2, D) !== null);
+    const again = playerIn(d2, D);
+    report("G13", "al reconectarse aparece donde estaba (recargar no teletransporta)",
+        Boolean(before && again) && Math.abs(again.x - before.x) < 0.01 && Math.abs(again.y - before.y) < 0.01, `${fmt(before)} → ${fmt(again)}`);
+
+    // G14: abrir otra pestaña con la misma cuenta tampoco mueve al jugador (la sesión nueva hereda la posición)
+    const d3 = connect(D.token);
+    const replaced = await withTimeout(d2.closed, TIMEOUT_MS, null);
+    await waitFor(() => playerIn(d3, D) !== null);
+    const third = playerIn(d3, D);
+    report("G14", "una sesión duplicada (4002) sigue en la misma posición",
+        replaced?.code === 4002 && Boolean(third) && Math.abs(third.x - again.x) < 0.01 && Math.abs(third.y - again.y) < 0.01,
+        `cierre ${replaced?.code} · ${fmt(again)} → ${fmt(third)}`);
+
+    d3.ws.close();
+    await withTimeout(d3.closed, TIMEOUT_MS, null);
 }
 
 main()

@@ -149,6 +149,23 @@ function randomSpawn(cfg, rng = Math.random, map = null) {
     };
 }
 
+// Posición al (re)conectar: la última que tuvo el jugador en el servidor, si sigue siendo válida
+// (números finitos, dentro del mundo y, con mapa, sin pisar una casilla sólida). Si no hay o no sirve,
+// una aparición al azar. Así recargar la página o abrir otra pestaña NO mueve al jugador.
+function resumePosition(saved, cfg, map = null, rng = Math.random) {
+    const r = cfg.PLAYER_RADIUS;
+    const ok =
+        saved &&
+        Number.isFinite(saved.x) &&
+        Number.isFinite(saved.y) &&
+        saved.x >= r &&
+        saved.x <= cfg.WORLD_WIDTH - r &&
+        saved.y >= r &&
+        saved.y <= cfg.WORLD_HEIGHT - r &&
+        !(map && boxBlocked(map, saved.x, saved.y, r));
+    return ok ? { x: saved.x, y: saved.y } : randomSpawn(cfg, rng, map);
+}
+
 // { type:"intent", intent:{ dir:{ x, y } } } → { x, y } con -1/0/1, o null si es inválido
 function sanitizeIntent(msg) {
     const dir = msg?.intent?.dir;
@@ -259,4 +276,4 @@ function snapshot(players) {
     }));
 }
 
-module.exports = { DEFAULTS, createConfig, parseMap, boxBlocked, portalAt, randomSpawn, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot };
+module.exports = { DEFAULTS, createConfig, parseMap, boxBlocked, portalAt, randomSpawn, resumePosition, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot };
