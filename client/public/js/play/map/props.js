@@ -10,7 +10,7 @@ import { TILE_SIZE } from "./constants.js";
 //  Cada sprite: {cv, ax, ay}  → (ax,ay) = punto base (suelo) dentro del sprite
 // =====================================================================
 export const SPRITES = {};
-function def(name, w, h, ax, ay, fn) {
+export function def(name, w, h, ax, ay, fn) {
     const s = makeSprite(w, h, fn); s.ax = ax; s.ay = ay; SPRITES[name] = s; return s;
 }
 export function groundShadow(c, x, y, rx, ry, a = 0.28) { ellipse(c, x, y, rx, ry, `rgba(0,20,10,${a})`); }

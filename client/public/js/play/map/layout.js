@@ -1,4 +1,4 @@
-// Trazado del mundo: calles, zonas, edificios, props y casillas sólidas.
+// Trazado del mundo: calles, zonas, edificios, props, puertas, carteles y casillas sólidas.
 // Es PURO (no usa canvas ni el DOM): Node lo ejecuta para exportar la grilla de colisiones al coordinator
 // (client/scripts/export-map.mjs). Determinista: el mapa siempre sale igual.
 // Adaptado de la referencia visual virus_city_map.html (motor procedural de Virus City).
@@ -25,6 +25,8 @@ export const inMap = (c, r) => c >= 0 && r >= 0 && c < MAP_COLS && r < MAP_ROWS;
 export const gAt = (c, r) => inMap(c, r) ? ground[idx(c, r)] : G.FOREST;
 
 export const worldObjs = [];        // objetos con ordenación en Y
+export const doors = [];            // {cols:[..], row, to}
+export const worldInteractables = [];
 export const groundDecals = [];     // {x0,y0,x1,y1,draw(c)}
 export const buildingsList = [];    // para minimapa / luces
 export const waterTiles = [];
@@ -149,6 +151,7 @@ function tree(name, c, r, o = {}) {
     block(c, r, c, r); return tilePut(name, c, r, o);
 }
 function solidProp(name, c, r, cw, o = {}) { block(c, r, c + cw - 1, r); return put(name, (c + cw / 2) * TILE_SIZE, (r + 1) * TILE_SIZE - (o.dy ?? 4), o); }
+function talk(x, y, lines, o = {}) { worldInteractables.push(Object.assign({ x, y, r: 62, lines: Array.isArray(lines) ? lines : [lines] }, o)); }
 
 function building(spec, c, r) {
     const x = c * TILE_SIZE, y = (r + spec.h) * TILE_SIZE;
@@ -160,6 +163,7 @@ function building(spec, c, r) {
     const bay = spec.doorBay ?? defBay;
     const cols = []; for (let k = 0; k < doorW; k++) cols.push(c + bay + k);
     ob.doorCols = cols; ob.doorRow = r + spec.h - 1;
+    if (spec.enter) { cols.forEach(cc => { solid[idx(cc, ob.doorRow)] = 0; }); doors.push({ cols, row: ob.doorRow, to: spec.enter }); }
     // camino desde la puerta hasta la acera
     let rr_ = r + spec.h;
     while (rr_ < MAP_ROWS && (gAt(cols[0], rr_) === G.GRASS || gAt(cols[0], rr_) === G.LAWN)) { cols.forEach(cc => ground[idx(cc, rr_)] = G.GRAVEL); rr_++; }
@@ -191,12 +195,22 @@ function frontYard(c, doorCol, row) {
     set.forEach(([cc, nm]) => { if (cc !== doorCol && gAt(cc, row) !== G.SIDE) { block(cc, row, cc, row); tilePut(nm, cc, row); } });
 }
 
+// Texto de carteles / lore
+const LORE = {
+    board: ['TABLÓN MUNICIPAL', 'AVISO: Desde el brote de las esporas, la salida de Virus City está cerrada.', 'Se ruega mantener la calma, lavarse las manos y no acercarse al Lago Sur después del anochecer.'],
+    barrier: ['BARRERA DE CUARENTENA', 'Nadie entra, nadie sale. La ciudad lleva así desde 1986.'],
+    fountain: ['Lanzas una moneda a la fuente.', 'Pides un deseo: que todo esto sea solo un mal sueño de los 80.'],
+    statue: ['PLACA: "Dr. Elías Vega, fundador de Virus City. Su laboratorio sigue sellado."'],
+    phone: ['Levantas el auricular...', 'Tu... tu... tu... Solo se oye estática y una voz que susurra: "no confíes en el verde".'],
+    mail: ['El buzón está lleno de folletos de supermercado y una carta sin remitente.']
+};
+
 export function buildWorld() {
     layRoads(); cleanZebra(); layZones();
 
     // ---------- Barreras de cuarentena en los extremos de las calles ----------
     const barrier = (c, r) => { block(c, r, c, r); tilePut('barrier', c, r, { dy: 2 }); };
-    [[12, 2], [27, 4], [43, 2]].forEach(([r0, n]) => { for (let k = 0; k < n; k++) { barrier(2, r0 + k); barrier(77, r0 + k); } });
+    [[12, 2], [27, 4], [43, 2]].forEach(([r0, n]) => { for (let k = 0; k < n; k++) { barrier(2, r0 + k); barrier(77, r0 + k); } talk(2.5 * 48, (r0 + n / 2) * 48, LORE.barrier, { r: 90 }); });
     [[24, 2], [50, 3]].forEach(([c0, n]) => { for (let k = 0; k < n; k++) { barrier(c0 + k, 2); barrier(c0 + k, 57); } });
     barrier(70, 57); barrier(71, 57);
     // fuera de la ciudad todo es sólido
@@ -208,7 +222,7 @@ export function buildWorld() {
     building({ kind: 'apartment', w: 7, h: 7, wall: '#a8553a', name: 'RESIDENCIAL ARCOÍRIS', seed: 4 }, 55, 4);
     { const b = house(63, 9); frontYard(63, b.doorCols[0], 10); }
     building({ kind: 'church', w: 8, h: 7, wall: '#d6d3d1', seed: 2, name: 'Iglesia' }, 69, 4);
-    
+    talk(73 * 48, 11.2 * 48, ['Las campanas de la iglesia llevan años sin sonar.', 'Dicen que hay luz en el campanario cada noche.'], { r: 90 });
 
     // ---------- Banda oeste: casas / callejón / comercios ----------
     [3, 8, 13, 18].forEach(c => house(c, 18));
@@ -219,30 +233,30 @@ export function buildWorld() {
 
     // ---------- Banda este ----------
     [55, 61, 67, 73].forEach(c => house(c, 18));
-    building({ kind: 'shop', w: 9, h: 5, wall: '#fef3c7', stripe: '#dc2626', sign: { text: 'BURGER NEÓN', bg: '#be123c', fg: '#fef08a' }, neon: true, awning: ['#dc2626', '#ffffff'], display: 'cafe', doorW: 2, rooftop: 'burger', openText: 'ABIERTO', seed: 9, name: 'Burger Neón', roofItems: [roofAC(20), roofVent(300)] }, 54, 21);
+    building({ kind: 'shop', w: 9, h: 5, wall: '#fef3c7', stripe: '#dc2626', sign: { text: 'BURGER NEÓN', bg: '#be123c', fg: '#fef08a' }, neon: true, awning: ['#dc2626', '#ffffff'], display: 'cafe', doorW: 2, rooftop: 'burger', enter: 'burger', openText: 'ABIERTO', seed: 9, name: 'Burger Neón', roofItems: [roofAC(20), roofVent(300)] }, 54, 21);
     building({ kind: 'shop', w: 7, h: 5, wall: '#7f1d1d', sign: { text: 'CINE RIALTO', bg: '#0f172a', fg: '#fde047', bulbs: true }, awning: ['#facc15', '#7f1d1d'], display: 'posters', glassBack: '#1e1b4b', openText: 'CINE', seed: 10, roofTop: '#44403c' }, 63, 21);
     building({ kind: 'shop', w: 4, h: 5, wall: '#fbcfe8', sign: { text: 'PELUQUERÍA', bg: '#be185d', fg: '#ffffff', size: 14 }, awning: ['#ec4899', '#fdf2f8'], display: 'barber', seed: 11 }, 70, 21);
     building({ kind: 'shop', w: 4, h: 5, wall: '#bbf7d0', sign: { text: 'FLORES', bg: '#15803d', fg: '#fde047' }, awning: ['#22c55e', '#fefce8'], display: 'flowers', seed: 12 }, 74, 21);
 
     // ---------- Plaza Mayor ----------
     building({ kind: 'hall', w: 10, h: 5, wall: '#e7e5e4', seed: 3, name: 'Ayuntamiento', doorW: 2 }, 33, 15);
-    
+    talk(38 * 48, 20.6 * 48, ['AYUNTAMIENTO DE VIRUS CITY', 'La puerta está cerrada con cadenas. Un cartel dice: "Alcalde en cuarentena".'], { r: 90 });
     put('fountain', 37.5 * 48, 25 * 48 - 6, { name: 'fountain', fx: 'fountain' }); block(36, 22, 38, 24);
-    
+    talk(37.5 * 48, 25.3 * 48, LORE.fountain, { r: 100 });
     solidProp('stall0', 28, 22, 2); solidProp('stall2', 30, 22, 2); solidProp('stall1', 44, 22, 2); solidProp('stall3', 46, 22, 2);
-    tilePut('statue', 41, 23, { dy: 2 }); block(41, 23, 41, 23); 
+    tilePut('statue', 41, 23, { dy: 2 }); block(41, 23, 41, 23); talk(41.5 * 48, 24 * 48, LORE.statue, { r: 70 });
     solidProp('bench', 32, 24, 2); solidProp('bench', 42, 24, 2);
     [35, 41].forEach(c => { block(c, 20, c, 20); tilePut('planter', c, 20); });
     [[28, 16], [47, 16], [28, 25], [47, 25], [33, 21], [42, 21], [31, 24], [44, 24]].forEach(([c, r]) => { block(c, r, c, r); tilePut('lamp', c, r, { name: 'lamp', light: true }); });
     tree('cherry', 28, 18); tree('cherry', 47, 18); tree('oak2', 29, 24, {}); tree('oak0', 46, 24);
-    tilePut('phonebooth', 31, 25, { dy: 2 }); block(31, 25, 31, 25); 
+    tilePut('phonebooth', 31, 25, { dy: 2 }); block(31, 25, 31, 25); talk(31.5 * 48, 25.8 * 48, LORE.phone, { r: 70 });
     solidProp('busstop', 44, 25, 3, { dy: 2 });
     tilePut('postsign', 34, 25, { dy: 2 }); block(34, 25, 34, 25);
-    tilePut('postsign', 49, 11, { dy: 2 }); block(49, 11, 49, 11); 
+    tilePut('postsign', 49, 11, { dy: 2 }); block(49, 11, 49, 11); talk(49.5 * 48, 12 * 48, LORE.board, { r: 70 });
     groundDecals.push({ x0: 36 * 48, y0: 21 * 48, x1: 40 * 48, y1: 26 * 48, draw: drawPlazaRosette });
 
     // ---------- Parque Central ----------
-    put('gazebo', 30.5 * 48, 7 * 48 - 4, { name: 'gazebo' }); block(29, 4, 31, 6); 
+    put('gazebo', 30.5 * 48, 7 * 48 - 4, { name: 'gazebo' }); block(29, 4, 31, 6); talk(30.5 * 48, 7.6 * 48, ['Un cenador blanco y rojo. Dentro hay una banda de música... vacía, con los instrumentos cubiertos de polvo.'], { r: 80 });
     solidProp('bench', 33, 7, 2); solidProp('bench', 37, 7, 2, {}); solidProp('bench', 40, 9, 2); solidProp('bench', 45, 9, 2); solidProp('bench', 28, 9, 2);
     [[34, 3], [37, 3], [34, 9], [37, 9], [34, 6], [37, 6], [47, 9], [27, 9]].forEach(([c, r]) => { if (!solid[idx(c, r)] && gAt(c, r) !== G.WATER) { block(c, r, c, r); tilePut('lamp', c, r, { name: 'lamp', light: true }); } });
     tree('cherry', 28, 4); tree('cherry', 28, 6); tree('cherry', 33, 4); tree('oak0', 33, 6, {}); tree('oak1', 28, 3); tree('birch', 32, 9); tree('oak2', 48, 3); tree('birch', 48, 6); tree('oak0', 40, 2); tree('cherry', 44, 2); tree('birch', 46, 9);
@@ -250,12 +264,12 @@ export function buildWorld() {
     for (let c = 27; c <= 48; c++) { if (c >= 35 && c <= 36) continue; if (c % 2 === 0 || c > 40) { block(c, 10, c, 10); tilePut('hedge', c, 10, { dy: 2 }); } }
     tilePut('flowers1', 31, 9, { dy: 4 }); block(31, 9, 31, 9); tilePut('flowers0', 33, 9); block(33, 9, 33, 9);
     put('boat', 42 * 48, 6.3 * 48, { name: 'boat', sortY: 6.3 * 48 - 20 }); // barca en el estanque
-    
+    talk(40 * 48, 9.6 * 48, ['Patos nadan tranquilos en el estanque. Hace mucho que nadie les da pan.'], { r: 70 });
 
     // ---------- Supermercado + aparcamiento ----------
-    const mk = building({ kind: 'shop', w: 12, h: 6, wall: '#dcfce7', stripe: '#16a34a', sign: { text: 'SUPER MERCADO', bg: '#15803d', fg: '#fef08a' }, awning: ['#16a34a', '#f0fdf4'], display: 'bread', doorW: 2, openText: '24H', seed: 13, name: 'Supermercado', roofItems: [roofAC(30), roofAC(200), roofSky(300), roofVent(420), roofAntenna(520)] }, 3, 36);
+    const mk = building({ kind: 'shop', w: 12, h: 6, wall: '#dcfce7', stripe: '#16a34a', sign: { text: 'SUPER MERCADO', bg: '#15803d', fg: '#fef08a' }, awning: ['#16a34a', '#f0fdf4'], display: 'bread', doorW: 2, enter: 'market', openText: '24H', seed: 13, name: 'Supermercado', roofItems: [roofAC(30), roofAC(200), roofSky(300), roofVent(420), roofAntenna(520)] }, 3, 36);
     [[17, 38, 0], [19, 38, 1], [21, 38, 3], [17, 40, 4], [20, 40, 2], [21, 41, 5]].forEach(([c, r, v], k) => { if (k % 2 === 0 || k === 3) { block(c, r, c + 1, r); put('car' + v, (c + 1) * 48, (r + 1) * 48 - 2, { name: 'car' }); } });
-    
+    talk(17.5 * 48, 37.6 * 48, ['Un carrito de supermercado abandonado. Una rueda sigue girando sola.'], { r: 70 });
     solidProp('crates', 5, 41, 1, { dy: 2 }); solidProp('crates', 6, 41, 1, { dy: 2 });
     solidProp('dumpster', 4, 34, 2, {}); solidProp('crates', 8, 34, 1, {});
     tree('pine', 12, 33); tree('pine', 14, 33); tree('oak1', 10, 32); tree('oak0', 20, 33); tree('pine', 3, 32);
@@ -265,7 +279,7 @@ export function buildWorld() {
     for (let r = 33; r <= 40; r++) { block(27, r, 27, r); tilePut('hedge', 27, r, { dy: 2 }); block(36, r, 36, r); tilePut('hedge', 36, r, { dy: 2 }); }
     solidProp('swings', 29, 35, 3, {}); solidProp('slide', 33, 36, 2, {}); solidProp('sandbox', 29, 39, 2, {}); solidProp('seesaw', 33, 39, 2, {});
     solidProp('bench', 33, 34, 2, {}); tree('cherry', 34, 33); tilePut('lamp', 31, 33); block(31, 33, 31, 33);
-    
+    talk(30.5 * 48, 36.2 * 48, ['Los columpios se mecen solos con el viento. Alguien dejó un osito de peluche en la arena.'], { r: 70 });
 
     // ---------- Casas bloque sur-medio ----------
     [38, 44].forEach(c => { const b = house(c, 40); frontYard(c, b.doorCols[0], 41); });
@@ -273,7 +287,7 @@ export function buildWorld() {
 
     // ---------- Clínica y casas este ----------
     building({ kind: 'shop', w: 8, h: 5, wall: '#f1f5f9', roofTop: '#94a3b8', sign: { text: 'CLÍNICA VIRUS CARE', bg: '#0e7490', fg: '#ffffff', pad: 30 }, cross: true, awning: ['#0ea5e9', '#ffffff'], display: 'pharma', doorW: 2, openText: '24H', seed: 14, name: 'Clínica' }, 55, 37);
-    
+    talk(58.4 * 48, 42.1 * 48, ['CLÍNICA VIRUS CARE', 'Letrero en la puerta: "Cerrado por desinfección. Volvemos pronto".'], { r: 90 });
     { const b = house(64, 40); frontYard(64, b.doorCols[0], 41); }
     { const b = house(74, 40); frontYard(74, b.doorCols[0], 41); }
     tree('oak0', 55, 33); tree('oak2', 58, 34); tree('pine', 62, 33); tree('birch', 66, 35); tree('oak1', 74, 34); tree('pine', 76, 36); tree('cherry', 68, 33);
@@ -290,13 +304,13 @@ export function buildWorld() {
     [[29, 47], [33, 47], [41, 47], [46, 47]].forEach(([c, r]) => { block(c, r, c, r); tilePut('lamp', c, r, { name: 'lamp', light: true }); });
     solidProp('bench', 30, 47, 2); solidProp('bench', 43, 47, 2);
     tree('cherry', 27, 47); tree('cherry', 48, 47); tree('oak0', 26, 55); tree('oak2', 49, 55); tree('birch', 31, 57); tree('pine', 45, 57);
-    
+    talk(37.5 * 48, 47.8 * 48, ['El Lago Sur. El cartel prohíbe nadar, pescar y mirar fijamente el agua verde.'], { r: 80 });
 
     // ---------- Granja ----------
     building({ kind: 'barn', w: 7, h: 5, seed: 3, name: 'Granero' }, 56, 47);
     solidProp('haystack', 64, 49, 2, {}); solidProp('haystack', 66, 50, 2, {}); put('scarecrow', 61.5 * 48, 55 * 48 - 6, { name: 'scarecrow' }); block(61, 54, 61, 54);
-    tilePut('well', 54, 51, { dy: 4, name: 'well' }); block(54, 51, 54, 51); 
-    
+    tilePut('well', 54, 51, { dy: 4, name: 'well' }); block(54, 51, 54, 51); talk(54.5 * 48, 52.3 * 48, ['Un pozo. El agua de abajo brilla con un tono verdoso inquietante.'], { r: 70 });
+    talk(61.5 * 48, 55.4 * 48, ['El espantapájaros apunta hacia la ciudad. Creo que se ha movido desde ayer.'], { r: 70 });
     // hileras de setos del huerto
     for (let c = 54; c <= 68; c++) if (c !== 61) { block(c, 57, c, 57); tilePut('hedge', c, 57, { dy: 2 }); }
 
@@ -308,7 +322,7 @@ export function buildWorld() {
     [[22, 26], [6, 31], [14, 31], [26, 11], [30, 14], [46, 31], [53, 20]].forEach(([c, r], k) => { if (!solid[idx(c, r)] && gAt(c, r) === G.SIDE) { block(c, r, c, r); tilePut(k % 2 ? 'hydrant' : 'trash', c, r, { dy: 2 }); } });
     [[6, 14], [16, 14], [30, 11], [56, 11], [66, 14], [76, 14], [8, 26], [18, 26], [61, 26], [68, 26], [10, 31], [40, 42], [62, 31], [20, 42], [66, 45]].forEach(([c, r]) => { if (!solid[idx(c, r)] && gAt(c, r) === G.SIDE) { block(c, r, c, r); tilePut('lamp', c, r, { name: 'lamp', light: true, dy: 2 }); } });
     // buzones en los jardines
-    [[2, 10], [7, 10], [12, 10], [17, 10], [62, 10]].forEach(([c, r]) => { if (!solid[idx(c, r)] && gAt(c, r) !== G.SIDE) { block(c, r, c, r); tilePut('mailbox', c, r, { dx: 14 }); } });
+    [[2, 10], [7, 10], [12, 10], [17, 10], [62, 10]].forEach(([c, r]) => { if (!solid[idx(c, r)] && gAt(c, r) !== G.SIDE) { block(c, r, c, r); tilePut('mailbox', c, r, { dx: 14 }); talk((c + .5) * 48, (r + 1) * 48, LORE.mail, { r: 56 }); } });
 
     scatterVegetation();
     // el suelo del patio de cada casa que quedó como GRAVEL ya se pintó; recalcular reservados

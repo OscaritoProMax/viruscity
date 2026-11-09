@@ -62,7 +62,10 @@ function createConfig(env = {}, map = null) {
 
 // ---------- Mapa (colisiones) ----------
 // Formato del archivo (lo genera client/scripts/export-map.mjs desde el mismo trazado que dibuja el cliente):
-// { id, tile, cols, rows, solid: [rows strings de cols caracteres "0"/"1"], spawns: [[col, row], ...] }
+// { id, tile, cols, rows, solid: [rows strings de cols caracteres "0"/"1"], spawns: [[col, row], ...],
+//   portals?: [{ c0, r0, c1, r1, x, y }] }
+// Un portal es un rectángulo de casillas (puerta de un local o su salida): si el centro del jugador
+// entra en él, el servidor lo traslada a (x, y). Así se entra y se sale de los interiores.
 function parseMap(data) {
     const fail = (reason) => {
         throw new Error(`mapa inválido: ${reason}`);
@@ -84,7 +87,22 @@ function parseMap(data) {
         const ok = Array.isArray(s) && s.length === 2 && Number.isInteger(s[0]) && Number.isInteger(s[1]) && s[0] >= 0 && s[0] < cols && s[1] >= 0 && s[1] < rows;
         if (!ok || grid[s[1] * cols + s[0]]) fail(`spawn ${JSON.stringify(s)} fuera del mapa o en una casilla sólida`);
     }
-    return { id, tile, cols, rows, width: cols * tile, height: rows * tile, solid: grid, spawns: spawns.map(([c, r]) => [c, r]) };
+    const list = data.portals === undefined ? [] : data.portals;
+    if (!Array.isArray(list)) fail("portals debe ser una lista");
+    const portalIndex = new Int16Array(cols * rows).fill(-1);
+    const portals = list.map((p, i) => {
+        const ints = p && ["c0", "r0", "c1", "r1"].every((k) => Number.isInteger(p[k]));
+        if (!ints || p.c0 < 0 || p.r0 < 0 || p.c1 >= cols || p.r1 >= rows || p.c0 > p.c1 || p.r0 > p.r1) fail(`portal ${i} fuera del mapa`);
+        if (!Number.isFinite(p.x) || !Number.isFinite(p.y) || p.x < 0 || p.y < 0 || p.x >= cols * tile || p.y >= rows * tile) fail(`destino del portal ${i} fuera del mundo`);
+        for (let r = p.r0; r <= p.r1; r++) for (let c = p.c0; c <= p.c1; c++) portalIndex[r * cols + c] = i;
+        return { c0: p.c0, r0: p.r0, c1: p.c1, r1: p.r1, x: p.x, y: p.y };
+    });
+    // El destino debe ser una casilla libre y fuera de cualquier portal (si no, rebotaría sin parar)
+    portals.forEach((p, i) => {
+        const at = Math.floor(p.y / tile) * cols + Math.floor(p.x / tile);
+        if (grid[at] || portalIndex[at] !== -1) fail(`el destino del portal ${i} es sólido o es otro portal`);
+    });
+    return { id, tile, cols, rows, width: cols * tile, height: rows * tile, solid: grid, spawns: spawns.map(([c, r]) => [c, r]), portals, portalIndex };
 }
 
 // ¿La caja del jugador [x-r, x+r] × [y-r, y+r] toca alguna casilla sólida? Fuera del mapa cuenta como sólido.
@@ -101,6 +119,16 @@ function boxBlocked(map, x, y, r) {
         }
     }
     return false;
+}
+
+// Portal en el que está el centro del jugador, o null
+function portalAt(map, x, y) {
+    if (!map.portalIndex) return null;
+    const c = Math.floor(x / map.tile);
+    const r = Math.floor(y / map.tile);
+    if (c < 0 || r < 0 || c >= map.cols || r >= map.rows) return null;
+    const i = map.portalIndex[r * map.cols + c];
+    return i >= 0 ? map.portals[i] : null;
 }
 
 // Posición inicial al azar. Sin mapa: cualquier punto del mundo (dejando el radio libre en cada borde).
@@ -195,6 +223,12 @@ function stepPlayers(players, dt, cfg, map = null) {
         if (map) {
             moveAxis(p, "x", dx, r, map);
             moveAxis(p, "y", dy, r, map);
+            // Puerta de un local (o su salida): el servidor traslada al jugador al otro lado
+            const portal = portalAt(map, p.x, p.y);
+            if (portal) {
+                p.x = portal.x;
+                p.y = portal.y;
+            }
         } else {
             p.x += dx;
             p.y += dy;
@@ -225,4 +259,4 @@ function snapshot(players) {
     }));
 }
 
-module.exports = { DEFAULTS, createConfig, parseMap, boxBlocked, randomSpawn, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot };
+module.exports = { DEFAULTS, createConfig, parseMap, boxBlocked, portalAt, randomSpawn, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot };

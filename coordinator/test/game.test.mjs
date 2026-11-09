@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { createConfig, parseMap, boxBlocked, randomSpawn, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot } from "../game.js";
+import { createConfig, parseMap, boxBlocked, portalAt, randomSpawn, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot } from "../game.js";
 
 const cfg = createConfig({});
 const R = cfg.PLAYER_RADIUS;
@@ -216,7 +216,8 @@ test("mapa real (coordinator/map/virus-city.json): aparición y paseo al azar nu
     const map = parseMap(JSON.parse(readFileSync(new URL("../map/virus-city.json", import.meta.url), "utf8")));
     const c = createConfig({}, map);
     assert.equal(map.width, 3840);
-    assert.equal(map.height, 2880);
+    assert.equal(map.height, 3840, "ciudad (60 filas) + zona de interiores (20 filas)");
+    assert.ok(map.portals.length >= 4, "entrada y salida de dos locales");
     // Azar con semilla fija para que la prueba sea reproducible
     let seed = 12345;
     const rng = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
@@ -231,4 +232,39 @@ test("mapa real (coordinator/map/virus-city.json): aparición y paseo al azar nu
             assert.equal(boxBlocked(map, p.x, p.y, c.PLAYER_RADIUS), false, `jugador ${n} dentro de una casilla sólida en (${p.x}, ${p.y})`);
         }
     }
+});
+
+test("parseMap: portales válidos y rechazo de destinos sólidos, fuera del mundo o encadenados", () => {
+    const base = { id: "p", tile: 48, cols: 4, rows: 1, solid: ["0000"], spawns: [[0, 0]] };
+    const map = parseMap({ ...base, portals: [{ c0: 3, r0: 0, c1: 3, r1: 0, x: 24, y: 24 }] });
+    assert.deepEqual(portalAt(map, 3 * 48 + 10, 20), map.portals[0]);
+    assert.equal(portalAt(map, 60, 20), null);
+    assert.equal(parseMap(base).portals.length, 0, "sin portals es una lista vacía");
+    for (const portals of [
+        "no",
+        [{ c0: 0, r0: 0, c1: 9, r1: 0, x: 24, y: 24 }], // fuera del mapa
+        [{ c0: 3, r0: 0, c1: 3, r1: 0, x: 9999, y: 24 }], // destino fuera del mundo
+        [{ c0: 3, r0: 0, c1: 3, r1: 0, x: 3 * 48 + 5, y: 24 }], // destino dentro del mismo portal
+    ]) {
+        assert.throws(() => parseMap({ ...base, portals }), /mapa inválido/, JSON.stringify(portals));
+    }
+    assert.throws(() => parseMap({ ...base, solid: ["1000"], spawns: [[1, 0]], portals: [{ c0: 3, r0: 0, c1: 3, r1: 0, x: 24, y: 24 }] }), /sólido/);
+});
+
+test("stepPlayers: al pisar un portal (puerta) el servidor traslada al jugador al destino", () => {
+    // Pasillo horizontal; la casilla 5 es una puerta que lleva a (72, 168) en otra "habitación" (fila 3)
+    const map = parseMap({
+        id: "puerta", tile: 48, cols: 7, rows: 5,
+        solid: ["1111111", "1000001", "1111111", "1000001", "1111111"],
+        spawns: [[1, 1]],
+        portals: [{ c0: 5, r0: 1, c1: 5, r1: 1, x: 72, y: 168 }],
+    });
+    const c = createConfig({}, map);
+    const p = player(120, 72, 1, 0);
+    for (let i = 0; i < 40 && p.y < 100; i++) stepPlayers(one(p), 0.05, c, map);
+    assert.deepEqual([p.x, p.y], [72, 168], "aparece en el destino");
+    // Sigue caminando dentro de la otra habitación sin volver a entrar al portal
+    stepPlayers(one(p), 0.05, c, map);
+    assert.equal(p.y, 168);
+    assert.ok(p.x > 72);
 });

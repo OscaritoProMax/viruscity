@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { buildMapData } from "../public/js/play/map/map-data.js";
-import { TILE_SIZE, MAP_COLS, MAP_ROWS, WORLD_WIDTH, WORLD_HEIGHT } from "../public/js/play/map/constants.js";
+import { TILE_SIZE, MAP_COLS, MAP_ROWS, WORLD_ROWS, WORLD_WIDTH, WORLD_HEIGHT, CITY_HEIGHT } from "../public/js/play/map/constants.js";
 
 const SERVER_MAP = new URL("../../coordinator/map/virus-city.json", import.meta.url);
 const data = buildMapData();
@@ -14,13 +14,15 @@ test("el trazado es determinista: dos generaciones dan la misma grilla", () => {
     assert.deepEqual(buildMapData(), data);
 });
 
-test("medidas del mapa: 80 × 60 casillas de 48 (3840 × 2880)", () => {
+test("medidas del mapa: ciudad de 80 × 60 casillas de 48 y mundo de 80 × 80 con los interiores", () => {
     assert.equal(data.tile, TILE_SIZE);
     assert.equal(data.cols, MAP_COLS);
-    assert.equal(data.rows, MAP_ROWS);
+    assert.equal(data.rows, WORLD_ROWS);
+    assert.equal(MAP_ROWS, 60);
     assert.equal(WORLD_WIDTH, 3840);
-    assert.equal(WORLD_HEIGHT, 2880);
-    assert.equal(data.solid.length, MAP_ROWS);
+    assert.equal(WORLD_HEIGHT, 3840);
+    assert.equal(CITY_HEIGHT, 2880);
+    assert.equal(data.solid.length, WORLD_ROWS);
     assert.ok(data.solid.every((row) => row.length === MAP_COLS && /^[01]+$/.test(row)));
 });
 

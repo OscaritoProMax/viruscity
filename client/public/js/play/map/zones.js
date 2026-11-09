@@ -1,9 +1,12 @@
 // Nombre de la zona del mapa en una posición del mundo (función pura).
-// Adaptado de areaName() de la referencia virus_city_map.html (sin interiores).
+// Adaptado de areaName() de la referencia virus_city_map.html.
 
-import { TILE_SIZE } from "./constants.js";
+import { TILE_SIZE, CITY_HEIGHT } from "./constants.js";
+import { sceneAt, sceneRect } from "./scenes.js";
 
 export function areaName(x, y) {
+    // Dentro de un local: su nombre (Burger Neón, Supermercado)
+    if (y >= CITY_HEIGHT) return sceneRect(sceneAt(x, y))?.name ?? "Virus City";
     const c = Math.floor(x / TILE_SIZE);
     const r = Math.floor(y / TILE_SIZE);
     const inR = (c0, r0, c1, r1) => c >= c0 && c <= c1 && r >= r0 && r <= r1;
