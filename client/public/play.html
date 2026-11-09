@@ -107,10 +107,28 @@
             <div id="panelPower" class="play-tabpanel" role="tabpanel" aria-labelledby="tabPower" hidden>
                 <!-- Opciones creadas desde look-panel.js según el personaje -->
                 <div id="powerOptions" class="play-powers" role="radiogroup" aria-label="Poder"></div>
-                <button id="powerButton" type="button" class="btn btn--block play-power-use">Usar poder <kbd>E</kbd></button>
+                <button id="powerButton" type="button" class="btn btn--block play-power-use">Usar poder <kbd>Q</kbd></button>
                 <p class="play-look__desc">El efecto es solo visual: todos lo ven, pero no cambia posiciones.</p>
             </div>
         </div>
+    </section>
+
+    <!-- Conversación con vecinos y carteles (local: no viaja por la red) -->
+    <div id="dialogue" class="play-dialogue" role="dialog" aria-labelledby="dlgSpeaker" aria-describedby="dlgText" hidden>
+        <p id="dlgSpeaker" class="play-dialogue__speaker"></p>
+        <p id="dlgText" class="play-dialogue__text" aria-live="polite"></p>
+        <p id="dlgHint" class="play-dialogue__hint"></p>
+    </div>
+
+    <!-- Radio: la misma para todos (sincronizada con la hora del servidor) -->
+    <section class="play-radio" aria-label="Radio y sonido">
+        <span class="play-radio__dial" aria-hidden="true"></span>
+        <span class="play-radio__info">
+            <span id="radioStation" class="play-radio__station">Radio</span>
+            <span id="radioTitle" class="play-radio__title" aria-live="polite">Pulsa una tecla para sintonizar</span>
+        </span>
+        <button id="radioToggle" type="button" class="play-radio__btn" aria-pressed="false"><span id="radioIcon" class="play-radio__icon" aria-hidden="true">♪</span><span id="radioLabel" class="play-radio__label">Radio</span></button>
+        <button id="sfxToggle" type="button" class="play-radio__btn" aria-pressed="false"><span id="sfxIcon" class="play-radio__icon" aria-hidden="true">🔊</span><span id="sfxLabel" class="play-radio__label">Efectos</span></button>
     </section>
 
     <!-- Abajo a la derecha: zoom (solo visual) -->
@@ -120,7 +138,7 @@
         <button id="zoomIn" type="button" class="play-zoom__btn" aria-label="Acercar">+</button>
     </div>
 
-    <p class="play-help">WASD o flechas para moverte · E para usar tu poder · el servidor decide tu posición y los choques</p>
+    <p class="play-help">WASD o flechas: moverte · E: hablar o mirar · Q: usar tu poder · entra por la puerta del Burger Neón o del Supermercado</p>
 </main>
 
 <script src="/config.js"></script>

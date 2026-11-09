@@ -1,7 +1,9 @@
 // Página del juego en vivo (Taller 5).
 // El SERVIDOR es la autoridad: este cliente no calcula posiciones ni choques. Solo:
 //   - guarda el último mensaje state en window.lastState y lo dibuja sobre el mapa de Virus City,
-//   - envía intenciones de movimiento y extras (la apariencia de su personaje).
+//   - envía intenciones de movimiento y extras (la apariencia de su personaje y su poder).
+// Lo local (no viaja por la red): conversaciones con vecinos y carteles, efectos de sonido y la radio,
+// que se sincroniza con la hora del servidor para que todos escuchen lo mismo.
 // Todo el texto dinámico va con textContent (DOM) o fillText (canvas).
 
 import { computeIntent, MOVEMENT_CODES } from "./intent.js";
@@ -12,6 +14,10 @@ import { defaultLook, lookToExtras, parseSavedLook, POWER_MS } from "./character
 import { areaName } from "./map/zones.js";
 import { gameMinutes, formatClock, isNight } from "./map/clock.js";
 import { ZOOM_STEP, clampZoom } from "./view.js";
+import { createAudio } from "./audio.js";
+import { createRadio, STATION, estimateOffset } from "./radio.js";
+import { createDialogue } from "./dialogue.js";
+import { sceneAt, WORLD_SCENE } from "./map/scenes.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -32,6 +38,8 @@ const MAX_FRAME_DT = 0.05;
 const NARROW_QUERY = "(max-width: 699.98px)"; // en pantallas angostas los paneles empiezan plegados
 const HUD_EVERY_MS = 250; // zona, hora y lista se refrescan 4 veces por segundo (no en cada cuadro)
 const PROVIDER_LABELS = { google: "Google", local: "Local" };
+const OFFSET_SAMPLES = 40; // muestras para estimar la hora del servidor (radio sincronizada)
+const HEAR_DISTANCE = 700; // los poderes de otros jugadores se oyen hasta esta distancia
 
 // Preferencias solo de este navegador (try/catch: el almacenamiento puede estar bloqueado)
 function readPref(key) {
@@ -84,6 +92,8 @@ function startGame(token) {
     let loggingOut = false;
     let lastStateAt = 0;
     let welcomeAt = 0;
+    const offsetSamples = [];
+    let serverOffset = 0; // hora del servidor ≈ Date.now() + serverOffset
 
     // Cabecera: username y proveedor (solo para mostrar; el servidor manda el suyo en welcome)
     const provider = payload?.provider;
@@ -144,6 +154,11 @@ function startGame(token) {
             if (!Array.isArray(msg.players)) return;
             window.lastState = msg;
             lastStateAt = performance.now();
+            if (Number.isFinite(msg.t)) {
+                offsetSamples.push(msg.t - Date.now());
+                if (offsetSamples.length > OFFSET_SAMPLES) offsetSamples.shift();
+                serverOffset = estimateOffset(offsetSamples);
+            }
         }
         // players_update se ignora: la lista sale de lastState
     };
@@ -196,16 +211,22 @@ function startGame(token) {
     }
 
     const inFormControl = (target) => target instanceof Element && target.closest("input, select, textarea, button");
+    const inTextField = (target) => target instanceof Element && target.closest("input, select, textarea");
 
     window.addEventListener("keydown", (event) => {
-        // E usa el poder (fuera de los campos de formulario)
-        if (event.code === "KeyE" && !event.repeat && !inFormControl(event.target)) usePower();
+        audio.unlock(); // el navegador solo deja sonar audio después de una interacción
+        if (!event.repeat && !inTextField(event.target)) {
+            if (event.code === "KeyE") interact(); // hablar con un vecino o mirar un cartel
+            if (event.code === "KeyQ" && !dialogue.isOpen()) usePower();
+            if (event.code === "Escape" && dialogue.isOpen()) endDialogue();
+        }
         // Flechas y espacio no desplazan la página (salvo sobre un control: Espacio debe activar botones)
         if ((MOVEMENT_CODES.has(event.code) || event.code === "Space") && !inFormControl(event.target)) event.preventDefault();
-        if (!MOVEMENT_CODES.has(event.code)) return;
+        if (!MOVEMENT_CODES.has(event.code) || dialogue.isOpen()) return;
         keys.add(event.code);
         pushIntent();
     });
+    window.addEventListener("pointerdown", () => audio.unlock());
     window.addEventListener("keyup", (event) => {
         if (!keys.delete(event.code)) return;
         pushIntent();
@@ -220,6 +241,90 @@ function startGame(token) {
     document.addEventListener("visibilitychange", () => {
         if (document.hidden) releaseAll();
     });
+
+    // ---------- Sonido y radio ----------
+    const audio = createAudio();
+    const radio = createRadio(audio);
+    const serverNow = () => Date.now() + serverOffset;
+
+    function renderSoundButtons() {
+        const radioOff = audio.isRadioMuted();
+        $("radioToggle").setAttribute("aria-pressed", String(radioOff));
+        $("radioToggle").setAttribute("aria-label", radioOff ? "Encender la radio" : "Silenciar la radio");
+        $("radioIcon").textContent = radioOff ? "✕" : "♪";
+        $("radioLabel").textContent = radioOff ? "Radio apagada" : "Radio";
+        const sfxOff = audio.isSfxMuted();
+        $("sfxToggle").setAttribute("aria-pressed", String(sfxOff));
+        $("sfxToggle").setAttribute("aria-label", sfxOff ? "Activar los efectos de sonido" : "Silenciar los efectos de sonido");
+        $("sfxIcon").textContent = sfxOff ? "🔇" : "🔊";
+        $("sfxLabel").textContent = sfxOff ? "Sin efectos" : "Efectos";
+    }
+    $("radioToggle").addEventListener("click", () => {
+        audio.unlock();
+        audio.setRadioMuted(!audio.isRadioMuted());
+        renderSoundButtons();
+    });
+    $("sfxToggle").addEventListener("click", () => {
+        audio.unlock();
+        audio.setSfxMuted(!audio.isSfxMuted());
+        renderSoundButtons();
+    });
+    renderSoundButtons();
+    $("radioStation").textContent = STATION;
+
+    function radioText() {
+        if (!audio.ready()) return "Pulsa una tecla para sintonizar";
+        if (audio.isRadioMuted()) return "Radio en silencio";
+        const p = radio.program(serverNow());
+        return p.gap ? `A continuación: ${p.next.title}` : `Sonando: ${p.song.title}`;
+    }
+
+    // ---------- Conversaciones (locales) ----------
+    const dialogue = createDialogue({ onBlip: () => audio.sfx.blip() });
+    function interact() {
+        if (dialogue.isOpen()) {
+            if (dialogue.advance()) endDialogue();
+            return;
+        }
+        const t = renderer.target();
+        if (!t) return;
+        // Mientras se conversa, el jugador se queda quieto (intención {0, 0})
+        keys.clear();
+        pushIntent();
+        if (t.npc) {
+            renderer.setTalking(t.npc, t);
+            dialogue.open(t.npc.speaker || t.npc.name, t.npc.lines);
+        } else {
+            dialogue.open(t.o.speaker || null, t.o.lines);
+            if (t.o.action === "jukebox") {
+                audio.sfx.jukebox();
+                renderer.jukebox(performance.now(), 3600);
+            }
+        }
+    }
+    function endDialogue() {
+        dialogue.close();
+        renderer.setTalking(null);
+    }
+
+    // Sonidos de lo que pasa en este cuadro (pasos, puertas y poderes de quienes están cerca)
+    function playEvents() {
+        if (renderer.meMoving()) audio.sfx.step(renderer.surface());
+        const myScene = renderer.scene();
+        const mine = renderer.positionOf(me.userId);
+        for (const e of renderer.drainEvents()) {
+            if (e.type === "scene") {
+                audio.sfx.door();
+                if (e.to !== WORLD_SCENE) audio.sfx.chime();
+                if (dialogue.isOpen()) endDialogue();
+            } else if (e.type === "power") {
+                const pos = renderer.positionOf(e.userId);
+                if (!pos || sceneAt(pos.x, pos.y) !== myScene) continue;
+                const d = e.userId === me.userId || !mine ? 0 : Math.hypot(pos.x - mine.x, pos.y - mine.y);
+                audio.sfx.power(e.power, 1 - d / HEAR_DISTANCE);
+            }
+        }
+    }
 
     // ---------- Extra: apariencia del personaje ----------
     // Se envía como extras_update (el servidor reemplaza los extras completos y los reenvía a todos).
@@ -259,7 +364,9 @@ function startGame(token) {
         const state = window.lastState;
         playersPanel.update(state?.players ?? [], me.userId, (p) => (withMap() && Number.isFinite(p.x) ? areaName(p.x, p.y) : null));
         $("hudArea").textContent = renderer.area() ?? "Virus City";
-        $("minimap").hidden = !withMap(); // sin mapa (mundo de otro tamaño) no hay minimapa
+        $("radioTitle").textContent = radioText();
+        // Minimapa solo en la ciudad (sin mapa del servidor o dentro de un local se oculta)
+        $("minimap").hidden = !withMap() || renderer.scene() !== WORLD_SCENE;
         if (state && Number.isFinite(state.t)) {
             const minutes = gameMinutes(state.t);
             $("hudClock").textContent = formatClock(minutes);
@@ -274,6 +381,9 @@ function startGame(token) {
         lastFrame = now;
         renderer.draw(window.lastState, world, me, now, dt);
         lookPanel.tick(now);
+        dialogue.tick(dt);
+        playEvents();
+        radio.update(serverNow());
         updateHud(now);
 
         // Aviso discreto si dejan de llegar state

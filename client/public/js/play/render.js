@@ -2,12 +2,15 @@
 // no calcula posiciones de juego.
 //
 // createRenderer(canvas, minimap) → {
-//   resize(availW, availH), draw(lastState, world, me, nowMs, dt), setZoom(z), getZoom(), area()
+//   resize(availW, availH), draw(lastState, world, me, nowMs, dt), setZoom(z), getZoom(), area(),
+//   scene(), target(), setTalking(npc), jukebox(nowMs, ms), surface(), meMoving(), positionOf(id), drainEvents()
 // }
 //
-// - Si el mundo del servidor mide lo mismo que el mapa de Virus City (3840 × 2880), dibuja la ciudad
-//   (las colisiones con ese mismo mapa las calcula el servidor). Si no, una cuadrícula simple.
-// - La cámara sigue al jugador local; el zoom es solo visual.
+// - Si el mundo del servidor mide lo mismo que el mapa de Virus City (3840 × 3840: ciudad + interiores),
+//   dibuja la ciudad o el local donde está el jugador (las colisiones y las puertas las calcula el
+//   servidor). Si no, una cuadrícula simple.
+// - Solo se dibuja a los jugadores que están en el mismo escenario (se deduce de sus coordenadas).
+// - La cámara sigue al jugador local dentro de su escenario; el zoom es solo visual.
 // - Vecinos y coches son decorado local: cada cliente ve los suyos y no chocan con nadie.
 
 import { computeView, clampZoom, nextAnim } from "./view.js";
@@ -15,7 +18,10 @@ import { resolveLook, POWER_MS } from "./characters/look.js";
 import { drawCharacter, CHARACTER_HEIGHT, FEET_OFFSET } from "./characters/index.js";
 import { drawPowerEffect, jetpackHeight } from "./characters/powers.js";
 import { WORLD_WIDTH, WORLD_HEIGHT, TILE_SIZE, MAP_COLS, MAP_ROWS } from "./map/constants.js";
-import { buildWorld, worldObjs, buildingsList, ground, idx } from "./map/layout.js";
+import { buildWorld, worldObjs, buildingsList, ground, idx, gAt, G, worldInteractables } from "./map/layout.js";
+import { buildScenes } from "./map/interiors.js";
+import { buildInteriorSprites, paintBurgerBase, paintMarketBase } from "./map/interior-art.js";
+import { sceneAt, sceneRect, WORLD_SCENE } from "./map/scenes.js";
 import { SPRITES, buildAllPropSprites } from "./map/props.js";
 import { buildBuildingSprite } from "./map/buildings.js";
 import { drawGround, drawWaterFx } from "./map/ground.js";
@@ -38,6 +44,9 @@ const FADE_RE = /^(oak|pine|birch|cherry|forest|gazebo)/;
 // Colores del minimapa por tipo de suelo (orden de G en layout.js)
 const MINI_COLORS = ["#4a9c3f", "#58aa47", "#3d4452", "#b8c0cb", "#d9cba6", "#1d7fc4", "#ecd9a3", "#a6794a", "#d8cdb2", "#2f3540", "#6b4423", "#8b5a2b", "#2a6e34", "#9fa2a7"];
 const MINI_SCALE = 2; // px del minimapa base por casilla
+// La caja del jugador en el servidor (2·radio) es más alta que la caja de pies de la referencia: no se
+// acerca tanto a mostradores y carteles, así que el radio para hablar se amplía un poco
+const REACH_BONUS = 24;
 
 // Lee una variable CSS (tokens.css) con un valor de respaldo
 function cssVar(name, fallback) {
@@ -58,6 +67,7 @@ let city = null;
 function ensureCity() {
     if (city) return city;
     buildAllPropSprites();
+    buildInteriorSprites();
     buildWorld();
     for (const o of worldObjs) o.sp = o.kind === "building" ? buildBuildingSprite(o.spec) : SPRITES[o.sprite];
     const objs = worldObjs.filter((o) => o.sp); // un sprite que no exista no rompe el dibujo
@@ -80,7 +90,15 @@ function ensureCity() {
         m.fillStyle = s.roof || s.roofTop || { church: "#475569", hall: "#64748b", barn: "#7f1d1d" }[s.kind] || "#57534e";
         m.fillRect(o.c * MINI_SCALE, o.r * MINI_SCALE, s.w * MINI_SCALE, s.h * MINI_SCALE);
     }
-    city = { objs, mini, fountain: objs.find((o) => o.fx === "fountain") ?? null };
+    // Interiores: piso pintado una vez y sprites de los muebles
+    const scenes = buildScenes();
+    const painters = { burger: paintBurgerBase, market: paintMarketBase };
+    for (const sc of Object.values(scenes)) {
+        sc.base = painters[sc.id]();
+        for (const o of sc.objs) o.sp = SPRITES[o.sprite];
+        sc.objs = sc.objs.filter((o) => o.sp);
+    }
+    city = { objs, mini, scenes, fountain: objs.find((o) => o.fx === "fountain") ?? null };
     return city;
 }
 
@@ -110,12 +128,19 @@ export function createRenderer(canvas, minimap) {
     const anims = new Map();
     // Poderes: cuándo vio este cliente que cada jugador activó el suyo (extras.powerOn pasa a true)
     const powers = new Map(); // userId → { on, start }
+    const events = []; // activaciones de poderes y cambios de escenario vistos en este cuadro (para el sonido)
+    let currentScene = WORLD_SCENE;
+    let currentTarget = null; // cartel o vecino con el que se puede hablar (tecla E)
+    let talkingTo = null; // vecino en conversación: se queda quieto
+    let meMoving = false;
+    let jukeUntil = 0;
 
     // Progreso del efecto (0..1) o null si no está activo
     function powerProgress(userId, look, nowMs) {
         const prev = powers.get(userId) ?? { on: false, start: -Infinity };
         const next = { on: look.powerOn, start: look.powerOn && !prev.on ? nowMs : prev.start };
         powers.set(userId, next);
+        if (look.powerOn && !prev.on) events.push({ type: "power", userId, power: look.power });
         const t = (nowMs - next.start) / POWER_MS;
         return t >= 0 && t < 1 ? t : null;
     }
@@ -335,6 +360,113 @@ export function createRenderer(canvas, minimap) {
         }
     }
 
+    // ---------- Conversaciones: objetivo cercano y aviso "E" ----------
+    // Cosas con las que hablar en el escenario actual (coordenadas absolutas del mundo)
+    function talkables(sceneId) {
+        const list = [];
+        if (sceneId === WORLD_SCENE) {
+            for (const o of worldInteractables) list.push({ x: o.x, y: o.y, r: o.r, o, ox: 0, oy: 0 });
+            for (const n of worldNPCs) list.push({ x: n.x, y: n.y + 4, r: n.dog ? 64 : 78, npc: n, ox: 0, oy: 0 });
+        } else {
+            const sc = city.scenes[sceneId];
+            for (const o of sc.interactables) list.push({ x: sc.ox + o.x, y: sc.oy + o.y, r: o.r, o, ox: sc.ox, oy: sc.oy });
+            for (const n of sc.npcs) list.push({ x: sc.ox + n.x, y: sc.oy + n.y + 4, r: 92, npc: n, ox: sc.ox, oy: sc.oy });
+        }
+        return list;
+    }
+
+    function findTarget(sceneId, mePos) {
+        if (!mePos) return null;
+        let best = null;
+        let bestD = Infinity;
+        for (const it of talkables(sceneId)) {
+            const d = Math.hypot(mePos.x - it.x, mePos.y - it.y);
+            if (d < it.r + REACH_BONUS && d < bestD) {
+                bestD = d;
+                best = it;
+            }
+        }
+        return best;
+    }
+
+    function drawPrompt(t, nowMs) {
+        const x = t.npc ? t.ox + t.npc.x : t.x;
+        const y = (t.npc ? t.oy + t.npc.y - 74 : t.y - 64) + (reducedMotion.matches ? 0 : Math.sin(nowMs * 0.006) * 2);
+        const label = t.npc ? "Hablar" : "Mirar";
+        ctx.save();
+        ctx.font = `700 ${px(11)}px ${fontMono}`;
+        const w = ctx.measureText(label).width + px(40);
+        const h = px(24);
+        ctx.globalAlpha = 0.92;
+        ctx.fillStyle = colors.bg;
+        ctx.beginPath();
+        ctx.roundRect(x - w / 2, y - h / 2, w, h, h / 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = colors.accent;
+        ctx.lineWidth = px(1.5);
+        ctx.stroke();
+        ctx.fillStyle = colors.accent;
+        ctx.beginPath();
+        ctx.arc(x - w / 2 + px(14), y, px(9), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = colors.bg;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("E", x - w / 2 + px(14), y + px(0.5));
+        ctx.fillStyle = colors.text;
+        ctx.textAlign = "left";
+        ctx.fillText(label, x - w / 2 + px(28), y + px(0.5));
+        ctx.restore();
+    }
+
+    // ---------- Interiores ----------
+    function drawInterior(sc, nowMs, dt, players, positions, looks, powerTs, radius, meId) {
+        ctx.drawImage(sc.base, sc.ox, sc.oy);
+        // Charcos de luz cálida sobre el suelo (debajo de muebles y personas)
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        const la = Math.min(0.17, 1.1 / Math.max(1, sc.lights.length));
+        for (const l of sc.lights) glow(ctx, sc.ox + l.x, sc.oy + l.y, l.r, l.c, la);
+        ctx.restore();
+
+        const f = Math.min(dt, 0.1) * 60;
+        for (const n of sc.npcs) updateNPC(n, f, talkingTo);
+
+        const list = [];
+        for (const o of sc.objs) list.push({ s: sc.oy + o.sortY, k: 0, o, x0: sc.ox + o.x - o.sp.ax, y0: sc.oy + o.y - o.sp.ay });
+        for (const n of sc.npcs) list.push({ s: sc.oy + npcFoot(n) + (n.mode === "sit" ? 14 : 0), k: 1, o: n });
+        for (const p of players) {
+            const pos = positions.get(p.userId);
+            list.push({ s: pos.y + radius + (p.userId === meId ? 0.01 : 0), k: 3, p, pos });
+        }
+        list.sort((a, b) => a.s - b.s);
+        for (const it of list) {
+            if (it.k === 0) ctx.drawImage(it.o.sp, it.x0, it.y0, it.o.sp._w, it.o.sp._h);
+            else if (it.k === 1) {
+                ctx.save();
+                ctx.translate(sc.ox, sc.oy);
+                drawNPCEntity(ctx, it.o);
+                ctx.restore();
+            } else drawPlayerBody(it.p, it.pos, radius, it.p.userId === meId, looks.get(it.p.userId), powerTs.get(it.p.userId));
+        }
+
+        // Neón del local y luces de la rocola
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        if (sc.neonSign) {
+            const n = sc.neonSign;
+            const fl = reducedMotion.matches ? 0.85 : 0.7 + 0.3 * Math.sin(nowMs * 0.009) + (Math.sin(nowMs * 0.017) > 0.97 ? -0.4 : 0);
+            glow(ctx, sc.ox + n.x, sc.oy + n.y, 240, "255,90,170", (0.3 * fl).toFixed(2));
+        }
+        if (sc.id === "burger" && jukeUntil > nowMs && !reducedMotion.matches) {
+            const ph = nowMs * 0.012;
+            ["255,60,150", "60,200,255", "255,220,60"].forEach((c, i) =>
+                glow(ctx, sc.ox + 16.5 * TILE_SIZE + Math.cos(ph + i * 2.1) * 90, sc.oy + 5 * TILE_SIZE + Math.sin(ph * 1.3 + i * 2.1) * 70, 150, c, 0.2));
+        }
+        ctx.restore();
+    }
+
     // ---------- Minimapa ----------
     function drawMinimap(players, positions, meId, world, view, nowMs) {
         if (!minimap) return;
@@ -395,23 +527,37 @@ export function createRenderer(canvas, minimap) {
             }
         }
 
-        // Cámara: sigue al jugador local
+        // Escenario del jugador local (ciudad o un local) y jugadores visibles: los del mismo escenario
         const mePos = positions.get(meId) ?? null;
         lastMePos = mePos ? { x: mePos.x, y: mePos.y } : null;
-        const view = computeView(mePos, cssW, cssH, world, zoom);
+        const meServer = players.find((p) => p.userId === meId) ?? null;
+        const myScene = withMap && meServer ? sceneAt(meServer.x, meServer.y) : WORLD_SCENE;
+        if (myScene !== currentScene) {
+            events.push({ type: "scene", from: currentScene, to: myScene });
+            currentScene = myScene;
+            talkingTo = null;
+        }
+        const visible = withMap ? players.filter((p) => sceneAt(p.x, p.y) === myScene) : players;
+        meMoving = Boolean(anims.get(meId)?.moving);
+
+        // Cámara: sigue al jugador local dentro de su escenario
+        const rect = withMap ? sceneRect(myScene) : { x: 0, y: 0, width: world.width, height: world.height };
+        const local = computeView(mePos ? { x: mePos.x - rect.x, y: mePos.y - rect.y } : null, cssW, cssH, rect, zoom);
+        const view = { x: local.x + rect.x, y: local.y + rect.y, w: local.w, h: local.h };
         lastView = view;
         const scale = zoom * dpr;
         ctx.setTransform(scale, 0, 0, scale, Math.round(-view.x * scale), Math.round(-view.y * scale));
         const v = { vx0: view.x - 8, vy0: view.y - 8, vx1: view.x + view.w + 8, vy1: view.y + view.h + 8 };
 
-        if (withMap) {
+        const inCity = withMap && myScene === WORLD_SCENE;
+        if (inCity) {
             drawGround(ctx, v.vx0, v.vy0, v.vx1, v.vy1);
             if (!reducedMotion.matches) drawWaterFx(ctx, nowMs, v.vx0, v.vy0, v.vx1, v.vy1);
             // Decorado local: vecinos y coches (frenan ante el jugador local, no chocan)
             const f = Math.min(dt, 0.1) * 60;
-            for (const n of worldNPCs) updateNPC(n, f, null);
+            for (const n of worldNPCs) updateNPC(n, f, talkingTo);
             updateCars(f, mePos?.x ?? -9999, (mePos?.y ?? -9999) + radius - FEET_OFFSET);
-        } else {
+        } else if (!withMap) {
             drawPlainWorld(world);
         }
 
@@ -425,9 +571,29 @@ export function createRenderer(canvas, minimap) {
             return;
         }
 
+        if (withMap && !inCity) {
+            const sc = city.scenes[myScene];
+            drawInterior(sc, nowMs, dt, visible, positions, looks, powerTs, radius, meId);
+            for (const p of visible) drawPlayerPower(p, positions.get(p.userId), radius, looks.get(p.userId), powerTs.get(p.userId));
+            for (const p of visible) drawLabel(p, positions.get(p.userId), radius, world);
+            currentTarget = talkingTo ? null : findTarget(myScene, mePos);
+            if (currentTarget) drawPrompt(currentTarget, nowMs);
+            // Viñeta: los bordes del local más oscuros (en píxeles de pantalla)
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            const cw = canvas.width;
+            const ch = canvas.height;
+            const g = ctx.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.35, cw / 2, ch / 2, Math.max(cw, ch) * 0.75);
+            g.addColorStop(0, "rgba(0,0,0,0)");
+            g.addColorStop(1, "rgba(0,0,0,0.45)");
+            ctx.fillStyle = g;
+            ctx.fillRect(0, 0, cw, ch);
+            drawMinimap([], positions, meId, world, view, nowMs);
+            return;
+        }
+
         // Todo lo que tiene "pies" se ordena por su y de suelo (los de más abajo tapan a los de arriba)
         const list = [];
-        if (withMap) {
+        if (inCity) {
             const meFoot = mePos ? mePos.y + radius : -Infinity;
             const meBox = mePos ? { x: mePos.x - 22, y: meFoot - CHARACTER_HEIGHT - 6, w: 44, h: CHARACTER_HEIGHT + 6 } : null;
             for (const o of city.objs) {
@@ -448,7 +614,7 @@ export function createRenderer(canvas, minimap) {
                 list.push({ s: cr.y, k: 2, o: cr });
             }
         }
-        for (const p of players) {
+        for (const p of visible) {
             const pos = positions.get(p.userId);
             // a igual altura, el jugador local va encima
             list.push({ s: pos.y + radius + (p.userId === meId ? 0.01 : 0), k: 3, p, pos });
@@ -464,15 +630,19 @@ export function createRenderer(canvas, minimap) {
             else drawPlayerBody(it.p, it.pos, radius, it.p.userId === meId, looks.get(it.p.userId), powerTs.get(it.p.userId));
         }
 
-        if (withMap) cityEffects(ctx, nowMs, gameMinutes(lastState.t), v);
+        if (inCity) cityEffects(ctx, nowMs, gameMinutes(lastState.t), v);
 
         // Efectos de poderes encima de la noche (brillan)
-        for (const p of players) drawPlayerPower(p, positions.get(p.userId), radius, looks.get(p.userId), powerTs.get(p.userId));
+        for (const p of visible) drawPlayerPower(p, positions.get(p.userId), radius, looks.get(p.userId), powerTs.get(p.userId));
 
         // Nombres al final, por encima de la noche, para que siempre se lean
-        for (const p of players) drawLabel(p, positions.get(p.userId), radius, world);
+        for (const p of visible) drawLabel(p, positions.get(p.userId), radius, world);
 
-        drawMinimap(withMap ? players : [], positions, meId, world, view, nowMs);
+        currentTarget = inCity && !talkingTo ? findTarget(myScene, mePos) : null;
+        if (currentTarget) drawPrompt(currentTarget, nowMs);
+
+        // En el minimapa solo los jugadores que están en la ciudad
+        drawMinimap(withMap ? players.filter((p) => sceneAt(p.x, p.y) === WORLD_SCENE) : [], positions, meId, world, view, nowMs);
     }
 
     return {
@@ -484,5 +654,31 @@ export function createRenderer(canvas, minimap) {
         area: () => (city && lastMePos ? areaName(lastMePos.x, lastMePos.y) : null),
         hasCity: () => city !== null,
         view: () => lastView,
+        // Escenario del jugador local: "world" o el id del local
+        scene: () => currentScene,
+        // Cartel o vecino cercano (para la tecla E)
+        target: () => currentTarget,
+        // Vecino en conversación (se queda quieto y mira al jugador); null para soltarlo
+        setTalking(npc, at) {
+            talkingTo = npc;
+            if (npc && at && lastMePos) {
+                const dx = lastMePos.x - (at.ox + npc.x);
+                const dy = lastMePos.y - (at.oy + npc.y);
+                npc.dir = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? "LEFT" : "RIGHT") : dy < 0 ? "UP" : "DOWN";
+            }
+        },
+        // Luces de la rocola del Burger Neón
+        jukebox: (nowMs, ms) => (jukeUntil = nowMs + ms),
+        // Suelo bajo los pies del jugador local (para el sonido de los pasos)
+        surface() {
+            if (!city || !lastMePos || currentScene !== WORLD_SCENE) return "hard";
+            const g = gAt(Math.floor(lastMePos.x / TILE_SIZE), Math.floor((lastMePos.y + 8) / TILE_SIZE));
+            return [G.GRASS, G.LAWN, G.FOREST, G.SAND, G.DIRT, G.CROPS].includes(g) ? "soft" : "hard";
+        },
+        meMoving: () => meMoving,
+        // Posición dibujada de un jugador (para el volumen de sus sonidos según la distancia)
+        positionOf: (userId) => renderPos.get(userId) ?? null,
+        // Eventos de este cuadro: activaciones de poderes y cambios de escenario del jugador local
+        drainEvents: () => events.splice(0, events.length),
     };
 }

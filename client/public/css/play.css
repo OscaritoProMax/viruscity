@@ -33,6 +33,8 @@ body.play {
 .play-float,
 .play-minimap,
 .play-zoom,
+.play-radio,
+.play-dialogue,
 .play-notice,
 .play-help {
     border: 1px solid var(--border, #2a3560);
@@ -533,6 +535,122 @@ body.play {
     font-size: var(--fs-s, .8125rem);
 }
 
+/* ---------- Radio (abajo a la derecha, encima del zoom) ---------- */
+.play-radio {
+    position: absolute;
+    right: var(--space-3, 12px);
+    bottom: calc(var(--space-3, 12px) + 44px + var(--space-2, 8px));
+    display: flex;
+    align-items: center;
+    gap: var(--space-2, 8px);
+    max-width: min(420px, calc(100% - 24px));
+    padding: var(--space-1, 4px) var(--space-1, 4px) var(--space-1, 4px) var(--space-3, 12px);
+    border-radius: var(--radius-m, 12px);
+}
+
+/* Dial de la radio: un punto que late mientras suena (quieto con movimiento reducido) */
+.play-radio__dial {
+    flex: none;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--cure, #ffd166);
+    box-shadow: 0 0 8px var(--cure, #ffd166);
+    animation: play-radio-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes play-radio-pulse {
+    50% { opacity: .35; }
+}
+
+.play-radio__info {
+    display: grid;
+    min-width: 0;
+    font-size: var(--fs-s, .8125rem);
+}
+
+.play-radio__station {
+    color: var(--cure, #ffd166);
+    font-family: var(--font-mono, monospace);
+    font-weight: 700;
+    letter-spacing: .08em;
+}
+
+.play-radio__title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted, #8f9bc4);
+}
+
+.play-radio__btn {
+    flex: none;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 var(--space-2, 8px);
+    border: 1px solid var(--border, #2a3560);
+    border-radius: var(--radius-s, 8px);
+    background: var(--panel-2, #18223f);
+    color: var(--text, #e6e9f5);
+    font: inherit;
+    font-size: var(--fs-s, .8125rem);
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.play-radio__btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-1, 4px);
+}
+
+.play-radio__btn[aria-pressed="true"] {
+    border-color: var(--danger, #ff4d6d);
+    color: var(--danger, #ff4d6d);
+}
+
+/* ---------- Conversación (abajo al centro) ---------- */
+.play-dialogue {
+    position: absolute;
+    left: 50%;
+    bottom: 64px;
+    transform: translateX(-50%);
+    width: min(640px, calc(100% - 24px));
+    margin: 0;
+    padding: var(--space-3, 12px) var(--space-4, 16px);
+    border-color: var(--accent, #4dd2ff);
+    border-radius: var(--radius-l, 20px);
+    box-shadow: var(--shadow-glow, none);
+    z-index: 2;
+}
+
+.play-dialogue p { margin: 0; }
+
+.play-dialogue__speaker {
+    margin-bottom: var(--space-1, 4px) !important;
+    color: var(--accent, #4dd2ff);
+    font-family: var(--font-mono, monospace);
+    font-size: var(--fs-s, .8125rem);
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+}
+
+.play-dialogue__text {
+    min-height: 3em;
+    font-size: var(--fs-m, 1rem);
+    line-height: 1.5;
+}
+
+.play-dialogue__hint {
+    min-height: 1.2em;
+    color: var(--accent, #4dd2ff);
+    font-family: var(--font-mono, monospace);
+    font-size: var(--fs-s, .8125rem);
+    text-align: right;
+}
+
 /* Ayuda abajo al centro */
 .play-help {
     position: absolute;
@@ -554,6 +672,8 @@ body.play {
 }
 
 @media (prefers-reduced-motion: reduce) {
+    .play-radio__dial { animation: none; }
+
     .play-card,
     .play-float__chevron { transition: opacity var(--t-fast, 120ms) linear; }
 }
@@ -606,4 +726,21 @@ body.play {
     }
 
     .play-zoom__value { min-width: 44px; }
+
+    /* Radio compacta: solo los botones, encima del zoom vertical */
+    .play-radio {
+        right: var(--space-2, 8px);
+        bottom: calc(var(--space-2, 8px) + 132px + var(--space-2, 8px));
+        flex-direction: column;
+        padding: var(--space-1, 4px);
+    }
+
+    .play-radio__info,
+    .play-radio__dial,
+    .play-radio__label { display: none; }
+
+    .play-dialogue {
+        bottom: auto;
+        top: 128px;
+    }
 }
