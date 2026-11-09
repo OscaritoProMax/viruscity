@@ -1,5 +1,7 @@
 // Prueba automatizada del coordinator: flujo WebSocket del Taller 4 (S1-S11) y juego en vivo
 // autoritativo del Taller 5 (G1-G12). Requiere el auth-service y el coordinator levantados.
+// Si el coordinator usa un mapa (GET /health → map), las pruebas de movimiento eligen direcciones
+// libres y comprueban las colisiones con el mismo archivo coordinator/map/<map>.json.
 // Los usuarios locales se crean en el auth; los tokens con provider 'google' se firman aquí
 // con el secreto compartido (la prueba lo conoce).
 //
@@ -15,9 +17,12 @@ const crypto = require("node:crypto");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env"), quiet: true });
 const WebSocket = require("ws");
 const jwt = require("jsonwebtoken");
+const fs = require("node:fs");
+const { createConfig, parseMap, stepPlayers, boxBlocked } = require("../game.js");
 
 const AUTH_URL = (process.env.AUTH_URL || "http://localhost:4000").replace(/\/+$/, "");
 const WS_URL = (process.env.COORDINATOR_WS_URL || "ws://localhost:5000").replace(/\/+$/, "");
+const HTTP_URL = WS_URL.replace(/^ws/, "http"); // mismo host y puerto del coordinator (para /health)
 const JWT_SECRET = process.env.JWT_SECRET;
 const TIMEOUT_MS = 3000;
 
@@ -311,23 +316,41 @@ async function gameChecks() {
     report("G4", "un usuario de Google aparece con provider google en el state de los demás", g4, `D ve: ${JSON.stringify(playerIn(d, G))}`);
     gConn.ws.close();
 
-    // Dirección hacia el centro del mundo, para no chocar con un borde al medir
-    const towardCenter = (p) => ({ x: p.x < world.width / 2 ? 1 : -1, y: p.y < world.height / 2 ? 1 : -1 });
+    // Simulación local con la MISMA lógica del servidor (game.js) para elegir direcciones sin obstáculos
+    // y saber dónde debe detenerse el jugador. Con mapa usa el mismo archivo que el coordinator.
+    const health = await fetch(`${HTTP_URL}/health`).then((r) => r.json()).catch(() => ({}));
+    let map = null;
+    if (health.map) map = parseMap(JSON.parse(fs.readFileSync(path.join(__dirname, "..", "map", `${health.map}.json`), "utf8")));
+    const sim = createConfig({ ...process.env, WORLD_WIDTH: String(world.width), WORLD_HEIGHT: String(world.height), PLAYER_RADIUS: String(world.playerRadius) }, map);
+    console.log(`  (mundo ${world.width}×${world.height}${map ? ` con el mapa "${map.id}"` : " sin mapa"})`);
+    const simulate = (start, d0, seconds) => {
+        const p = { x: start.x, y: start.y, intent: { x: d0.x, y: d0.y } };
+        for (let t = 0; t < seconds - 1e-9; t += 0.05) stepPlayers(new Map([["s", p]]), 0.05, sim, map);
+        return p;
+    };
+    // Primera dirección de la lista con 1,3 s de recorrido libre (ni paredes ni bordes)
+    const freeDir = (p, options) =>
+        options.find((d0) => {
+            const end = simulate(p, d0, 1.3);
+            return Math.abs(Math.hypot(end.x - p.x, end.y - p.y) - sim.PLAYER_SPEED * 1.3) < 1;
+        }) ?? options[0];
+    const AXES = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }];
+    const DIAGONALS = [{ x: 1, y: 1 }, { x: -1, y: 1 }, { x: 1, y: -1 }, { x: -1, y: -1 }];
 
     // G5: un eje durante 1 s ≈ 200 px, y el otro cliente ve lo mismo
-    let dir = towardCenter(playerIn(d, D));
-    const g5 = await moveFor(d, e, D, { x: dir.x, y: 0 }, 1000);
+    let dir = freeDir(playerIn(d, D), AXES);
+    const g5 = await moveFor(d, e, D, dir, 1000);
     const sameView = g5.seen && g5.after && Math.abs(g5.seen.x - g5.after.x) < 0.5 && Math.abs(g5.seen.y - g5.after.y) < 0.5;
     report("G5", "intención de un eje durante 1 s mueve 160-240 px y el otro cliente lo ve igual", g5.dist >= 160 && g5.dist <= 240 && sameView,
         `${g5.dist.toFixed(1)} px · ${fmt(g5.before)} → ${fmt(g5.after)} · E ve ${fmt(g5.seen)}`);
 
     // G6: diagonal durante 1 s: misma distancia que un eje (no ~283)
-    dir = towardCenter(playerIn(d, D));
+    dir = freeDir(playerIn(d, D), DIAGONALS);
     const g6 = await moveFor(d, e, D, dir, 1000);
     report("G6", "intención diagonal durante 1 s recorre 160-240 px", g6.dist >= 160 && g6.dist <= 240, `${g6.dist.toFixed(1)} px`);
 
     // G7: {9999, 9999} se comporta como {1, 1}
-    dir = towardCenter(playerIn(d, D));
+    dir = freeDir(playerIn(d, D), DIAGONALS);
     const g7 = await moveFor(d, e, D, { x: 9999 * dir.x, y: 9999 * dir.y }, 1000);
     report("G7", "intención {9999, 9999} se comporta como {1, 1} (sin teletransporte)", g7.dist >= 160 && g7.dist <= 240, `${g7.dist.toFixed(1)} px`);
 
@@ -360,13 +383,26 @@ async function gameChecks() {
     const stillColor = playerIn(e, D)?.extras?.color === "#ff5500";
     report("G9", "extras con color aparece en el state de los otros y persiste", seenColor && stillColor, `E ve extras de D: ${JSON.stringify(playerIn(e, D)?.extras)}`);
 
-    // G10: el jugador nunca sale del mundo
+    // G10: hacia -x hasta detenerse: queda donde lo calcula el servidor (el borde del mundo, o la pared
+    // del mapa que lo frena) y nunca dentro de una casilla sólida
+    const startG10 = playerIn(d, D);
+    let stopAt = { x: startG10.x, y: startG10.y };
+    let secs = 0;
+    while (secs < 30) {
+        const next = simulate(stopAt, { x: -1, y: 0 }, 0.5);
+        secs += 0.5;
+        if (next.x === stopAt.x) break;
+        stopAt = next;
+    }
     sendIntent(d, -1, 0);
-    await sleep(8000);
+    await sleep(Math.round(secs * 1000) + 1500);
     sendIntent(d, 0, 0);
     await sleep(300);
     const edge = playerIn(d, D);
-    report("G10", "intención hacia -x durante 8 s deja x == playerRadius", edge?.x === world.playerRadius, `x = ${edge?.x} (radio ${world.playerRadius})`);
+    const insideSolid = map && edge ? boxBlocked(map, edge.x, edge.y, world.playerRadius) : false;
+    const g10 = Boolean(edge) && Math.abs(edge.x - stopAt.x) < 0.01 && edge.y === startG10.y && !insideSolid && (map !== null || edge.x === world.playerRadius);
+    report("G10", map ? "hacia -x se detiene contra el mapa donde lo calcula el servidor, sin pisar casillas sólidas" : "intención hacia -x hasta el borde deja x == playerRadius",
+        g10, `x = ${edge?.x} (esperado ${stopAt.x}) · dentro de una casilla sólida: ${insideSolid}`);
 
     // G11: provider ausente o inválido → 4001
     const sign = (extra) => jwt.sign({ userId: "x1", username: "sin_provider", ...extra }, JWT_SECRET, { algorithm: "HS256", expiresIn: "1h" });

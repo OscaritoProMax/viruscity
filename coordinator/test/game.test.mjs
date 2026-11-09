@@ -1,7 +1,8 @@
 // Pruebas de la lógica pura del juego (game.js) con node:test.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createConfig, randomSpawn, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot } from "../game.js";
+import { readFileSync } from "node:fs";
+import { createConfig, parseMap, boxBlocked, randomSpawn, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot } from "../game.js";
 
 const cfg = createConfig({});
 const R = cfg.PLAYER_RADIUS;
@@ -124,4 +125,110 @@ test("clampDt: milisegundos a segundos, acotado a [0, 0.25]", () => {
     assert.equal(clampDt(0), 0);
     assert.equal(clampDt(-10), 0);
     assert.equal(clampDt(NaN), 0);
+});
+
+// ---------- Mapa y colisiones ----------
+// Mapa de prueba de 6 × 5 casillas de 48 (el borde es sólido; "#" = sólido):
+//   ######
+//   #....#
+//   #.#..#
+//   #....#
+//   ######
+const tinyMap = () =>
+    parseMap({ id: "mini", tile: 48, cols: 6, rows: 5, solid: ["111111", "100001", "101001", "100001", "111111"], spawns: [[1, 1], [4, 3]] });
+
+test("parseMap: valida la forma del archivo y calcula el tamaño del mundo", () => {
+    const map = tinyMap();
+    assert.equal(map.width, 288);
+    assert.equal(map.height, 240);
+    assert.equal(map.solid[2 * 6 + 2], 1);
+    const base = { id: "m", tile: 48, cols: 2, rows: 1, solid: ["01"], spawns: [[0, 0]] };
+    for (const bad of [
+        null,
+        [],
+        { ...base, id: "" },
+        { ...base, tile: 0 },
+        { ...base, solid: ["01", "00"] },
+        { ...base, solid: ["0x"] },
+        { ...base, solid: ["011"] },
+        { ...base, spawns: [] },
+        { ...base, spawns: [[1, 0]] }, // casilla sólida
+        { ...base, spawns: [[5, 0]] }, // fuera del mapa
+        { ...base, spawns: [[0.5, 0]] },
+    ]) {
+        assert.throws(() => parseMap(bad), /mapa inválido/, JSON.stringify(bad));
+    }
+});
+
+test("createConfig con mapa: el mundo sale del mapa y se rechazan valores incompatibles", () => {
+    const map = tinyMap();
+    const c = createConfig({}, map);
+    assert.equal(c.WORLD_WIDTH, 288);
+    assert.equal(c.WORLD_HEIGHT, 240);
+    assert.equal(createConfig({ WORLD_WIDTH: "288" }, map).WORLD_WIDTH, 288);
+    assert.throws(() => createConfig({ WORLD_WIDTH: "1200" }, map), /no coincide con el mapa/);
+    assert.throws(() => createConfig({ PLAYER_RADIUS: "24" }, map), /menor que 24/);
+});
+
+test("boxBlocked: tocar el borde de una casilla no es chocar; entrar en ella sí", () => {
+    const map = tinyMap();
+    // Casilla sólida (2,2) ocupa x 96..144, y 96..144. Caja de radio 16.
+    assert.equal(boxBlocked(map, 80, 120, 16), false); // lado derecho en x = 96 (borde)
+    assert.equal(boxBlocked(map, 80.01, 120, 16), true);
+    assert.equal(boxBlocked(map, 160, 120, 16), false); // lado izquierdo en x = 144
+    assert.equal(boxBlocked(map, 64, 64, 16), false);
+    assert.equal(boxBlocked(map, 20, 100, 16), true); // toca el borde sólido del mapa
+    assert.equal(boxBlocked(map, -100, -100, 16), true); // fuera del mapa
+});
+
+test("stepPlayers con mapa: se detiene justo en la pared y no la atraviesa ni con dt grande", () => {
+    const map = tinyMap();
+    const c = createConfig({ PLAYER_SPEED: "2000" }, map); // 500 px en un tick de 0,25 s
+    const p = player(72, 120, 1, 0); // fila 2, a la izquierda de la casilla sólida (2,2)
+    stepPlayers(one(p), 0.25, c, map);
+    assert.equal(p.x, 96 - 16, "queda pegado al borde izquierdo de la pared");
+    assert.equal(p.y, 120);
+    stepPlayers(one(p), 0.25, c, map);
+    assert.equal(p.x, 80, "sigue sin atravesarla");
+});
+
+test("stepPlayers con mapa: en diagonal contra una pared se desliza por el otro eje", () => {
+    const map = tinyMap();
+    const c = createConfig({}, map);
+    const p = player(80, 120, 1, 1); // pegado a la pared por la izquierda, avanzando hacia abajo-derecha
+    const startY = p.y;
+    stepPlayers(one(p), 0.05, c, map);
+    assert.equal(p.x, 80, "x no entra en la pared");
+    assert.ok(p.y > startY, "y avanza");
+});
+
+test("stepPlayers con mapa: un pasillo de una casilla deja pasar a la caja del jugador", () => {
+    // Pasillo vertical en la columna 1 entre paredes en las columnas 0 y 2
+    const map = parseMap({ id: "pasillo", tile: 48, cols: 3, rows: 6, solid: ["111", "101", "101", "101", "101", "111"], spawns: [[1, 1]] });
+    const c = createConfig({}, map);
+    const p = player(72, 72, 0, 1);
+    for (let i = 0; i < 40; i++) stepPlayers(one(p), 0.05, c, map);
+    assert.equal(p.x, 72);
+    assert.equal(p.y, 5 * 48 - 16, "llega al final del pasillo");
+});
+
+test("mapa real (coordinator/map/virus-city.json): aparición y paseo al azar nunca pisan casillas sólidas", () => {
+    const map = parseMap(JSON.parse(readFileSync(new URL("../map/virus-city.json", import.meta.url), "utf8")));
+    const c = createConfig({}, map);
+    assert.equal(map.width, 3840);
+    assert.equal(map.height, 2880);
+    // Azar con semilla fija para que la prueba sea reproducible
+    let seed = 12345;
+    const rng = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    const dirs = [-1, 0, 1];
+    for (let n = 0; n < 50; n++) {
+        const p = player(0, 0);
+        Object.assign(p, randomSpawn(c, rng, map));
+        assert.equal(boxBlocked(map, p.x, p.y, c.PLAYER_RADIUS), false, "aparece en un lugar libre");
+        for (let t = 0; t < 200; t++) {
+            if (t % 10 === 0) p.intent = { x: dirs[Math.floor(rng() * 3)], y: dirs[Math.floor(rng() * 3)] };
+            stepPlayers(one(p), 0.05 + rng() * 0.2, c, map);
+            assert.equal(boxBlocked(map, p.x, p.y, c.PLAYER_RADIUS), false, `jugador ${n} dentro de una casilla sólida en (${p.x}, ${p.y})`);
+        }
+    }
 });

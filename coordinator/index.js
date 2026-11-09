@@ -10,11 +10,13 @@
 
 require("dotenv").config({ quiet: true }); // quiet: evita que dotenv imprima su propio mensaje en consola
 
+const fs = require("node:fs");
+const path = require("node:path");
 const http = require("node:http");
 const express = require("express");
 const { WebSocketServer } = require("ws");
 const jwt = require("jsonwebtoken");
-const { createConfig, randomSpawn, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot } = require("./game.js");
+const { createConfig, parseMap, randomSpawn, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot } = require("./game.js");
 
 // ---------- Configuración ----------
 
@@ -36,10 +38,28 @@ if (!/^\d+$/.test(HEARTBEAT_RAW) || Number(HEARTBEAT_RAW) < 1) {
 }
 const HEARTBEAT_INTERVAL_MS = Number(HEARTBEAT_RAW);
 
+// Mapa opcional con casillas sólidas (MAP_FILE, relativo a la carpeta del coordinator).
+// Sin MAP_FILE el mundo es un rectángulo vacío de WORLD_WIDTH × WORLD_HEIGHT.
+let map = null;
+if (process.env.MAP_FILE) {
+    const mapPath = path.resolve(__dirname, process.env.MAP_FILE);
+    let data;
+    try {
+        data = JSON.parse(fs.readFileSync(mapPath, "utf8"));
+    } catch {
+        fatal(`no se pudo leer MAP_FILE como JSON (${mapPath})`);
+    }
+    try {
+        map = parseMap(data);
+    } catch (err) {
+        fatal(err.message);
+    }
+}
+
 // Mundo, velocidad, tick y límites de mensajes (game.js valida cada valor)
 let cfg;
 try {
-    cfg = createConfig(process.env);
+    cfg = createConfig(process.env, map);
 } catch (err) {
     fatal(err.message);
 }
@@ -65,7 +85,7 @@ app.use((req, res, next) => {
 });
 
 app.get("/health", (req, res) => {
-    res.status(200).json({ status: "ok", players: players.size, tickRate: cfg.TICK_RATE });
+    res.status(200).json({ status: "ok", players: players.size, tickRate: cfg.TICK_RATE, map: map ? map.id : null });
 });
 
 // Cualquier otra ruta HTTP
@@ -160,7 +180,7 @@ wss.on("connection", (ws, payload) => {
 
     // Sesión duplicada: se queda la conexión nueva y se cierra la anterior con 4002
     const previous = players.get(userId);
-    const { x, y } = randomSpawn(cfg);
+    const { x, y } = randomSpawn(cfg, Math.random, map);
     players.set(userId, {
         username,
         provider, // lo pone el servidor desde el JWT (no es un extra del cliente)
@@ -277,7 +297,7 @@ function tick() {
     lastTick = now;
     if (players.size === 0) return;
 
-    stepPlayers(players, dt, cfg);
+    stepPlayers(players, dt, cfg, map);
 
     // El JSON se arma una sola vez por tick y se reutiliza para todos los sockets
     const message = JSON.stringify({ type: "state", t: now, players: snapshot(players) });
@@ -311,7 +331,8 @@ server.on("error", (err) => {
 });
 
 server.listen(PORT, () => {
-    console.log(`Coordinator en puerto ${PORT} (HTTP y WebSocket en /connect) · game loop a ${cfg.TICK_RATE} Hz`);
+    const mapText = map ? `mapa "${map.id}" ${map.cols}×${map.rows}` : `mundo ${cfg.WORLD_WIDTH}×${cfg.WORLD_HEIGHT} sin mapa`;
+    console.log(`Coordinator en puerto ${PORT} (HTTP y WebSocket en /connect) · game loop a ${cfg.TICK_RATE} Hz · ${mapText}`);
 });
 
 // ---------- Cierre ordenado ----------
