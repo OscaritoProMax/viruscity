@@ -1,488 +1,575 @@
-# Taller 4 – Sistemas Distribuidos · Proyecto final Parte I
+# Viruscity · Sistemas Distribuidos · Proyecto final (Partes I y II)
 
-**Identidad: login con JWT + lobby en vivo por WebSocket.** Universidad de Boyacá.
+Universidad de Boyacá. Tres procesos independientes que se comunican por red:
 
-Tres procesos independientes que se comunican por red:
+- **auth-service** (puerto 4000): registro e inicio de sesión con usuario/contraseña **y con Google**. Una sola tabla `users` en SQLite (`node:sqlite`) y JWT HS256.
+- **coordinator** (puerto 5000): **servidor autoritativo** del juego en vivo. Recibe a los jugadores por WebSocket, aplica sus *intenciones* en un game loop a 20 Hz y envía el estado a todos.
+- **client** (puerto 3000): páginas HTML + JS plano servidas con Express. `login.html` (con botón de Google) y `play.html` (el juego en canvas).
 
-- **auth-service**: registra usuarios y emite JWT. HTTP en el puerto 4000, con SQLite.
-- **coordinator**: recibe a los jugadores por WebSocket, verifica su token y mantiene la lista de conectados en memoria. HTTP + WebSocket en el puerto 5000.
-- **client**: páginas HTML + JS plano (login/registro y lobby), servidas con Express en el puerto 3000.
+**Parte I (Taller 4)** fue la identidad: login con JWT y lobby en vivo. **Parte II (Taller 5)** agrega el juego en vivo con el servidor como autoridad y el login con Google. Este README describe el estado actual (Taller 5); al final hay un resumen de lo que viene del Taller 4.
 
-Cada servicio se expone a Internet con su propio túnel **ngrok**. El cliente usa HTTPS para el auth-service y WSS para el coordinator.
+**Contenido**
+- [Parte II · Taller 5](#parte-ii--taller-5): 1. Arquitectura · 2. Base de datos · 3. Google · 4. API del auth · 5. Coordinador · 6. Extra: color · 7. Cliente · 8. Variables · 9. Correr todo · 10. Google Cloud · 11. ngrok · 12. Decisiones · 13. Errores típicos · 14. Sustentación
+- [Estructura del repositorio](#estructura-del-repositorio)
+- [Interfaz de Viruscity](#interfaz-de-viruscity)
+- [Parte I · Taller 4 (resumen)](#parte-i--taller-4-resumen)
+- [Créditos](#créditos)
 
 ---
+
+# Parte II · Taller 5
 
 ## 1. Arquitectura
 
 ```
- +-----------------------------------------------------------------------------+
- |                                  NAVEGADOR                                  |
- |      login.html / lobby.html                localStorage: token, username   |
- +-----------------------------------------------------------------------------+
-       |   ^                  |   ^                         |   ^
-   (0) |   | (0')         (1) |   | (2)                 (3) |   | (4)
- HTTPS |   | HTML, JS   HTTPS |   | { token }           WSS |   | players_update
-       |   | /config.js       |   | JWT                     |   | broadcast
-       v   |                  v   |                         v   |
- +----------------+     +----------------+        +----------------------------+
- |  túnel ngrok   |     |  túnel ngrok   |        |        túnel ngrok         |
- +----------------+     +----------------+        +----------------------------+
-         |                      |                               |
-         v                      v                               v
- +----------------+     +----------------+        +----------------------------+
- | client  :3000  |     | auth-service   |        | coordinator  :5000         |
- | Express        |     | :4000  Express |        | Express + ws               |
- | sirve public/  |     | bcrypt + JWT   |        | /connect?token=<JWT>       |
- | /config.js     |     | SQLite         |        | Map en memoria:            |
- | (desde .env)   |     | (users.db)     |        | userId -> { username,      |
- |                |     |                |        |   socket, connectedAt }    |
- +----------------+     +----------------+        +----------------------------+
-                                |                               |
-                                +--------- JWT_SECRET ----------+
-                   el auth firma el token y el coordinator lo verifica;
-                         los dos servicios no se llaman entre sí
+                         ┌──────────────────────────────────────────────┐
+                         │      Google Identity Services (GIS)          │
+                         │  accounts.google.com/gsi/client (navegador)  │
+                         └──────────────┬───────────────────────────────┘
+                                        │ (B1) ID token (JWT de Google)
+                                        ▼
+ ┌───────────────────────────────────────────────────────────────────────────────┐
+ │ NAVEGADOR  login.html ── play.html          localStorage: token, username     │
+ │            window.lastState = último "state" del servidor                     │
+ └──────┬──────────────────────┬─────────────────────────────┬─────────▲─────────┘
+        │ (0) HTML, JS,        │ (A) /register, /login       │ (C) WSS │ (D) welcome,
+        │     /config.js       │ (B2) /auth/google           │ intent, │     state (20 Hz),
+        │                      │      ◄── { token, username }│ extras  │     players_update
+        ▼                      ▼                             ▼         │
+ ┌────────────────┐   ┌──────────────────────┐   ┌───────────────────────────────┐
+ │ túnel ngrok    │   │ túnel ngrok          │   │ túnel ngrok                   │
+ └───────┬────────┘   └──────────┬───────────┘   └──────────────┬────────────────┘
+         ▼                       ▼                              ▼
+ ┌────────────────┐   ┌──────────────────────┐   ┌───────────────────────────────┐
+ │ client  :3000  │   │ auth-service  :4000  │   │ coordinator  :5000            │
+ │ Express        │   │ Express · bcryptjs   │   │ Express + ws                  │
+ │ public/        │   │ google-auth-library  │   │ /connect?token=<JWT>          │
+ │ /config.js     │   │ node:sqlite          │   │ Map userId → { username,      │
+ │ (desde .env)   │   │ users.db (1 tabla)   │   │   provider, socket, x, y,     │
+ └────────────────┘   └──────────┬───────────┘   │   intent, extras }            │
+                                 │               │ game loop: tick() a 20 Hz     │
+                                 │               └──────────────┬────────────────┘
+                                 └──────── JWT_SECRET ──────────┘
+                     (el auth firma el JWT y el coordinator lo verifica; no se llaman entre sí)
 ```
 
-### Flujo
+### Flujos
 
-0. El navegador abre el cliente (`/` redirige a `/login.html`). La página carga `/config.js`, que el servidor del cliente genera desde su `.env` con `AUTH_URL` y `COORDINATOR_WS_URL`.
-1. **Registro**: `POST {AUTH_URL}/register` con `{ username, password }`. El auth-service valida los datos, guarda el hash bcrypt en SQLite y responde `201 { userId, username }`. No inicia sesión automáticamente.
-2. **Login**: `POST {AUTH_URL}/login`. Si las credenciales son correctas responde `200 { token, username }`. El token es un JWT HS256 con `{ userId, username, iat, exp }`. El cliente lo guarda en `localStorage` y abre `lobby.html`.
-3. **Conexión WS**: el lobby abre `new WebSocket("{COORDINATOR_WS_URL}/connect?token=<JWT>")`. El coordinator verifica el JWT en el evento `upgrade`, **antes** de registrar al jugador:
-   - si es válido, lo agrega al `Map` (`userId → { username, socket, connectedAt }`);
-   - si no, completa el handshake y cierra con `4001 "invalid token"`.
-4. **Broadcast**: cada alta o baja envía a **todos** los jugadores conectados el mensaje `{ "type": "players_update", "players": [{ "userId", "username" }, ...] }`. El lobby redibuja la lista y marca con "(tú)" la propia entrada.
+**A. Registro e inicio de sesión local**
+1. `POST /register { username, password }` → valida, guarda el hash de bcryptjs con `provider = 'local'` → `201 { userId, username }`.
+2. `POST /login { username, password }` → `200 { token, username }`. El token es un JWT HS256 con `{ userId, username, provider: "local" }` más `iat` y `exp`.
+3. El cliente guarda `token` y `username` en `localStorage` y abre `play.html`.
+
+**B. Inicio de sesión con Google (Opción A, Google Identity Services)**
+1. El botón de Google (dibujado por GIS en `login.html`) entrega al navegador un **ID token** (`credential`).
+2. El cliente envía `POST /auth/google { idToken }`. El auth-service verifica el token con Google (firma, emisor, vencimiento y *audience*), exige `email_verified` y busca la cuenta por `sub`.
+3. **Si la cuenta ya existe**: `200 { token, username }`.
+4. **Si es el primer ingreso**: `409 { error: "username_required", hint }`. El cliente muestra el panel "Elige tu username" y reintenta con `{ idToken, username }` → `200` (o `409 username_taken` si el nombre está ocupado).
+5. El JWT es el mismo formato que el local, con `provider: "google"`. El cliente lo guarda y abre `play.html`.
+
+**C. Conexión WebSocket**
+1. `play.html` abre `new WebSocket("{COORDINATOR_WS_URL}/connect?token=<JWT>")`.
+2. El coordinator verifica el JWT **en el `upgrade`** (HS256, `userId`, `username`, `provider` ∈ {local, google} y `exp`). Si falla, completa el handshake y cierra con `4001 "invalid token"`.
+3. Si es válido: aparece en una posición al azar, recibe `welcome` y todos reciben `players_update`.
+
+**D. Game loop (servidor autoritativo)**
+1. El cliente envía solo **intenciones** (`{ type: "intent", intent: { dir: { x, y } } }`) y **extras** (`extras_update`). El handler de mensajes solo las **guarda**.
+2. Cada tick (20 Hz) el servidor calcula `dt` real, mueve a todos con su intención normalizada, los mantiene dentro del mundo y envía **un** mensaje `state` con todos los jugadores.
+3. El cliente guarda ese mensaje en `window.lastState` y lo dibuja (con un suavizado solo visual).
 
 ---
 
-## 2. Estructura del repositorio
+## 2. Base de datos
 
-```
-.
-├── .gitignore
-├── CLAUDE.md                 # reglas y decisiones del proyecto
-├── README.md
-├── auth-service/
-│   ├── .env.example
-│   ├── .npmrc                # ignore-scripts=true (usa los binarios precompilados)
-│   ├── index.js              # Express + SQLite + bcrypt + JWT
-│   ├── package.json
-│   └── package-lock.json
-├── coordinator/
-│   ├── .env.example
-│   ├── index.js              # Express + ws: upgrade con JWT, Map, broadcast, heartbeat
-│   ├── package.json
-│   ├── package-lock.json
-│   └── scripts/
-│       └── smoke-test.js     # prueba automatizada S1-S11 (npm run smoke)
-└── client/
-    ├── .env.example
-    ├── server.js             # Express estático + /config.js desde .env
-    ├── package.json
-    ├── package-lock.json
-    ├── public/               # login, lobby y juego (detalle en la sección 11)
-    │   ├── login.html
-    │   ├── lobby.html
-    │   ├── game.html
-    │   ├── css/              # tokens.css, base.css, components.css, login.css, lobby.css, game.css
-    │   ├── img/              # logo.svg, favicon.svg
-    │   └── js/               # login.js, lobby.js, login-ui.js, game-shell.js y ui/ (módulos de interfaz)
-    └── test/                 # pruebas de la interfaz (npm test)
+Una sola tabla, con el esquema exacto de [auth-service/db.js](auth-service/db.js#L14):
+
+```sql
+CREATE TABLE users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT UNIQUE NOT NULL,
+  provider TEXT NOT NULL CHECK(provider IN ('local','google')),
+  password_hash TEXT,
+  google_sub TEXT UNIQUE,
+  email TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+)
 ```
 
-Archivos que existen solo en tu equipo y están ignorados por git: `*/.env`, `*/node_modules/` y `auth-service/users.db` (se crea al arrancar el auth-service).
+Además hay un índice aparte, `users_username_nocase` (`UNIQUE` sobre `username COLLATE NOCASE`), para que "Oscar" y "oscar" sean el mismo nombre. No cambia el esquema de la tabla.
 
----
+**Invariantes por provider** (se hacen cumplir en `createStatements()` de `db.js` y en `app.js`):
 
-## 3. Requisitos
-
-- **Node.js >= 18** (desarrollado y probado con Node 24) y **npm**.
-- **git**.
-- **ngrok** con cuenta y authtoken configurado (`ngrok config add-authtoken <TU_TOKEN>`).
-- Opcional: **wscat** para probar el coordinator desde la terminal (`npm install -g wscat`).
-
-> En Windows, los comandos de este README están escritos para **Git Bash**. En PowerShell, `curl` es un alias de `Invoke-WebRequest`; usa `curl.exe` y ten en cuenta que las comillas del JSON se escriben distinto.
-
----
-
-## 4. Instalación y ejecución
-
-Cada servicio se instala y se ejecuta en su propia terminal. Arráncalos en este orden: auth-service, coordinator y client.
-
-### Generar el secreto compartido
-
-`JWT_SECRET` debe ser **idéntico** en `auth-service/.env` y en `coordinator/.env`: el auth firma los tokens con él y el coordinator los verifica con él. Genera uno con:
-
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-```
-
-Los dos servicios se niegan a arrancar si `JWT_SECRET` falta o tiene menos de 16 caracteres.
-
-### auth-service
-
-```bash
-cd auth-service
-npm install
-cp .env.example .env
-# edita .env: pon en JWT_SECRET el valor generado arriba
-npm start
-```
-
-Salida esperada: `Auth service en puerto 4000`.
-
-> `auth-service/.npmrc` contiene `ignore-scripts=true`. bcrypt y better-sqlite3 traen binarios precompilados. Sin esa opción, npm 11 intenta compilar better-sqlite3 con node-gyp al instalar desde `package-lock.json`, y la instalación falla en Windows si no está instalado Visual Studio. `npm start` y `npm run dev` funcionan igual.
-
-### coordinator
-
-```bash
-cd coordinator
-npm install
-cp .env.example .env
-# edita .env: pon en JWT_SECRET EXACTAMENTE el mismo valor que en auth-service/.env
-npm start
-```
-
-Salida esperada: `Coordinator en puerto 5000 (HTTP y WebSocket en /connect)`.
-
-### client
-
-```bash
-cd client
-npm install
-cp .env.example .env
-# en local no hace falta editar nada; con ngrok ver la sección 7
-npm start
-```
-
-Salida esperada: `Client en puerto 3000`. Abre <http://localhost:3000>.
-
-### Variables de entorno
-
-**auth-service/.env**
-
-| Variable | Qué hace | Ejemplo |
-|---|---|---|
-| `PORT` | Puerto HTTP (por defecto 4000) | `4000` |
-| `JWT_SECRET` | Clave para firmar los JWT (HS256). Obligatoria, al menos 16 caracteres, igual que en coordinator | `3f9c…` (64 caracteres hex) |
-| `JWT_EXPIRES_IN` | Vigencia del token (formato de jsonwebtoken: `1h`, `30s`, `15m`; solo dígitos = segundos). Por defecto `1h` | `1h` |
-| `BCRYPT_ROUNDS` | Costo de bcrypt. Entero entre 10 y 31, por defecto 10 | `10` |
-| `DB_PATH` | Archivo SQLite, relativo a la carpeta del servicio. Por defecto `./users.db` | `./users.db` |
-
-**coordinator/.env**
-
-| Variable | Qué hace | Ejemplo |
-|---|---|---|
-| `PORT` | Puerto HTTP + WebSocket (por defecto 5000) | `5000` |
-| `JWT_SECRET` | Misma clave que el auth-service, para verificar los JWT. Obligatoria | `3f9c…` |
-| `HEARTBEAT_INTERVAL_MS` | Cada cuántos ms se hace ping a cada socket; quien no responda antes del siguiente ping se desconecta. Por defecto 30000 | `30000` |
-| `AUTH_URL` *(opcional, solo para `npm run smoke`)* | URL del auth-service que usa el smoke-test. Por defecto `http://localhost:4000` | `http://localhost:4000` |
-| `COORDINATOR_WS_URL` *(opcional, solo para `npm run smoke`)* | URL WS del coordinator que usa el smoke-test. Por defecto `ws://localhost:5000` | `ws://localhost:5000` |
-
-**client/.env** (las tres son obligatorias; el servidor no arranca si falta alguna o si la URL no es válida)
-
-| Variable | Qué hace | Ejemplo local | Ejemplo con ngrok |
+| provider | password_hash | google_sub | email |
 |---|---|---|---|
-| `PORT` | Puerto del servidor del cliente | `3000` | `3000` |
-| `AUTH_URL` | URL del auth-service (`http://` o `https://`); se entrega al navegador en `/config.js` sin barra final | `http://localhost:4000` | `https://<túnel-4000>` |
-| `COORDINATOR_WS_URL` | URL del coordinator (`ws://` o `wss://`); se entrega en `/config.js` sin barra final | `ws://localhost:5000` | `wss://<túnel-5000>` |
+| `local` | obligatorio (hash bcryptjs) | NULL | NULL |
+| `google` | NULL | obligatorio (el `sub` de Google) | obligatorio |
+
+**¿Por qué una sola tabla?**
+- **Un username no se repite entre providers:** la restricción `UNIQUE` (y el índice sin mayúsculas) vale para todos. Si `alice` es local, nadie puede elegir `alice` con Google, y al revés.
+- **Una sola identidad aguas abajo:** coordinador, puntajes o replicación futuros trabajan con un único `userId`. Con dos tablas habría que unir o duplicar esa lógica.
+
+**Migración automática desde el Taller 4.** Al arrancar, `ensureSchema()` revisa `PRAGMA table_info('users')`:
+- **Si no hay tabla:** la crea.
+- **Si es la tabla del Taller 4 (sin `provider`):**
+  1. copia el archivo a `users.db.bak` (o `users.db.<fecha>.bak` si ya existe uno);
+  2. dentro de una transacción crea `users_new`, copia los usuarios con `provider = 'local'` conservando sus `id`, borra la tabla vieja y renombra la nueva;
+  3. si algo falla, hace `ROLLBACK`;
+  4. registra solo el conteo: `[db] migración aplicada: N usuarios conservados como provider=local`.
+- **Si ya tiene `provider`:** no hace nada. Es idempotente.
+
+Los `.bak` están en `.gitignore`.
 
 ---
 
-## 5. Probar la API con curl
+## 3. Autenticación con Google
 
-Con el auth-service corriendo (base de datos vacía). Estas son las respuestas reales obtenidas al ejecutar los comandos:
+**Opción A: Google Identity Services, con el ID token en el navegador.**
+- **No hay Client Secret ni redirect URI.** No hay secreto que guardar ni rutas de callback que proteger: menos superficie de ataque.
+- **El navegador recibe el ID token directamente** (un JWT firmado por Google) y lo envía al auth-service, que lo verifica.
+- **El `GOOGLE_CLIENT_ID` es público:** viaja en `/config.js` hacia el navegador.
+
+**Validaciones y dónde se hacen**
+
+| Validación | Dónde |
+|---|---|
+| Forma de JWT (3 segmentos base64url) antes de llamar a Google; así un token basura se rechaza sin ir a la red | [auth-service/google.js](auth-service/google.js#L14) `makeGoogleVerifier()` |
+| Firma, emisor y vencimiento con los certificados de Google; `audience` = nuestro `GOOGLE_CLIENT_ID` | `client.verifyIdToken({ idToken, audience: clientId })` en `google.js` |
+| **Defensa en profundidad:** además se compara `payload.aud === clientId` | `google.js` (línea 23) |
+| `email_verified === true` | [auth-service/app.js](auth-service/app.js#L139) `POST /auth/google` |
+| La llave de la cuenta es `sub` (`google_sub`), **nunca el email** (el email puede cambiar o reasignarse) | `findByGoogle(sub)` en `app.js` / `db.js` |
+| Nunca se registran el idToken, el email, el sub ni `err.message` de la verificación (la librería puede incluir el token en sus mensajes) | `app.js`: solo el texto fijo `"verificación de ID token fallida"` |
+
+**Respuestas de `POST /auth/google`**
+
+| Código | Cuerpo | Cuándo |
+|---|---|---|
+| 200 | `{ "token": "eyJ…", "username": "bob_google" }` | Cuenta ya vinculada, o primer ingreso con un username válido y libre |
+| 409 | `{ "error": "username_required", "hint": "Primer login con Google: elige un username." }` | Primer ingreso sin `username` |
+| 409 | `{ "error": "username_taken" }` | El username elegido ya existe (en cualquier provider y con cualquier combinación de mayúsculas) |
+| 401 | `{ "error": "invalid_id_token" }` | Token con formato inválido, firma, emisor o audience incorrectos, o vencido |
+| 401 | `{ "error": "email_not_verified" }` | El correo de la cuenta de Google no está verificado |
+| 400 | `{ "error": "idToken requerido" }` | Falta `idToken`, no es texto o está vacío |
+| 400 | `{ "error": "username debe tener entre 3 y 32 caracteres y solo letras, números o guion bajo" }` | Username con formato inválido |
+| 500 | `{ "error": "internal" }` | Error inesperado (se registra un texto fijo, sin detalles) |
+
+---
+
+## 4. API del auth-service
+
+| Método y ruta | Cuerpo | Respuestas |
+|---|---|---|
+| `GET /health` | — | `200 { "status": "ok" }` |
+| `POST /register` | `{ username, password }` | `201 { userId, username }` · `409 { error: "El nombre de usuario ya existe" }` · `400 { error }` |
+| `POST /login` | `{ username, password }` | `200 { token, username }` · `401 { error: "Credenciales inválidas" }` (contraseña incorrecta, usuario inexistente **o usuario de Google**: el mismo cuerpo) · `400 { error: "username y password son obligatorios" }` |
+| `POST /auth/google` | `{ idToken, username? }` | Ver la tabla de la sección 3 |
+
+Otras respuestas comunes: `400 { error: "JSON inválido" }` · `413 { error: "Cuerpo demasiado grande" }` (más de 4 kB) · `404 { error: "Ruta no encontrada" }`.
+
+**Ejemplos con curl** (Git Bash; con el auth-service en `localhost:4000`):
 
 ```bash
-# Estado del servicio
-curl -s http://localhost:4000/health
-# {"status":"ok"}
-```
-
-### POST /register
-
-```bash
-# 201: usuario creado
 curl -s -w "  HTTP %{http_code}\n" -X POST http://localhost:4000/register -H "Content-Type: application/json" -d '{"username":"alice","password":"secret123"}'
 # {"userId":"1","username":"alice"}  HTTP 201
 
-# 409: el usuario ya existe
-curl -s -w "  HTTP %{http_code}\n" -X POST http://localhost:4000/register -H "Content-Type: application/json" -d '{"username":"alice","password":"secret123"}'
+curl -s -w "  HTTP %{http_code}\n" -X POST http://localhost:4000/register -H "Content-Type: application/json" -d '{"username":"ALICE","password":"secret123"}'
 # {"error":"El nombre de usuario ya existe"}  HTTP 409
 
-# 400: username inválido (menos de 3 caracteres)
 curl -s -w "  HTTP %{http_code}\n" -X POST http://localhost:4000/register -H "Content-Type: application/json" -d '{"username":"ab","password":"secret123"}'
-# {"error":"username debe tener entre 3 y 30 caracteres y solo letras, números o guion bajo"}  HTTP 400
+# {"error":"username debe tener entre 3 y 32 caracteres y solo letras, números o guion bajo"}  HTTP 400
 
-# 400: password demasiado corta
-curl -s -w "  HTTP %{http_code}\n" -X POST http://localhost:4000/register -H "Content-Type: application/json" -d '{"username":"bob","password":"123"}'
-# {"error":"password debe tener entre 6 y 72 caracteres"}  HTTP 400
-
-# 400: JSON roto
-curl -s -w "  HTTP %{http_code}\n" -X POST http://localhost:4000/register -H "Content-Type: application/json" -d '{bad'
-# {"error":"JSON inválido"}  HTTP 400
-```
-
-### POST /login
-
-```bash
-# 200: credenciales correctas (el token real es mucho más largo)
 curl -s -w "  HTTP %{http_code}\n" -X POST http://localhost:4000/login -H "Content-Type: application/json" -d '{"username":"alice","password":"secret123"}'
-# {"token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOi…","username":"alice"}  HTTP 200
+# {"token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.…","username":"alice"}  HTTP 200
 
-# 401: contraseña incorrecta
 curl -s -w "  HTTP %{http_code}\n" -X POST http://localhost:4000/login -H "Content-Type: application/json" -d '{"username":"alice","password":"incorrecta"}'
 # {"error":"Credenciales inválidas"}  HTTP 401
-
-# 401: usuario inexistente (mismo mensaje, a propósito)
-curl -s -w "  HTTP %{http_code}\n" -X POST http://localhost:4000/login -H "Content-Type: application/json" -d '{"username":"noexiste","password":"secret123"}'
-# {"error":"Credenciales inválidas"}  HTTP 401
-
-# 400: falta la contraseña
-curl -s -w "  HTTP %{http_code}\n" -X POST http://localhost:4000/login -H "Content-Type: application/json" -d '{"username":"alice"}'
-# {"error":"username y password son obligatorios"}  HTTP 400
 ```
 
-Para guardar el token en una variable y ver su payload:
+**`/auth/google` con curl.** El ID token lo emite Google en el navegador, así que no se puede fabricar. Para obtener uno real:
+1. Inicia sesión con el botón de Google en `login.html` con DevTools abierto.
+2. En la pestaña **Network**, abre la petición `auth/google` y copia `idToken` desde **Payload**. Vale alrededor de una hora y solo para tu `GOOGLE_CLIENT_ID`.
+
+Con un token ficticio la respuesta es siempre 401:
 
 ```bash
-TOKEN=$(curl -s -X POST http://localhost:4000/login -H "Content-Type: application/json" -d '{"username":"alice","password":"secret123"}' | node -pe "JSON.parse(require('fs').readFileSync(0, 'utf8')).token")
+curl -s -w "  HTTP %{http_code}\n" -X POST http://localhost:4000/auth/google -H "Content-Type: application/json" -d '{"idToken":"abc"}'
+# {"error":"invalid_id_token"}  HTTP 401
 
-echo "$TOKEN" | cut -d. -f2 | node -e "const p=JSON.parse(Buffer.from(require('fs').readFileSync(0,'utf8').trim(),'base64url'));console.log(p, 'exp-iat =', p.exp-p.iat)"
-# { userId: '1', username: 'alice', iat: 1793829122, exp: 1793832722 } exp-iat = 3600
+curl -s -w "  HTTP %{http_code}\n" -X POST http://localhost:4000/auth/google -H "Content-Type: application/json" -d '{}'
+# {"error":"idToken requerido"}  HTTP 400
 ```
 
 ---
 
-## 6. Probar el coordinator
+## 5. Coordinador autoritativo
 
-### Con wscat
+**El cliente nunca mueve al jugador.** Solo dice hacia dónde quiere ir; el servidor decide dónde está.
 
-Con el auth-service y el coordinator corriendo, y `$TOKEN` obtenido como en la sección anterior:
+**Game loop** ([coordinator/index.js](coordinator/index.js#L274) `tick()` y lógica pura en [coordinator/game.js](coordinator/game.js#L94)):
+1. **`dt` real:** se mide con `Date.now()` entre ticks y se acota a 0,25 s (`clampDt`). Así la velocidad no depende del tick rate, y una pausa del proceso no provoca un salto enorme.
+2. **Movimiento normalizado:** `stepPlayers` divide la intención por `Math.hypot(x, y)`, así que la diagonal avanza lo mismo que un eje (200 px/s, no 283).
+3. **Límites del mundo:** cada jugador queda dentro de `[radio, ancho − radio]` × `[radio, alto − radio]`.
+4. **Un broadcast por tick:** `snapshot(players)` se serializa **una vez** y se envía a todos. Los handlers de mensajes nunca hacen broadcast.
+5. **20 Hz de verdad:** el loop se programa con una hora objetivo (`scheduleTick`), no con `setInterval`. En Windows `setInterval(50)` dispara cada ~60 ms (≈16,5 Hz).
 
-```bash
-# Conexión válida: llega de inmediato la lista con alice
-wscat -c "ws://localhost:5000/connect?token=$TOKEN"
-# Connected (press CTRL+C to quit)
-# < {"type":"players_update","players":[{"userId":"1","username":"alice"}]}
+**Protocolo**
 
-# Token inválido: el handshake se completa y el servidor cierra con 4001
-wscat -c "ws://localhost:5000/connect?token=abc"
-# Disconnected (code: 4001, reason: "invalid token")
+Del servidor al cliente:
+```json
+{ "type": "welcome", "you": { "userId": "4", "username": "alice", "provider": "local" },
+  "world": { "width": 1200, "height": 800, "playerRadius": 16, "tickRate": 20 } }
+
+{ "type": "state", "t": 1794174650735,
+  "players": [ { "userId": "4", "username": "alice", "provider": "local", "x": 108.01, "y": 589.1, "extras": { "color": "#ff5500" } },
+               { "userId": "7", "username": "bob_google", "provider": "google", "x": 1096.12, "y": 576.09, "extras": {} } ] }
+
+{ "type": "players_update", "players": [ { "userId": "4", "username": "alice" }, { "userId": "7", "username": "bob_google" } ] }
 ```
 
-**Dos usuarios viendo el broadcast**: registra a un segundo usuario y conéctalo en otra terminal mientras alice sigue conectada.
-
-```bash
-curl -s -X POST http://localhost:4000/register -H "Content-Type: application/json" -d '{"username":"bob","password":"secret456"}'
-TOKEN_B=$(curl -s -X POST http://localhost:4000/login -H "Content-Type: application/json" -d '{"username":"bob","password":"secret456"}' | node -pe "JSON.parse(require('fs').readFileSync(0, 'utf8')).token")
-wscat -c "ws://localhost:5000/connect?token=$TOKEN_B"
+Del cliente al servidor:
+```json
+{ "type": "intent", "intent": { "dir": { "x": 1, "y": -1 } } }
+{ "type": "extras_update", "extras": { "color": "#ff5500" } }
 ```
 
-Las dos terminales reciben `players_update` con alice y bob. Si cierras la de bob (Ctrl+C), la de alice recibe la lista solo con alice. Si abres una segunda conexión con el **mismo** token de alice, la primera se cierra con `Disconnected (code: 4002, reason: "replaced by new session")`.
+**Validaciones y límites** ([game.js](coordinator/game.js#L60) e [index.js](coordinator/index.js#L221) `ws.on("message")`):
+- **`intent`:** `x` e `y` deben ser `number` finitos; se reducen a −1/0/1 con `Math.sign` (`{9999, -5}` → `{1, -1}`). Strings, NaN, Infinity, arrays o falta de `dir` → se ignora.
+- **`extras_update`:** objeto no nulo y no array, de **máximo 1024 bytes** serializado (`MAX_EXTRAS_BYTES`). Si trae `color`, debe cumplir `^#[0-9a-fA-F]{6}$` (si no, se ignora todo el mensaje) y se guarda en minúsculas. Se guarda una **copia** y **reemplaza** los extras anteriores.
+- **`maxPayload` de 2048 bytes:** un mensaje mayor cierra el socket.
+- **Máximo 60 mensajes por segundo y por socket** (`MAX_MSGS_PER_SEC`): el exceso se descarta en silencio.
+- **Lo inválido** (JSON roto, tipos desconocidos) se ignora sin responder ni caer. Nada de lo recibido se registra en logs.
+- **Socket vigente:** solo cuentan los mensajes del socket vigente del usuario.
 
-En cualquier momento, `curl -s http://localhost:5000/health` devuelve `{"status":"ok","players":N}`.
-
-### Prueba automatizada
-
-```bash
-cd coordinator
-npm run smoke
-```
-
-Crea 3 usuarios con sufijo aleatorio y comprueba 11 casos: sin token, token `abc`, token firmado con otra secret y token vencido (todos con 4001), lista con A, lista con A y B, salida de B, sesión duplicada con 4002, que la conexión vieja no borre a la nueva, expiración con el socket abierto (`4001 "token expired"`) y una ruta distinta de `/connect`. Imprime ✔/✘ por caso y termina con código 1 si alguno falla. Requiere el auth-service y el coordinator levantados.
-
----
-
-## 7. Despliegue con ngrok
-
-1. Con los tres servicios corriendo, abre **una terminal por túnel**:
-
-   ```bash
-   ngrok http 4000
-   ngrok http 5000
-   ngrok http 3000
-   ```
-
-   Cada una muestra una URL pública `https://….ngrok-free.app` (el dominio exacto depende de tu cuenta).
-
-2. Edita **solo** `client/.env`, sin barra final:
-
-   ```
-   AUTH_URL=https://<host-del-túnel-4000>
-   COORDINATOR_WS_URL=wss://<host-del-túnel-5000>
-   ```
-
-   En auth-service y coordinator no cambia nada: el auth-service acepta peticiones de cualquier origen (CORS abierto) y el coordinator acepta la conexión de cualquier página que traiga un token válido.
-
-3. **Reinicia el client** (Ctrl+C y `npm start`): `/config.js` se genera con los valores de `.env` al arrancar.
-
-4. Abre en el navegador `https://<host-del-túnel-3000>`.
-
-**¿Por qué `wss://` y no `ws://`?** La página del cliente llega por HTTPS a través de ngrok. Los navegadores bloquean el *contenido mixto*: desde una página `https://` no se puede abrir un WebSocket sin cifrar (`ws://`). Hay que usar `wss://`, que ngrok termina con TLS y reenvía al puerto 5000 local.
-
-**Página de aviso de ngrok**: en el plan gratuito, la primera visita desde el navegador a una URL de ngrok muestra una página de aviso; pulsa **"Visit Site"**. Para que esa página no reemplace las respuestas JSON del auth-service, el cliente envía el header `ngrok-skip-browser-warning: true` en sus `fetch` de registro y login (ver [client/public/js/login.js](client/public/js/login.js)). Si el lobby no logra conectar por WSS, abre una vez `https://<host-del-túnel-5000>/health` en el mismo navegador y pulsa "Visit Site".
-
-> **Nota: varias sesiones de ngrok.** Si ngrok indica que tu cuenta gratuita no permite varias sesiones de agente simultáneas, no abras tres procesos: define los tres túneles en el archivo de configuración de ngrok y levántalos juntos con `ngrok start --all`. El formato del archivo cambia entre versiones, así que consúltalo en la documentación oficial de tu versión: revísala con `ngrok version` (este proyecto se probó con ngrok 3.39.11) y `ngrok config --help`.
+**Otros puntos**
+- **`provider` lo pone el servidor**, desde el JWT verificado; no es un extra que el cliente pueda falsificar.
+- **Sesión duplicada** (Taller 4): si la misma cuenta abre otra conexión, la anterior se cierra con `4002 "replaced by new session"`. El `close` de la vieja no borra a la nueva.
+- **Heartbeat:** `ping` cada `HEARTBEAT_INTERVAL_MS`; quien no responde antes del siguiente ciclo se termina.
+- **Expiración:** al conectar se programa el cierre `4001 "token expired"` para el `exp` del token.
+- **`GET /health`:** responde `{ "status": "ok", "players": N, "tickRate": 20 }`.
 
 ---
 
-## 8. Decisiones de diseño
+## 6. Feature extra: color del jugador e insignia del provider
 
-**JWT verificado en el `upgrade` y cierre 4001 tras el handshake.**
-El coordinator usa `WebSocketServer({ noServer: true })` y valida el token en `server.on("upgrade")`, así que un jugador con token inválido nunca llega al `Map` ni recibe la lista. Si el token falla no se responde un 401 HTTP: el navegador no expone el status de un upgrade rechazado (solo ve un cierre 1006 genérico). En cambio, completar el handshake y cerrar con `4001 "invalid token"` le da al cliente un código legible para mostrar el mensaje correcto.
+**Color.** En `play.html` el jugador elige su color con un selector o con seis colores predefinidos.
+1. El cliente envía `{ type: "extras_update", extras: { color } }`.
+2. El coordinator lo valida (`sanitizeExtras`) y lo guarda en `p.extras` (en `ws.on("message")` de [index.js](coordinator/index.js#L221)).
+3. Desde ese tick, el color viaja en **cada `state`** dentro de `extras`, para todos los jugadores.
 
-**Sesión duplicada: se cierra la anterior con 4002.**
-Si la misma cuenta abre otra conexión, se queda la nueva y la anterior recibe `4002 "replaced by new session"`. Lo más probable es que el usuario quiera usar la pestaña o el dispositivo que acaba de abrir, y así nunca hay dos entradas del mismo `userId` en la lista. La pestaña vieja muestra "Tu sesión se abrió en otra pestaña".
+- **Es replicado:** el estado vive en el servidor y todos lo reciben en el mismo mensaje.
+- **Es persistente durante la sesión:** sigue en `p.extras` hasta que el jugador se desconecta. Además el cliente lo guarda en `localStorage` (`playColor`) y lo reenvía al recibir `welcome`, así que se conserva al recargar.
 
-**Condición de carrera en el `close`.**
-Cuando se reemplaza una sesión, el `close` de la conexión vieja llega *después* de registrar la nueva. Por eso el manejador solo borra al jugador si `players.get(userId)?.socket === ws`. Si no es el socket vigente no hace nada, y el cierre viejo no borra la conexión nueva (lo verifica S9 del smoke-test).
-
-**bcrypt con rounds configurables y mínimo 10.**
-`BCRYPT_ROUNDS` permite subir el costo a medida que el hardware mejora, sin tocar el código. El mínimo de 10 evita configuraciones débiles por error, y el servicio no arranca con un valor menor. El máximo de 31 es el límite de bcrypt.
-
-**`JWT_EXPIRES_IN` configurable.**
-Por defecto el token dura `1h`. Para demostrar la expiración basta con poner `30s` en `.env` y reiniciar, sin tocar código. Si el valor trae solo dígitos se convierte a número, porque jsonwebtoken interpreta un string numérico como milisegundos.
-
-**Mensaje genérico en 401 y hash ficticio.**
-El login responde siempre `401 "Credenciales inválidas"`, exista o no el usuario, para no revelar qué cuentas existen. Si el usuario no existe, igual se ejecuta `bcrypt.compare` contra un `DUMMY_HASH` calculado al arrancar, para que la respuesta tarde lo mismo y no se pueda distinguir por tiempo.
-
-**SQLite propia del auth-service.**
-Cada servicio es dueño de sus datos: solo el auth-service conoce usuarios y contraseñas. El coordinator no necesita la base, porque toda la identidad viaja firmada en el JWT. SQLite (better-sqlite3) no requiere un servidor aparte y las consultas son preparadas, nunca SQL concatenado.
-
-**Estado del coordinator en memoria y su limitación.**
-El `Map` de jugadores es rápido y simple, pero se pierde si el coordinator se reinicia (los clientes reciben el cierre y vuelven al login). Además, no escala a varios coordinadores: cada uno vería solo a sus propios jugadores. Compartir o replicar ese estado entre coordinadores es justamente el objetivo de las siguientes partes del proyecto.
-
-**Heartbeat.**
-Cada `HEARTBEAT_INTERVAL_MS` (30 s por defecto) el servidor hace `ping` a cada socket. Si no llega el `pong` antes del siguiente ciclo, lo termina. Así se detectan conexiones muertas que nunca enviaron el cierre (red caída, laptop suspendida), y el jugador desaparece de la lista de los demás.
-
-**Cierre por expiración del token.**
-Verificar el token solo al conectar no basta: un socket podría seguir abierto horas después de vencer el token. Al conectar se programa un `setTimeout` hasta `exp` que cierra con `4001 "token expired"`; el lobby vuelve al login. El timer se limpia en el `close`.
-
-**Cliente sin frameworks y `/config.js` desde `.env`.**
-HTML + JS plano basta para dos pantallas y evita dependencias y pasos de build. Las URLs de los servicios no están escritas en el código: `client/server.js` genera `/config.js` desde `.env` (sin barra final y con `Cache-Control: no-store`), así que pasar de localhost a ngrok es editar `.env` y reiniciar.
-
-**`textContent` contra XSS.**
-Los nombres de usuario y los mensajes del servidor se insertan siempre con `textContent` y `createElement`, nunca como HTML. Aunque alguien lograra un nombre con `<script>`, el navegador lo mostraría como texto. Además, el registro solo admite `^[A-Za-z0-9_]+$`.
-
-### Decisiones tomadas durante el desarrollo
-
-- **Origen del código**: los archivos del código base estaban copiados en la raíz (commit `3182f36 inicial`). Eran idénticos al repo de GitHub; se movieron a una copia local de solo lectura y se quitaron del repo en el commit de estructura.
-- **auth-service, qué se tomó del base**: el base no tiene autenticación y no se copió ningún archivo. Solo se reutilizaron el patrón `app.listen(PORT, (err) => …)` de Express 5 y el formato `res.status(4xx).json({ error })`. Para la configuración se usa dotenv en lugar de `--env-file-if-exists` (que exige Node >= 22.9).
-- **auth-service, configuración y logs**:
-  - dotenv se carga con `{ quiet: true }` para que no imprima su propio mensaje.
-  - `DB_PATH` se resuelve relativo a la carpeta del servicio.
-  - `PORT` se valida entre 1 y 65535.
-  - El middleware de log va antes de `express.json()`, para que también se registren los 400/413 de JSON roto o cuerpo grande.
-- **auth-service, `/login`**: no aplica trim ni reglas de formato al username (solo exige texto no vacío de hasta 1000 caracteres). Por eso el cliente envía el username ya recortado.
-- **auth-service, contraseñas**: la longitud de 6–72 se mide en caracteres. bcrypt trunca a 72 bytes, así que con caracteres multibyte (tildes, emojis) los bytes que pasen de 72 no cuentan.
-- **auth-service, cierre y bcrypt**: el cierre ordenado fuerza la salida a los 5 s. bcrypt 6.0.0 trae binarios precompilados, así que npm puede avisar que no ejecutó su script de instalación, pero el módulo funciona sin compilar.
-- **auth-service, instalación limpia**: la auditoría final detectó que `npm install` desde el lockfile lanzaba un `node-gyp rebuild` de better-sqlite3 y fallaba sin Visual Studio. Se agregó `auth-service/.npmrc` con `ignore-scripts=true`, porque los dos módulos nativos traen binarios precompilados.
-- **coordinator, qué se tomó del base**: el `coordinator/index.js` del base no cumplía (sin token, sin upgrade, sin close, manejaba workers) y se reescribió. Se reutilizaron `send()` con el chequeo `readyState === OPEN`, la idea de `broadcast()`, la estructura por secciones y HTTP + WS en el mismo puerto. Se eliminaron roles, workers, pulsos de aplicación, `/status`, el dashboard estático y `cors()`.
-- **coordinator, mensajes**: son planos, `{ type: "players_update", players: [...] }`, como pide el enunciado, en vez del sobre `{ type, data }` del base. `broadcastPlayers()` recorre el `Map` y no `wss.clients`, para no enviar la lista a sockets rechazados que aún se están cerrando.
-- **coordinator, contenido del token**: además de `userId` y `username` como texto, el payload debe traer `exp` numérico; si no, se rechaza con 4001.
-- **coordinator, validaciones y logs**:
-  - `HEARTBEAT_INTERVAL_MS` se valida como entero positivo.
-  - El log HTTP no incluye la query, porque la de `/connect` lleva el token. Los rechazos registran solo el mensaje de jsonwebtoken (`jwt expired`, `invalid signature`…).
-  - Durante el upgrade el socket tiene un manejador de `error`, para que un reset del cliente no tumbe el proceso.
-  - 404 y 500 responden JSON `{ error }`.
-  - El apagado ordenado (SIGINT/SIGTERM) cierra los sockets con 1001 y fuerza la salida a los 5 s.
-- **coordinator, smoke-test**: en S10 usa al usuario B con un token de 3 s, porque B ya está desconectado y así no reemplaza la sesión de A ni de C.
-- **client, qué se tomó del base**: `dashboard/style.css` se copió y se adaptó:
-  - se conservan la paleta, el modo oscuro, las tarjetas, las pills, los botones y los inputs;
-  - se quitaron el grid de servidores, las consolas y los logs;
-  - se agregaron formularios, mensajes verde/rojo, el banner y la lista.
-
-  De `dashboard/common.js` solo se tomó el atajo `$`. `setStatus()` del lobby adapta `setWsStatus()` del dashboard del base.
-
-  Más tarde, la interfaz de Viruscity (sección 11) reemplazó esa hoja de estilos por `tokens.css` y sus componentes, y `style.css` se retiró.
-- **client, configuración**: `PORT` también es obligatorio (sin puertos escritos en `server.js`). `AUTH_URL` debe ser http(s) y `COORDINATOR_WS_URL` debe ser ws(s). Responde 404 como JSON y tiene cierre ordenado.
-- **client, respuestas raras**: si la respuesta del auth-service no es JSON (por ejemplo, una página de ngrok), se muestra "Error inesperado del servidor (status)".
-- **Nombres de usuario sin distinguir mayúsculas**: "Oscar", "osCar" y "OSCAR" son la misma cuenta. El registro responde 409 si el nombre ya existe con otras mayúsculas, y el login acepta cualquier combinación y devuelve el nombre tal como se registró. Un índice único `COLLATE NOCASE` lo garantiza aunque lleguen dos registros a la vez.
-- **Token corrupto con la sesión abierta**: el coordinator solo valida el token al conectar, así que el lobby revisa cada segundo el token guardado (y escucha el evento `storage` entre pestañas). Si cambia o desaparece, cierra la conexión y vuelve al login con un mensaje. Al cerrar, solo borra el token si sigue siendo el de esa pestaña, para no tumbar la sesión de otra.
-- **Pruebas en Windows**: los procesos de prueba se levantan con `Start-Process -PassThru` y se detienen por PID, porque el PID leído de `netstat` en Git Bash puede traer un `\r` y hacer fallar `taskkill` sin aviso.
+**Insignia del provider.** Cada jugador del `state` trae `provider`, que pone el servidor desde el JWT. El cliente dibuja a la derecha del nombre una **"G"** azul sobre blanco para Google o una **"L"** sobre gris para cuentas locales. Como sale del servidor, nadie puede hacerse pasar por usuario de Google enviando extras.
 
 ---
 
-## 9. Seguridad
+## 7. Cliente
 
-- **Contraseñas nunca en logs ni en respuestas**:
-  - Los logs HTTP de los servicios registran solo fecha, método, ruta sin query y status, nunca bodies, hashes ni tokens.
-  - El registro responde solo `{ userId, username }`.
-  - Los errores 500 registran solo `err.message`, sin stack ni body.
-  - En las pruebas, `grep` sobre los logs dio 0 apariciones de la contraseña y 0 de tokens (`eyJ`).
-- **Contraseñas con bcrypt**: se guardan como hash bcrypt (`$2b$10$…`), nunca en texto plano.
-- **`.env` fuera de git**: `.gitignore` excluye `.env`, `*.db` y `node_modules/`. Solo se versiona `.env.example`, sin secretos reales.
-- **Validación de entrada**:
-  - Tipos y longitudes de `username` (3–30, `^[A-Za-z0-9_]+$`, único sin distinguir mayúsculas: "Oscar" y "oscar" son la misma cuenta) y `password` (6–72).
-  - Consultas SQL preparadas.
-  - JWT verificado con `algorithms: ["HS256"]` y payload completo (`userId`, `username`, `exp`).
-  - Las URLs del cliente se validan al arrancar.
-- **Límites de tamaño**:
-  - Body JSON del auth-service: `express.json({ limit: "10kb" })`; si se supera responde 413.
-  - Mensajes WebSocket: `maxPayload: 1024` bytes. El coordinator además ignora cualquier mensaje entrante.
-- **Mismo error para todo fallo de login**: el login responde siempre el mismo 401 y aplica un hash ficticio para igualar tiempos (ver decisiones).
-- **CORS abierto en el auth-service**: es aceptable porque la sesión no usa cookies. El token se envía explícitamente y lo guarda la propia página.
+- **`login.html`:** pestañas de iniciar sesión y crear cuenta, más el botón de Google ([js/google-login.js](client/public/js/google-login.js)).
+  - Si `GOOGLE_CLIENT_ID` está vacío, el botón no aparece.
+  - Si el script de Google no carga en 5 s, se muestra "No se pudo cargar el inicio de sesión con Google".
+  - Sin One Tap.
+  - Las respuestas de `/auth/google` se interpretan con la función pura `interpretGoogleResponse` de [js/google-flow.js](client/public/js/google-flow.js).
+  - Tras el login, local o de Google, se va a **`play.html`**.
+- **`play.html`** ([js/play/play.js](client/public/js/play/play.js#L57)):
+  - **Estado:** `window.lastState` guarda **el último mensaje `state` completo** del servidor. Es la única fuente de verdad: el cliente no calcula posiciones.
+  - **Entrada:** WASD o flechas llenan un `Set` de teclas. `computeIntent` lo convierte en una dirección y se envía **solo cuando cambia**. Al perder el foco o esconder la pestaña se envía `{0, 0}`.
+  - **Dibujo:** [js/play/render.js](client/public/js/play/render.js#L42) dibuja con un **suavizado solo visual**: `renderPos` se acerca a la posición del servidor con `1 − e^(−20·dt)` y salta si la diferencia supera 200. Si alguien edita `lastState` en DevTools, la vista lo refleja y el siguiente `state` lo corrige.
+  - **Lista de jugadores:** un punto con el color de cada uno, "(tú)" para el local y su insignia.
+  - **Aviso:** "Conexión inestable…" si pasan más de 3 s sin `state`.
+- **Cierres:**
+  - `4001` → "Tu sesión expiró o el token no es válido…";
+  - `4002` → "Tu sesión se abrió en otra pestaña…";
+  - cualquier otro → "Se perdió la conexión con el coordinador…".
+
+  El mensaje se guarda en `sessionStorage` y se vuelve al login, sin reconexión automática.
+- **Vigilancia del token:** si el token guardado cambia o se borra con la sesión abierta, la sesión se cae. Al cerrar, solo se borra el token si sigue siendo el de esa pestaña, y nunca con 4002, porque ese token ya es de la sesión nueva.
+- **"Cerrar sesión":** borra `token` y `username`, cierra con `1000 "logout"` y vuelve al login.
+- **`lobby.html`:** es **legado del Taller 4**. Sigue funcionando, pero ya nada enlaza a él.
 
 ---
 
-## 10. Guía para la sustentación
+## 8. Variables de entorno
 
-Antes de empezar, deja los tres servicios corriendo (en local o con ngrok) y dos navegadores distintos abiertos en el cliente (por ejemplo Chrome y Firefox, o uno en modo incógnito).
+Cada servicio tiene su `.env` (ignorado por git) y su `.env.example` (versionado, sin secretos reales).
 
-**(a) Flujo con dos navegadores, 1 min.**
-1. En el navegador 1, registra un usuario: debe salir en verde "Registro exitoso. Ahora inicia sesión.". Inicia sesión y entrarás al lobby con "Conectado" y tu nombre con "(tú)".
-2. En el navegador 2, haz lo mismo con otro usuario. Los dos lobbies muestran 2 jugadores al instante.
-3. Pulsa "Cerrar sesión" en uno: el otro baja a 1 en vivo.
+**auth-service/.env**
 
-**(b) Token inválido, 1 min.**
-En el lobby, abre DevTools → Application → Local Storage, cambia unos caracteres del final de `token` y recarga. El coordinator cierra con 4001 y la página vuelve al login con el banner "Tu sesión expiró o el token no es válido. Inicia sesión de nuevo.".
-
-**(c) Token vencido, 2 min.**
-1. Pon `JWT_EXPIRES_IN=30s` en `auth-service/.env` y reinicia el auth-service (Ctrl+C, `npm start`). El coordinator no necesita reinicio, porque lee `exp` del propio token.
-2. Inicia sesión. Antes de que pasen los 30 s, copia el valor de `token` desde DevTools → Local Storage.
-3. Espera: a los 30 s como máximo, el coordinator cierra con `4001 "token expired"` y el lobby vuelve al login con el mensaje de sesión expirada.
-4. Reconecta con el token vencido para ver el rechazo. Puedes hacerlo de dos formas:
-   - con `wscat -c "ws://localhost:5000/connect?token=<token copiado>"` (o `wss://<host-del-túnel-5000>/connect?token=…`), que muestra `Disconnected (code: 4001, reason: "invalid token")`;
-   - pegando el token de nuevo en Local Storage y abriendo `lobby.html`, que vuelve al login con el mensaje.
-5. Al terminar, restaura `JWT_EXPIRES_IN=1h` y reinicia el auth-service.
-
-**(d) Recorrido del código, 3 min.**
-
-| Punto | Archivo | Qué mostrar |
+| Variable | Función | Ejemplo |
 |---|---|---|
-| Verificación del JWT antes de aceptar | [coordinator/index.js](coordinator/index.js#L78) | `verifyToken()` (`jwt.verify` con `algorithms: ["HS256"]` y payload completo) y `server.on("upgrade")` ([línea 98](coordinator/index.js#L98)): 404 si la ruta no es `/connect`, `handleUpgrade` + `close(4001, "invalid token")` si el token falla |
-| Alta del jugador y sesión duplicada | [coordinator/index.js](coordinator/index.js#L143) | `wss.on("connection")`: `players.set(...)` y `previous.socket.close(4002, ...)` |
-| Broadcast | [coordinator/index.js](coordinator/index.js#L135) | `broadcastPlayers()`: arma `players_update` y lo envía a todos los sockets abiertos del `Map` |
-| Manejo del close | [coordinator/index.js](coordinator/index.js#L168) | `ws.on("close")`: limpia el timer de expiración, borra solo si `players.get(userId)?.socket === ws` y vuelve a hacer broadcast |
-| Expiración y heartbeat | [coordinator/index.js](coordinator/index.js#L166) | el `setTimeout` con `4001 "token expired"` y el `setInterval` de ping/pong ([línea 190](coordinator/index.js#L190)) |
-| Emisión del token (si preguntan) | [auth-service/index.js](auth-service/index.js#L131) | `POST /login`: `DUMMY_HASH`, `bcrypt.compare`, `jwt.sign` |
-| Reacción del cliente | [client/public/js/lobby.js](client/public/js/lobby.js#L72) | `ws.onclose`: mensaje según 4001/4002/otro, `sessionStorage` y vuelta al login |
+| `PORT` | Puerto HTTP (por defecto 4000) | `4000` |
+| `JWT_SECRET` | Clave HS256 para firmar los JWT. Obligatoria, ≥ 32 caracteres, **idéntica** a la del coordinator | 64 caracteres hex |
+| `JWT_EXPIRES_IN` | Vigencia del token (`1h`, `30s`…; solo dígitos = segundos). Por defecto `1h` | `1h` |
+| `BCRYPT_ROUNDS` | Costo de bcryptjs, entre 10 y 31 (por defecto 10) | `10` |
+| `DB_PATH` | Archivo SQLite, relativo a la carpeta del servicio (por defecto `./users.db`) | `./users.db` |
+| `GOOGLE_CLIENT_ID` | Client ID de Google (obligatorio; debe terminar en `.apps.googleusercontent.com`; si contiene `localtest` se avisa que es de prueba) | `1234…-abc.apps.googleusercontent.com` |
 
-**(e) Preguntas, 3 min.** Respuestas cortas a preguntas probables:
+**coordinator/.env**
 
-1. **¿Por qué el token va en la query string y no en un header?**
-   La API `WebSocket` del navegador no permite enviar headers personalizados en el handshake; la query es la vía estándar. Por eso los logs nunca registran la query y el tráfico va cifrado con WSS.
-2. **¿Qué pasa si roban un token?**
-   Sirve hasta su `exp`, y por eso la vigencia es corta y configurable. Si vence con el socket abierto, el coordinator cierra la conexión. Para revocarlo antes habría que agregar una lista de tokens revocados, que queda fuera del alcance.
-3. **¿Por qué el coordinator no consulta al auth-service para validar el token?**
-   El JWT va firmado con HS256 y una clave compartida: verificar la firma basta para confiar en `userId` y `username`. Así el coordinator no depende de que el auth-service esté disponible y no hace una llamada de red por cada conexión.
-4. **¿Qué pasa si se reinicia el coordinator?**
-   El `Map` vive en memoria y se pierde. Los clientes reciben el cierre y vuelven al login; al volver a entrar, la lista se reconstruye. Mantener ese estado entre varios coordinadores es el tema de las siguientes partes.
-5. **¿Cómo evitan que la conexión vieja borre a la nueva en una sesión duplicada?**
-   Primero se registra el socket nuevo y luego se cierra el viejo con 4002. En el `close` solo se elimina al jugador si el socket que se cierra sigue siendo el vigente en el `Map`.
+| Variable | Función | Ejemplo |
+|---|---|---|
+| `PORT` | Puerto HTTP + WebSocket (por defecto 5000) | `5000` |
+| `JWT_SECRET` | La misma clave del auth-service (≥ 32 caracteres) | igual que en auth |
+| `HEARTBEAT_INTERVAL_MS` | Cada cuánto se hace ping a los sockets | `30000` |
+| `WORLD_WIDTH` / `WORLD_HEIGHT` | Tamaño del mundo en unidades | `1200` / `800` |
+| `PLAYER_RADIUS` | Radio de los jugadores (2·radio < lado menor del mundo) | `16` |
+| `PLAYER_SPEED` | Velocidad en unidades por segundo | `200` |
+| `TICK_RATE` | Ticks por segundo del game loop (1–120) | `20` |
+| `MAX_EXTRAS_BYTES` | Tamaño máximo de `extras` serializado | `1024` |
+| `MAX_MSGS_PER_SEC` | Mensajes por segundo y por socket antes de descartar | `60` |
+| `AUTH_URL` / `COORDINATOR_WS_URL` | *(opcionales, solo para `npm run smoke`)* | `http://localhost:4000` / `ws://localhost:5000` |
+
+**client/.env**
+
+| Variable | Función | Local | Con ngrok |
+|---|---|---|---|
+| `PORT` | Puerto del client (obligatorio) | `3000` | `3000` |
+| `AUTH_URL` | URL del auth-service, sin barra final | `http://localhost:4000` | `https://<túnel-4000>` |
+| `COORDINATOR_WS_URL` | URL del coordinator, sin barra final | `ws://localhost:5000` | `wss://<túnel-5000>` |
+| `GOOGLE_CLIENT_ID` | El mismo Client ID del auth-service (opcional: vacío = sin botón de Google) | `1234…-abc.apps.googleusercontent.com` | igual |
 
 ---
 
-## 11. Interfaz de Viruscity
+## 9. Cómo correr todo en local
 
-La capa visual del cliente: login, sala de espera y pantalla de juego. Es solo presentación. No cambia la lógica de red ni de sesión del Taller 4 (fetch al auth-service, `localStorage`, WebSocket a `/connect?token=`, cierres 4001/4002) y no usa dependencias externas: todo es HTML, CSS y JS plano con módulos ES, sin CDN, fuentes web ni imágenes remotas.
+**Requisitos:**
+- **Node.js ≥ 22.13** (por `node:sqlite` sin flag; se probó con Node 24) y npm.
+- git.
+- Opcional: ngrok con cuenta.
+
+Los comandos están escritos para Git Bash.
+
+1. **Instala las dependencias** de cada servicio:
+   ```bash
+   cd auth-service && npm install && cd ..
+   cd coordinator && npm install && cd ..
+   cd client && npm install && cd ..
+   ```
+2. **Crea los `.env`** a partir de los ejemplos:
+   ```bash
+   cp auth-service/.env.example auth-service/.env
+   cp coordinator/.env.example coordinator/.env
+   cp client/.env.example client/.env
+   ```
+3. **Genera un secreto** y pon **el mismo valor** en `JWT_SECRET` de `auth-service/.env` y de `coordinator/.env`:
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+   ```
+4. **Pon el Client ID de Google** (sección 10) en `GOOGLE_CLIENT_ID` de `auth-service/.env` y de `client/.env`. Para probar sin Google, en el auth basta un valor con el formato correcto, como `000000000000-localtest.apps.googleusercontent.com`.
+5. **Arranca cada servicio** en su propia terminal, en este orden:
+   ```bash
+   cd auth-service && npm start    # Auth service en puerto 4000
+   cd coordinator && npm start     # Coordinator en puerto 5000 (…) · game loop a 20 Hz
+   cd client && npm start          # Client en puerto 3000
+   ```
+6. **Abre** <http://localhost:3000> en dos navegadores distintos (o uno en incógnito), entra con dos usuarios y muévete con WASD o las flechas.
+
+**Pruebas**
+
+| Comando | Qué prueba |
+|---|---|
+| `cd auth-service && npm test` | 20 pruebas: registro, login, Google con verificador falso, migración del Taller 4 y que los logs no filtren datos |
+| `cd coordinator && npm test` | 9 pruebas de la lógica pura del juego |
+| `cd client && npm test` | 40 pruebas: flujo de Google, intención, colores, ajuste del canvas y la interfaz de Viruscity |
+| `cd coordinator && npm run smoke` | Con auth y coordinator levantados: S1–S11 (Taller 4) y G1–G12 (juego en vivo) |
+
+---
+
+## 10. Google Cloud
+
+1. **Crea un proyecto** en <https://console.cloud.google.com>.
+2. **Configura la pantalla de consentimiento de OAuth** (en la consola nueva: *Google Auth Platform*):
+   - tipo de usuario **External**;
+   - nombre de la app y correo de soporte;
+   - scopes **`openid`**, **`email`** y **`profile`**;
+   - en **Usuarios de prueba** (*Audience → Test users*) agrega las cuentas de Gmail que usarás mientras la app esté en modo prueba.
+3. **Crea el cliente OAuth:** *Credenciales → Crear credenciales → ID de cliente de OAuth*, de tipo **Aplicación web**.
+   - **Orígenes de JavaScript autorizados:** `http://localhost`, `http://localhost:3000` y la URL **https** del túnel ngrok del client (por ejemplo `https://<túnel-3000>`).
+   - **URI de redireccionamiento autorizados:** ninguno. La Opción A no los usa.
+4. **Copia el Client ID** (termina en `.apps.googleusercontent.com`) y ponlo, **con el mismo valor**, en `GOOGLE_CLIENT_ID` de `auth-service/.env` y de `client/.env`. Reinicia los dos servicios. El Client Secret no se usa ni se guarda.
+5. **Cuando cambie la URL de ngrok** del client: agrega el nuevo origen https en el cliente OAuth y espera unos minutos a que Google aplique el cambio. Si el botón falla con un error de origen, revisa este paso.
+6. **Para agregar más personas** mientras la app está en modo prueba: añade su correo en *Usuarios de prueba*. Las demás cuentas verán un aviso de acceso bloqueado.
+
+---
+
+## 11. ngrok
+
+Con los tres servicios corriendo, abre un túnel por servicio, cada uno en su terminal:
+
+```bash
+ngrok http 4000
+ngrok http 5000
+ngrok http 3000
+```
+
+Luego edita **solo `client/.env`**, sin barra final:
+
+```
+AUTH_URL=https://<host-del-túnel-4000>
+COORDINATOR_WS_URL=wss://<host-del-túnel-5000>
+```
+
+y **reinicia el client**: `/config.js` se genera al arrancar. Abre `https://<host-del-túnel-3000>` y agrega ese origen en Google Cloud (sección 10).
+
+- **`wss://` y no `ws://`:** la página llega por HTTPS y los navegadores bloquean un WebSocket sin cifrar desde una página segura (*contenido mixto*).
+- **Página de aviso de ngrok:** en el plan gratuito, la primera visita muestra un aviso; pulsa **"Visit Site"**. Los `fetch` del cliente envían `ngrok-skip-browser-warning: true` para que el aviso no reemplace las respuestas JSON.
+- **Varias sesiones de ngrok:** si la cuenta gratuita no permite varias sesiones de agente, define los tres túneles en el archivo de configuración y usa `ngrok start --all` (consulta `ngrok config --help` en tu versión).
+- **En auth y coordinator no hay que cambiar nada:** el auth acepta cualquier origen (CORS abierto, sin cookies) y el coordinator, cualquier conexión con un token válido.
+
+---
+
+## 12. Decisiones de diseño
+
+- **Tabla única:** un solo `userId` por persona y usernames únicos entre providers (sección 2).
+- **Opción A de Google:** sin secreto ni redirect URI. El servidor solo verifica un JWT firmado por Google contra los certificados públicos (sección 3).
+- **401 genérico en `/login` para usuarios de Google:** se responde exactamente igual que con una contraseña incorrecta, y además se ejecuta un `bcrypt.compare` contra un hash ficticio para igualar tiempos. Así no se puede averiguar qué usernames existen ni de qué provider son (sin enumeración de usuarios).
+- **Validación de `extras`, regla por regla:**
+  - objeto, no null ni array;
+  - ≤ 1024 bytes serializado;
+  - `color` con formato `#rrggbb` (si no, se ignora todo el mensaje) y guardado en minúsculas;
+  - se guarda una copia y reemplaza al anterior.
+- **Límites anti-abuso:**
+  - `maxPayload` de 2048 bytes;
+  - 60 mensajes/s por socket;
+  - `intent` reducido a −1/0/1;
+  - body del auth de 4 kB;
+  - idToken de hasta 4096 caracteres.
+- **`state` sin `socket` ni `intent`:** `snapshot()` publica solo `userId`, `username`, `provider`, `x`, `y` (redondeadas a 2 decimales) y `extras`. La intención de los demás no se revela y el objeto interno nunca sale del servidor.
+- **bcryptjs y `node:sqlite`:** sin dependencias nativas, así que la instalación no compila nada y no hace falta Visual Studio en Windows. El costo es que hace falta Node ≥ 22.13 (o 22.5 con `--experimental-sqlite`).
+- **Username de 3–32 caracteres (`^[a-zA-Z0-9_]+$`):** se guarda y se muestra con las mayúsculas con que se registró. La **unicidad y el login no distinguen mayúsculas** ("Oscar" = "oscar"), un cambio pedido durante el desarrollo para evitar cuentas casi idénticas.
+- **JWT con `provider`:** el coordinator sabe el origen de la cuenta sin consultar la base, y lo publica en el `state`.
+- **No se registran tokens, idTokens, emails ni contraseñas:**
+  - los logs HTTP solo tienen fecha, método, ruta sin query y status;
+  - los errores de Google y los 500 registran textos fijos;
+  - las pruebas automáticas lo verifican (L1 del auth).
+
+---
+
+## 13. Errores típicos y dónde se evitan
+
+> Lista reconstruida a partir de las decisiones fijas del Taller 5 (CLAUDE.md); compárala con la del enunciado.
+
+| # | Error típico | Dónde se evita |
+|---|---|---|
+| 1 | El cliente calcula o envía su posición | [client/public/js/play/play.js](client/public/js/play/play.js#L159) `pushIntent()` solo envía la dirección; el coordinator ignora cualquier otro tipo de mensaje |
+| 2 | Mover jugadores o hacer broadcast en el handler de mensajes | [coordinator/index.js](coordinator/index.js#L221) `ws.on("message")` solo guarda `p.intent` / `p.extras`; mover y difundir es cosa de `tick()` |
+| 3 | Velocidad que depende del tick rate (sin `dt`) | `tick()` usa `clampDt(now − lastTick)` y [game.js](coordinator/game.js#L94) `stepPlayers(players, dt, cfg)` |
+| 4 | La diagonal es más rápida | `stepPlayers()`: dirección dividida por `Math.hypot(x, y)` |
+| 5 | Confiar en el intent (NaN, Infinity, 9999, strings) | [game.js](coordinator/game.js#L60) `sanitizeIntent()`: `Number.isFinite` + `Math.sign` |
+| 6 | Extras sin límites (tamaño, tipo, color arbitrario, flood) | [game.js](coordinator/game.js#L70) `sanitizeExtras()`, `maxPayload: 2048` y `MAX_MSGS_PER_SEC` en `index.js` |
+| 7 | El jugador sale del mundo | `stepPlayers()`: límites `[R, W − R]` y `[R, H − R]` |
+| 8 | Usar el email como llave de la cuenta de Google | [auth-service/app.js](auth-service/app.js#L139) `/auth/google`: `findByGoogle(sub)`; `google_sub` es `UNIQUE` |
+| 9 | No verificar `audience` ni `email_verified` | [auth-service/google.js](auth-service/google.js#L14) (`verifyIdToken` con `audience` + comparación de `aud`) y `app.js` (`email_verified !== true` → 401) |
+| 10 | Dos tablas o username duplicado entre providers | [auth-service/db.js](auth-service/db.js#L14) tabla única + índice `users_username_nocase`; `findByUsername` en `/register` y `/auth/google` |
+| 11 | Registrar tokens, idTokens, emails o `err.message` de Google | `app.js`: log de peticiones sin body ni query y textos fijos en los errores; prueba L1 en `auth-service/test/auth.test.js` |
+
+---
+
+## 14. Guía de sustentación
+
+Antes de empezar: los tres servicios corriendo (local o con ngrok), `GOOGLE_CLIENT_ID` real configurado y dos navegadores distintos (o uno en incógnito) en el client.
+
+**(a) Juego con dos pestañas y el extra de color · 3 min**
+1. Entra con un usuario en cada navegador: los dos aparecen en el mapa y en "Jugadores en línea (2)".
+2. Muévete con WASD en uno: el otro ve el movimiento en vivo. Muévete en diagonal y explica que va a la misma velocidad.
+3. Cambia el color en uno (selector o muestras): el otro lo ve al instante. Recarga: el color se mantiene.
+
+**(b) Los dos providers · 3 min**
+1. Registra `alice` con contraseña y entra.
+2. En el otro navegador entra con Google: en el primer ingreso aparece "Elige tu username"; escribe `bob_google`. Los dos se ven, y la insignia muestra **L** para alice y **G** para bob_google.
+3. Muestra que alice no puede usar Google para su cuenta: si en el primer ingreso con Google se elige `alice` (o `ALICE`), la respuesta es `409 username_taken`.
+4. Muestra que bob_google no puede usar `/login`: da el mismo 401 que una contraseña incorrecta.
+   ```bash
+   curl -s -w "  HTTP %{http_code}\n" -X POST http://localhost:4000/login -H "Content-Type: application/json" -d '{"username":"bob_google","password":"cualquiera"}'
+   # {"error":"Credenciales inválidas"}  HTTP 401
+   curl -s -w "  HTTP %{http_code}\n" -X POST http://localhost:4000/login -H "Content-Type: application/json" -d '{"username":"alice","password":"incorrecta"}'
+   # {"error":"Credenciales inválidas"}  HTTP 401
+   ```
+
+**(c) El servidor es la autoridad · 2 min**
+En la consola de DevTools de una pestaña ejecuta:
+
+```js
+const yo = lastState.players.find(p => p.username === localStorage.getItem('username'));
+setInterval(() => { const j = lastState.players.find(p => p.username === localStorage.getItem('username')); if (j) { j.x = 100; j.y = 100; } }, 5);
+```
+
+Esa pestaña te dibuja en (100, 100), porque edita su copia local de `lastState`. **En la otra pestaña no pasa nada**: el servidor sigue con tu posición real. Al recargar (o al detener el intervalo), el siguiente `state` del servidor corrige la vista.
+
+**(d) Tour del código · 4 min**
+
+| Punto | Archivo y función |
+|---|---|
+| Game loop | [coordinator/index.js](coordinator/index.js#L274) `tick()` (y `scheduleTick()`); movimiento en [game.js](coordinator/game.js#L94) `stepPlayers()` |
+| Validación de inputs | [coordinator/game.js](coordinator/game.js#L60) `sanitizeIntent()` y `sanitizeExtras()` |
+| Verificación del ID token | [auth-service/google.js](auth-service/google.js#L14) `makeGoogleVerifier()` y [auth-service/app.js](auth-service/app.js#L139) `POST /auth/google` |
+| Dónde se guardan los extras | [coordinator/index.js](coordinator/index.js#L221) `ws.on("message")` → `p.extras`; salen en `snapshot()` dentro de cada `state` |
+
+**(e) Preguntas probables**
+1. **¿Por qué el cliente no mueve al jugador?**
+   Porque el servidor es la autoridad: si el cliente decidiera su posición, podría hacer trampa (teletransportarse, ir más rápido). El cliente solo manda intenciones y dibuja lo que dice el servidor.
+2. **¿Por qué usar `dt`?**
+   Los ticks no duran exactamente 50 ms. Multiplicar por el tiempo real hace que la velocidad sea siempre 200 px/s, sin importar el tick rate ni los retrasos.
+3. **¿Por qué normalizar la dirección?**
+   Sin normalizar, `(1, 1)` mide √2 ≈ 1,41 y la diagonal sería un 41 % más rápida. Con `Math.hypot` todas las direcciones avanzan igual.
+4. **¿Por qué `sub` y no el email?**
+   `sub` es el identificador estable y único de la cuenta de Google. El email puede cambiar o reasignarse, y usarlo como llave permitiría apropiarse de cuentas.
+5. **¿Qué pasa si no se verifica el `audience`?**
+   Se aceptaría un ID token emitido para *otra* aplicación: cualquiera con un token de otro sitio que use Google podría entrar como esa persona.
+6. **¿Por qué una sola tabla?**
+   Para que un username sea único entre providers y cada persona tenga un solo `userId` para el coordinador, los puntajes o la replicación.
+7. **¿Por qué el broadcast va en el tick y no en cada mensaje?**
+   Así se envía un mensaje por tick con el estado completo y consistente. Si se difundiera por mensaje, el tráfico dependería de cuántas teclas pulsa cada uno y el estado llegaría a medias.
+8. **¿Qué pasa si alguien manda extras de 10 MB?**
+   El servidor ni siquiera lo lee: un mensaje de más de 2048 bytes (`maxPayload`) cierra ese socket. Uno de menos de 2048 pero con extras de más de 1024 bytes se ignora, y más de 60 mensajes por segundo se descartan.
+
+---
+
+# Estructura del repositorio
+
+```
+.
+├── .gitignore · CLAUDE.md · README.md
+├── auth-service/
+│   ├── .env.example · .npmrc · package.json · package-lock.json
+│   ├── index.js        # arranque: valida la configuración, abre la base, cierre ordenado
+│   ├── app.js          # createApp(): /health, /register, /login, /auth/google
+│   ├── db.js           # esquema de la tabla única, migración desde el Taller 4, consultas
+│   ├── google.js       # makeGoogleVerifier(): verifica el ID token con audience
+│   └── test/           # node:test (auth, Google, migración)
+├── coordinator/
+│   ├── .env.example · package.json · package-lock.json
+│   ├── index.js        # upgrade con JWT, sesiones, mensajes, game loop, heartbeat
+│   ├── game.js         # lógica pura: config, spawn, sanitizeIntent/Extras, stepPlayers, snapshot
+│   ├── test/           # node:test de game.js
+│   └── scripts/smoke-test.js   # S1-S11 y G1-G12 (npm run smoke)
+└── client/
+    ├── .env.example · package.json · package-lock.json
+    ├── server.js       # Express estático + /config.js (AUTH_URL, COORDINATOR_WS_URL, GOOGLE_CLIENT_ID)
+    ├── public/
+    │   ├── login.html · play.html · lobby.html (legado) · game.html (vista previa de diseño)
+    │   ├── css/        # tokens, base, components, login, google-login, play, lobby, game
+    │   ├── img/        # logo.svg, favicon.svg
+    │   └── js/
+    │       ├── login.js · login-ui.js · google-login.js · google-flow.js
+    │       ├── lobby.js · game-shell.js
+    │       ├── play/   # play.js, render.js, intent.js, colors.js, fit.js
+    │       └── ui/     # módulos de la interfaz de Viruscity
+    └── test/           # node:test (Google, juego, interfaz)
+```
+
+Solo existen en tu equipo (ignorados por git): `*/.env`, `*/node_modules/`, `auth-service/users.db` y sus copias `*.bak`.
+
+---
+
+# Interfaz de Viruscity
+
+La capa visual del cliente: login, sala de espera y una pantalla de juego de diseño (`game.html`). Es HTML, CSS y JS plano con módulos ES, sin CDN, fuentes web ni imágenes remotas. La única dependencia externa es el script de Google en `login.html` (Taller 5).
 
 ### Dirección de arte y tokens
 
 **Ciudad de noche con neón biológico.** Los títulos van en fuente monoespaciada, en mayúsculas y con espaciado amplio; el cuerpo, en la fuente del sistema. Los bordes son de 1 px, las esquinas redondeadas y las sombras suaves. El brillo cian se reserva para el foco y los elementos principales.
 
-`client/public/css/tokens.css` es la **única fuente** de colores, espacios, radios, sombras, tipografía y tiempos de animación. Los demás CSS solo usan `var(--…)`, y el canvas lee los mismos tokens con `getComputedStyle`.
+`client/public/css/tokens.css` es la **única fuente** de colores, espacios, radios, sombras, tipografía y tiempos de animación. Los demás CSS usan `var(--…)`, y el canvas lee los mismos tokens con `getComputedStyle`.
 
 | Token | Valor | Uso |
 |---|---|---|
@@ -506,58 +593,26 @@ El resto de tokens:
 - **Tipografía:** `--font-ui`, `--font-mono` y los tamaños de `--fs-s` a `--fs-hero`.
 - **Movimiento:** `--ease`, `--t-fast` y `--t-med`.
 
-### Estructura de `client/public`
-
-```
-public/
-├── login.html · lobby.html · game.html
-├── css/
-│   ├── tokens.css      # tokens de diseño (única fuente)
-│   ├── base.css        # reset, foco visible, .btn, .field, .card, .msg, .sr-only
-│   ├── components.css  # avatar, chip, badge, progreso, título de panel, toasts, modal
-│   └── login.css · lobby.css · game.css
-├── img/
-│   └── logo.svg · favicon.svg
-└── js/
-    ├── login.js        # lógica de login/registro (Taller 4)
-    ├── lobby.js        # lógica del lobby: token, WebSocket, cierres (Taller 4)
-    ├── login-ui.js     # pestañas, ojo de contraseña, partículas
-    ├── game-shell.js   # arranque de la página del juego
-    └── ui/             # módulos de interfaz (ES modules, sin red)
-        ├── ui-config.js     # constantes visuales y UI.PREVIEW_ENABLED
-        ├── avatar.js        # iniciales y color estable por id
-        ├── toast.js · modal.js
-        ├── lobby-view.js    # vista del lobby
-        ├── city-layout.js   # edificios, calles y plaza (decorativo)
-        ├── scene-renderer.js# cámara y dibujo del mapa en canvas
-        ├── hud.js · end-overlay.js
-        ├── particles.js     # partículas del login
-        ├── bouncing-virus.js# virus animado del login (rebota, se aplasta, salta al pulsarlo)
-        └── preview.js       # datos de ejemplo de la vista previa
-```
-
 ### Contrato de datos de la interfaz
 
-Los módulos de `js/ui/` **no conocen el WebSocket**: solo reciben datos planos por parámetros. La integración con la partida real solo tiene que alimentarlos.
+Los módulos de `js/ui/` **no conocen el WebSocket**: solo reciben datos planos por parámetros.
 
 ```js
 scene = {
-  world: { width, height },          // tamaño del mundo en px
-  playerRadius: number,              // radio de los jugadores (por defecto UI.PLAYER_RADIUS_DEFAULT)
-  me: { userId } | null,             // jugador local (la cámara lo sigue)
+  world: { width, height },
+  playerRadius: number,
+  me: { userId } | null,
   status: "healthy" | "infected" | null,   // SOLO el estado del jugador local
   players: [{ userId, username, x, y, color?, badge? }],
 }
 ```
 
-La interfaz **nunca recibe ni dibuja el estado de infección de otros jugadores**; `status` solo cambia la pantalla del jugador local (viñeta y aspecto verde).
-
 | Módulo | Funciones |
 |---|---|
 | `scene-renderer.js` | `createSceneRenderer(canvas)` → `{ resize(), draw(scene, nowMs) }` · `computeCamera(me, viewW, viewH, world)` |
-| `hud.js` | `createHud(root)` → `setMe({ username, status })`, `setCure(pct)`, `setPlayerCount(n)`, `setTasks([{ id, label, done }])`, `setHint(texto \| null)`, `setInfectCooldown(segundos \| null)`, `setConnection("ok" \| "unstable" \| "lost")`, `showRoleIntro({ status, ms }, onDone)`, `toast(texto, { kind, ms })` |
+| `hud.js` | `createHud(root)` → `setMe`, `setCure`, `setPlayerCount`, `setTasks`, `setHint`, `setInfectCooldown`, `setConnection`, `showRoleIntro`, `toast` |
 | `end-overlay.js` | `showEndOverlay(root, { winner, reason, players, youWon }, { onBack })` → `{ close() }` |
-| `lobby-view.js` | `createLobbyView(root)` → `setUser`, `setStatus`, `setPlayers(players, meUsername)`, `showNotice` |
+| `lobby-view.js` | `createLobbyView(root)` → `setUser`, `setStatus`, `setPlayers`, `showNotice` |
 | `toast.js` / `modal.js` | `createToaster(contenedor).show(texto, { kind })` · `createModal().open({ title, content, onClose, dismissible })` |
 
 ### Vista previa (solo diseño)
@@ -566,58 +621,74 @@ Mientras `UI.PREVIEW_ENABLED` sea `true` en `js/ui/ui-config.js`, estas URLs mue
 
 | URL | Qué muestra |
 |---|---|
-| `/lobby.html?preview=1` | Jugadores que entran uno a uno, barra hacia 4, una salida y un reingreso, y un toast |
-| `/game.html?preview=1` | Ciudad con 6 edificios, 6 jugadores y el HUD completo, más el panel de controles |
-| `/game.html?preview=infected` | El mismo juego con el jugador local infectado |
-| `/game.html?preview=end` | La pantalla de fin de partida abierta |
-
-En el juego, el panel "VISTA PREVIA · SOLO DISEÑO" se pliega con su botón y se muestra u oculta con la **tecla H**. Sus controles cubren:
-- **Estado:** sano o infectado.
-- **HUD:** cura, tareas, toasts, pista y enfriamiento.
-- **Ventanas:** modal, pantalla de rol y las dos pantallas de fin.
-- **Conexión:** estable, inestable o perdida.
-
-Sin `?preview`, `game.html` vuelve al lobby.
+| `/lobby.html?preview=1` | Jugadores que entran uno a uno, barra hacia 4, una salida y un reingreso |
+| `/game.html?preview=1` | Ciudad con 6 edificios, 6 jugadores, HUD completo y panel de controles (tecla **H**) |
+| `/game.html?preview=infected` | El jugador local infectado |
+| `/game.html?preview=end` | La pantalla de fin de partida |
 
 ### Accesibilidad
 
-- **Contraste AA** de los tokens, comprobado con `client/test/contrast.test.mjs`: 4.5:1 en texto. Los bordes de los campos también llegan a 3:1.
-- **Foco visible** en todo elemento interactivo: anillo cian de 2 px con 2 px de separación. Ningún CSS quita el `outline` sin reemplazo.
-- **Formularios:** cada campo tiene su `<label>`, con `autocomplete` correcto y textos de ayuda enlazados con `aria-describedby`.
-- **Botones:** los que solo tienen icono llevan `aria-label`, y todos miden al menos 44 px de alto.
-- **Avisos y diálogos:** los mensajes de login, los avisos del lobby y los toasts usan `aria-live`; `role="alert"` está solo en el aviso de sesión del login. Los modales y pantallas de rol o fin usan `role="dialog"` y `aria-modal`, atrapan o retienen el foco y lo devuelven al cerrar. Las pestañas siguen el patrón ARIA (flechas, Inicio y Fin).
-- **`prefers-reduced-motion`:** las partículas y el balanceo de la vista previa quedan quietos; las entradas animadas y las transiciones se reducen a opacidad.
-- **Texto dinámico:** se inserta siempre con `textContent` (DOM) o `fillText` (canvas), nunca con `innerHTML`.
-- **Pantallas pequeñas:** login, lobby y juego funcionan desde 360 px de ancho; el HUD se compacta por debajo de 700 px.
-- **Limitación conocida:** las iniciales de algunos avatares (tonos azules y violetas) tienen poco contraste. El avatar es decorativo (`aria-hidden`) y el nombre siempre aparece al lado.
-
-### Pruebas de la interfaz
-
-```bash
-cd client
-npm test
-```
-
-Ejecuta con `node:test` 27 pruebas de funciones puras: avatar (hash, color e iniciales), cámara (centrado, bordes y mundo pequeño), contraste de tokens y física del virus animado del login (rebote estable, aplastamiento, salto que no se sale del escenario y antenas que se amortiguan).
+- **Contraste AA** de los tokens, comprobado con `client/test/contrast.test.mjs`.
+- **Foco visible** en todo elemento interactivo.
+- **Formularios:** cada campo tiene su `<label>`.
+- **Botones:** los de solo icono llevan `aria-label` y todos miden al menos 44 px.
+- **Avisos:** `aria-live` en los avisos.
+- **Diálogos:** usan `role="dialog"` y devuelven el foco al cerrar.
+- **`prefers-reduced-motion`:** respetado en partículas, virus animado y entradas.
+- **Texto dinámico:** siempre con `textContent` o `fillText`.
+- **Pantallas pequeñas:** funciona desde 360 px.
+- **Limitación conocida:** algunas iniciales de avatar en tonos azules y violetas tienen poco contraste (el avatar es decorativo).
 
 ### Virus animado del login
 
-El hero del login muestra el logo como un virus "blando" que rebota contra el suelo. Está basado en la animación de referencia `virus_city_loading_screen.html`:
-- **Movimiento:** se aplasta y se estira, sus 8 antenas oscilan con inercia, suelta esporas al caer y proyecta una sombra luminosa.
+El hero del login muestra el logo como un virus "blando" que rebota, basado en `virus_city_loading_screen.html`:
+- **Movimiento:** se aplasta y se estira, sus antenas oscilan y suelta esporas.
 - **Salto:** con clic, toque, Enter o Espacio da un salto potente.
-- **Fondo:** el hero suma una cuadrícula "cyber", líneas de barrido y un título con brillo de neón.
+- **Movimiento reducido:** queda quieto.
 
-De la referencia **no** se usaron Tailwind, Google Fonts, Font Awesome, el sonido ni la barra de carga. Los colores salen de los tokens; la física usa un paso fijo de 1/60 s y se escala al tamaño del escenario (300 px de alto en escritorio y 170 px en móvil). Con movimiento reducido el virus queda quieto y deja de ser interactivo.
+### Integración pendiente
 
-### Pendiente para el Taller 5
+- **`game.html` sigue siendo una vista previa de diseño.** La partida del Taller 5 vive en `play.html`. Para usar el diseño de Viruscity en el juego real, el bloque "INTEGRACIÓN REAL" de [client/public/js/game-shell.js](client/public/js/game-shell.js#L21) tendría que alimentar `renderer.draw(scene)` y el HUD con los datos de `window.lastState`.
+- **Antes de la entrega:** poner `UI.PREVIEW_ENABLED = false` en [ui-config.js](client/public/js/ui/ui-config.js#L6).
 
-- **Partida real:** en [client/public/js/game-shell.js](client/public/js/game-shell.js#L21), bloque "INTEGRACIÓN REAL", la lógica de red debe:
-  - armar `scene` con cada actualización del servidor y llamar a `renderer.draw(scene, performance.now())`;
-  - llamar al HUD: `hud.setMe`, `setCure`, `setPlayerCount`, `setTasks`, `setHint`, `setInfectCooldown` y `setConnection`;
-  - mostrar `hud.showRoleIntro({ status })` al empezar y `showEndOverlay(...)` al terminar.
-- **Google login:** el contenedor `<div id="googleSlot" hidden>` de [login.html](client/public/login.html#L94) está reservado para el botón de Google; hoy no dibuja nada.
-- **Reglas del servidor:** `UI.MIN_PLAYERS_TO_START` y las longitudes de usuario y contraseña de `ui-config.js` solo se usan en textos de ayuda; la autoridad es el servidor.
-- **Antes de la entrega:** poner `UI.PREVIEW_ENABLED = false` en [ui-config.js](client/public/js/ui/ui-config.js#L6) para desactivar la vista previa.
+---
+
+# Parte I · Taller 4 (resumen)
+
+La Parte I construyó la identidad y la base del coordinator. Sigue vigente:
+
+- **JWT verificado en el `upgrade` y cierre 4001 tras el handshake:** el navegador no puede leer el status HTTP de un upgrade rechazado (solo ve un 1006), pero sí el código de cierre `4001 "invalid token"`.
+- **Sesión duplicada con 4002:** se queda la conexión nueva. El `close` de la vieja solo borra al jugador si `players.get(userId)?.socket === ws`, para no borrar a la nueva.
+- **bcrypt con rounds configurables (mínimo 10) y `JWT_EXPIRES_IN` configurable** (`30s` para demostrar la expiración).
+- **401 genérico y hash ficticio en el login.**
+- **Heartbeat y cierre por expiración** del token con el socket abierto.
+- **Estado del coordinator en memoria:** se pierde al reiniciar y no escala a varios coordinadores, que es el objetivo de las siguientes partes.
+- **`/config.js` desde `.env`:** ninguna URL escrita en el cliente.
+- **`textContent` contra XSS.**
+
+**Lo que cambió en el Taller 5**
+- El auth-service pasó de better-sqlite3 + bcrypt a `node:sqlite` + bcryptjs, con una tabla única y `provider` en el JWT.
+- Los usernames pasaron de 3–30 a 3–32 caracteres.
+- El body del auth bajó de 10 kB a 4 kB.
+- El `maxPayload` del coordinator subió de 1024 a 2048 bytes.
+- Tras el login se va a `play.html` y no a `lobby.html`.
+- Los tokens emitidos antes del Taller 5 (sin `provider`) se rechazan con 4001.
+
+### Decisiones tomadas durante el desarrollo
+
+- **Origen del código:** los archivos del código base estaban copiados en la raíz (commit `3182f36 inicial`); se movieron a una copia local de solo lectura.
+- **Configuración común:** dotenv con `{ quiet: true }`; `DB_PATH` relativo a la carpeta del servicio; `PORT` validado; el log de peticiones va antes de `express.json()` para registrar también los 400/413 de JSON roto.
+- **`/login` no recorta el username:** solo exige texto no vacío de hasta 1000 caracteres; el cliente lo envía recortado.
+- **Contraseñas:** la longitud de 6–72 se mide en caracteres; bcrypt trunca a 72 bytes.
+- **`auth-service/.npmrc` (`ignore-scripts=true`):** nació para evitar la compilación de better-sqlite3 en una instalación limpia. Desde el Taller 5 no hay dependencias nativas y ya no es necesario, pero no estorba.
+- **Coordinator:**
+  - los mensajes son planos (`{ type, … }`);
+  - el log HTTP no incluye la query (lleva el token);
+  - el socket del upgrade tiene manejador de `error`;
+  - el apagado cierra con 1001 y fuerza la salida a los 5 s.
+- **Usernames sin distinguir mayúsculas:** "Oscar", "osCar" y "OSCAR" son la misma cuenta. Lo garantiza un índice `COLLATE NOCASE`, y el login devuelve el nombre tal como se registró.
+- **Token corrupto con la sesión abierta:** el lobby y `play.html` revisan el token guardado cada segundo y con el evento `storage`. Si cambia o desaparece, la sesión se cae.
+- **Pruebas en Windows:** los procesos se levantan y se detienen por PID. `netstat` en Git Bash puede devolver PIDs con `\r`.
 
 ---
 
@@ -625,18 +696,17 @@ De la referencia **no** se usaron Tailwind, Google Fonts, Font Awesome, el sonid
 
 Basado en el código de referencia **SSD-CommsWS** (<https://github.com/Draklif/SSD-CommsWS>).
 
-- **Reutilizado**:
-  - La estructura de `coordinator/index.js` (HTTP + WebSocket en el mismo puerto, secciones comentadas).
-  - La función `send()` con chequeo de `readyState` y la idea de `broadcast()`.
-  - El patrón `app.listen(PORT, (err) => …)` de Express 5.
-  - Los estilos de `dashboard/style.css` (paleta, modo oscuro, tarjetas, botones) en la primera versión del cliente; la interfaz de Viruscity los reemplazó por su propio sistema de diseño.
-  - El atajo `$` de `dashboard/common.js`.
-  - El indicador de estado del WebSocket del dashboard.
-- **Cambiado o agregado**:
-  - Autenticación completa (auth-service con SQLite, bcrypt y JWT).
-  - Verificación del token en el `upgrade` con códigos 4001/4002.
-  - `Map` de jugadores en lugar de workers, manejo de `close`, heartbeat con ping/pong y cierre por expiración.
-  - Mensajes `players_update`.
-  - Cliente de login/lobby con `textContent`.
-  - Configuración con dotenv y `.env` por servicio, con un `package.json` por servicio.
-  - Se eliminaron roles, workers, pulsos de aplicación, dashboards de depuración y CORS abierto en el coordinator.
+- **Reutilizado:**
+  - la estructura de `coordinator/index.js` (HTTP + WebSocket en el mismo puerto);
+  - `send()` con chequeo de `readyState` y la idea de `broadcast()`;
+  - el patrón `app.listen(PORT, (err) => …)` de Express 5;
+  - los estilos de `dashboard/style.css` en la primera versión del cliente (luego reemplazados por la interfaz de Viruscity);
+  - el atajo `$` y el indicador de estado del WebSocket del dashboard.
+- **Cambiado o agregado:**
+  - autenticación completa (local y Google) con tabla única;
+  - verificación del token en el `upgrade` con códigos 4001/4002;
+  - `Map` de jugadores con game loop autoritativo, intención y extras;
+  - heartbeat y cierre por expiración;
+  - cliente de juego en canvas con `textContent`/`fillText`;
+  - configuración con dotenv y un `package.json` por servicio;
+  - se eliminaron roles, workers, pulsos de aplicación, dashboards de depuración y CORS abierto en el coordinator.
