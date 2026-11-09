@@ -1,7 +1,7 @@
-// Personaje "Explorador": estilo Funko con pelo rizado y chaqueta táctica.
-// Adaptado de la referencia visual rpg_funko_2d_movement_demo.html (sin armas: solo el frasco de esporas).
+// Personaje "Explorador Pop": estilo Funko con pelo rizado y chaqueta táctica.
+// Adaptado de la referencia visual rpg_funko_2d_movement_demo.html (diseño del equipo).
 // drawExplorer(ctx, dir, isMoving, walkTime, config) dibuja centrado en (0, 0) con los pies en y ≈ +22.
-// config = { hairColor, outfitColor, skinColor, accessory: "vial"|"none" }
+// config = { hairColor, outfitColor, skinColor, accessory: "shotgun"|"sword"|"vial"|"none" }
 
 export function drawExplorer(ctx, dir, isMoving, walkTime, config) {
     ctx.save();
@@ -382,8 +382,26 @@ function drawAccessory(ctx, type, x, y, dir) {
     ctx.save();
     ctx.translate(x, y);
 
-    if (type === 'vial') {
-        // Virus City Spore Vial (Cyan Glow)
+    if (type === 'shotgun') {
+        // Escopeta táctica
+        ctx.fillStyle = '#475569';
+        ctx.fillRect(-2, -2, 18, 4); // cañón
+        ctx.fillStyle = '#78350f';
+        ctx.fillRect(-6, 0, 8, 5); // culata de madera
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(4, 2, 4, 3); // corredera
+    } else if (type === 'sword') {
+        // Espada
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillRect(-2, -14, 4, 16); // hoja
+        ctx.fillStyle = '#3b82f6';
+        ctx.fillRect(-6, 0, 12, 3); // guarda
+        ctx.fillStyle = '#f59e0b';
+        ctx.beginPath();
+        ctx.arc(0, 4, 2.5, 0, Math.PI * 2); // pomo
+        ctx.fill();
+    } else if (type === 'vial') {
+        // Frasco de esporas de Virus City (brillo cian)
         ctx.fillStyle = '#00e5ff';
         ctx.shadowColor = '#00e5ff';
         ctx.shadowBlur = 10;

@@ -11,8 +11,9 @@
 // - Vecinos y coches son decorado local: cada cliente ve los suyos y no chocan con nadie.
 
 import { computeView, clampZoom, nextAnim } from "./view.js";
-import { resolveLook } from "./characters/look.js";
+import { resolveLook, POWER_MS } from "./characters/look.js";
 import { drawCharacter, CHARACTER_HEIGHT, FEET_OFFSET } from "./characters/index.js";
+import { drawPowerEffect, jetpackHeight } from "./characters/powers.js";
 import { WORLD_WIDTH, WORLD_HEIGHT, TILE_SIZE, MAP_COLS, MAP_ROWS } from "./map/constants.js";
 import { buildWorld, worldObjs, buildingsList, ground, idx } from "./map/layout.js";
 import { SPRITES, buildAllPropSprites } from "./map/props.js";
@@ -107,6 +108,17 @@ export function createRenderer(canvas, minimap) {
     // y el siguiente state del servidor lo corrige.
     const renderPos = new Map();
     const anims = new Map();
+    // Poderes: cuándo vio este cliente que cada jugador activó el suyo (extras.powerOn pasa a true)
+    const powers = new Map(); // userId → { on, start }
+
+    // Progreso del efecto (0..1) o null si no está activo
+    function powerProgress(userId, look, nowMs) {
+        const prev = powers.get(userId) ?? { on: false, start: -Infinity };
+        const next = { on: look.powerOn, start: look.powerOn && !prev.on ? nowMs : prev.start };
+        powers.set(userId, next);
+        const t = (nowMs - next.start) / POWER_MS;
+        return t >= 0 && t < 1 ? t : null;
+    }
 
     function smoothedPosition(p, dt) {
         let pos = renderPos.get(p.userId);
@@ -248,7 +260,7 @@ export function createRenderer(canvas, minimap) {
     }
 
     // ---------- Jugadores ----------
-    function drawPlayerBody(p, pos, radius, isMe) {
+    function drawPlayerBody(p, pos, radius, isMe, look, powerT) {
         const anim = anims.get(p.userId);
         const feetY = pos.y + radius; // base de la caja de colisión del servidor = pies del personaje
         ctx.save();
@@ -264,7 +276,16 @@ export function createRenderer(canvas, minimap) {
             ctx.stroke();
             ctx.restore();
         }
-        drawCharacter(ctx, resolveLook(p), anim?.dir ?? "DOWN", reducedMotion.matches ? false : Boolean(anim?.moving), anim?.walkTime ?? 0);
+        const flyHeight = look.power === "jetpack" && powerT !== null ? jetpackHeight(powerT) : 0;
+        drawCharacter(ctx, look, anim?.dir ?? "DOWN", reducedMotion.matches ? false : Boolean(anim?.moving), anim?.walkTime ?? 0, { flyHeight });
+        ctx.restore();
+    }
+
+    function drawPlayerPower(p, pos, radius, look, powerT) {
+        if (powerT === null) return;
+        ctx.save();
+        ctx.translate(pos.x, pos.y + radius - FEET_OFFSET);
+        drawPowerEffect(ctx, look.power, anims.get(p.userId)?.dir ?? "DOWN", powerT);
         ctx.restore();
     }
 
@@ -356,7 +377,12 @@ export function createRenderer(canvas, minimap) {
 
         // Posiciones suavizadas y animación (solo visual)
         const positions = new Map();
+        const looks = new Map();
+        const powerTs = new Map();
         for (const p of players) {
+            const look = resolveLook(p);
+            looks.set(p.userId, look);
+            powerTs.set(p.userId, powerProgress(p.userId, look, nowMs));
             const pos = smoothedPosition(p, dt);
             positions.set(p.userId, pos);
             anims.set(p.userId, nextAnim(anims.get(p.userId), pos.x, pos.y, dt));
@@ -365,6 +391,7 @@ export function createRenderer(canvas, minimap) {
             if (!positions.has(id)) {
                 renderPos.delete(id);
                 anims.delete(id);
+                powers.delete(id);
             }
         }
 
@@ -434,10 +461,13 @@ export function createRenderer(canvas, minimap) {
                 ctx.globalAlpha = 1;
             } else if (it.k === 1) drawNPCEntity(ctx, it.o);
             else if (it.k === 2) drawCar(ctx, it.o);
-            else drawPlayerBody(it.p, it.pos, radius, it.p.userId === meId);
+            else drawPlayerBody(it.p, it.pos, radius, it.p.userId === meId, looks.get(it.p.userId), powerTs.get(it.p.userId));
         }
 
         if (withMap) cityEffects(ctx, nowMs, gameMinutes(lastState.t), v);
+
+        // Efectos de poderes encima de la noche (brillan)
+        for (const p of players) drawPlayerPower(p, positions.get(p.userId), radius, looks.get(p.userId), powerTs.get(p.userId));
 
         // Nombres al final, por encima de la noche, para que siempre se lean
         for (const p of players) drawLabel(p, positions.get(p.userId), radius, world);

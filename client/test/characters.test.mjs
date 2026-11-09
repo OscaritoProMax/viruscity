@@ -1,13 +1,15 @@
 // Pruebas de las funciones puras de personajes, cámara, reloj y zonas (js/play/).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CHARACTERS, CHARACTER_IDS, SKIN_TONES, defaultLook, resolveLook, lookToExtras, parseSavedLook } from "../public/js/play/characters/look.js";
+import { CHARACTERS, CHARACTER_IDS, SKIN_TONES, defaultLook, resolveLook, lookToExtras, parseSavedLook, powerLabel } from "../public/js/play/characters/look.js";
+import { jetpackHeight } from "../public/js/play/characters/powers.js";
 import { computeView, nextAnim, clampZoom, ZOOM_MIN, ZOOM_MAX } from "../public/js/play/view.js";
 import { gameMinutes, formatClock, ambientAt, isNight, DAY_MS } from "../public/js/play/map/clock.js";
 import { areaName } from "../public/js/play/map/zones.js";
 
 const HEX = /^#[0-9a-f]{6}$/;
-const isValidLook = (l) => CHARACTER_IDS.includes(l.character) && [l.color, l.detail, l.skin].every((c) => HEX.test(c));
+const isValidLook = (l) =>
+    CHARACTER_IDS.includes(l.character) && [l.color, l.detail, l.skin].every((c) => HEX.test(c)) && CHARACTERS[l.character].powers.some((p) => p.id === l.power);
 
 test("defaultLook: estable por userId, válido y variado entre jugadores", () => {
     assert.deepEqual(defaultLook("42"), defaultLook("42"));
@@ -17,12 +19,12 @@ test("defaultLook: estable por userId, válido y variado entre jugadores", () =>
 });
 
 test("resolveLook: usa los extras válidos y reemplaza los inválidos (de otro cliente)", () => {
-    const good = { userId: "7", extras: { character: "mensajero", color: "#FF5500", detail: "#facc15", skin: "#8d5b3c" } };
-    assert.deepEqual(resolveLook(good), { character: "mensajero", color: "#ff5500", detail: "#facc15", skin: "#8d5b3c" });
+    const good = { userId: "7", extras: { character: "mensajero", color: "#FF5500", detail: "#facc15", skin: "#8d5b3c", power: "smg", powerOn: true } };
+    assert.deepEqual(resolveLook(good), { character: "mensajero", color: "#ff5500", detail: "#facc15", skin: "#8d5b3c", power: "smg", powerOn: true });
 
     const base = defaultLook("7");
     for (const extras of [
-        { character: "dragón", color: "rojo", detail: 5, skin: "<script>" },
+        { character: "dragón", color: "rojo", detail: 5, skin: "<script>", power: "rayo", powerOn: "sí" },
         { character: "__proto__" },
         { character: "toString" },
         null,
@@ -39,16 +41,17 @@ test("resolveLook: usa los extras válidos y reemplaza los inválidos (de otro c
     assert.equal(resolveLook({ userId: "7", extras: { color: "#123456" } }).color, "#123456");
 });
 
-test("lookToExtras: solo los 4 campos conocidos y siempre dentro del límite de 1024 bytes", () => {
-    const extras = lookToExtras({ character: "heroina", color: "#581C87", detail: "#d4b36c", skin: "#f7d5b8", extra: "x".repeat(5000) });
-    assert.deepEqual(Object.keys(extras).sort(), ["character", "color", "detail", "skin"]);
+test("lookToExtras: solo los 5 campos conocidos (sin powerOn) y siempre dentro del límite de 1024 bytes", () => {
+    const extras = lookToExtras({ character: "heroina", color: "#581C87", detail: "#d4b36c", skin: "#f7d5b8", power: "walkie", powerOn: true, extra: "x".repeat(5000) });
+    assert.deepEqual(Object.keys(extras).sort(), ["character", "color", "detail", "power", "skin"]);
+    assert.equal(extras.power, "walkie");
     assert.equal(extras.color, "#581c87");
     assert.ok(JSON.stringify(extras).length < 200);
 });
 
 test("parseSavedLook: JSON guardado, color suelto del Taller 5 o nada", () => {
     const saved = JSON.stringify({ character: "heroina", color: "#be123c", detail: "#ec4899", skin: "#c68e5f" });
-    assert.deepEqual(parseSavedLook(saved, null), { character: "heroina", color: "#be123c", detail: "#ec4899", skin: "#c68e5f" });
+    assert.deepEqual(parseSavedLook(saved, null), { character: "heroina", color: "#be123c", detail: "#ec4899", skin: "#c68e5f", power: "aura" });
     assert.equal(parseSavedLook(null, "#ff5500").color, "#ff5500");
     assert.equal(parseSavedLook("{roto", null), null);
     assert.equal(parseSavedLook(JSON.stringify({ character: "otro" }), "rojo"), null);
@@ -122,4 +125,27 @@ test("areaName: zonas conocidas del mapa", () => {
     assert.equal(at(30, 52), "Lago Sur");
     assert.equal(at(60, 50), "Granja Los Brotes");
     assert.equal(at(0, 0), "Virus City");
+});
+
+test("poderes: cada personaje tiene los de su referencia y uno ajeno no se acepta", () => {
+    assert.deepEqual(CHARACTERS.heroina.powers.map((p) => p.id), ["aura", "walkie", "vial", "none"]);
+    assert.deepEqual(CHARACTERS.explorador.powers.map((p) => p.id), ["shotgun", "sword", "vial", "none"]);
+    assert.deepEqual(CHARACTERS.mensajero.powers.map((p) => p.id), ["jetpack", "spray", "smg", "none"]);
+    // La escopeta es del explorador: la heroína con escopeta queda con su primer poder
+    assert.equal(resolveLook({ userId: "1", extras: { character: "heroina", power: "shotgun" } }).power, "aura");
+    assert.equal(resolveLook({ userId: "1", extras: { character: "explorador", power: "sword" } }).power, "sword");
+    assert.equal(resolveLook({ userId: "1", extras: { character: "explorador", power: "sword" } }).powerOn, false);
+    assert.equal(powerLabel("mensajero", "jetpack"), "Mochila cohete");
+    assert.equal(powerLabel("nadie", "x"), "");
+});
+
+test("nombres de los personajes", () => {
+    assert.deepEqual(CHARACTER_IDS.map((id) => CHARACTERS[id].name), ["Heroína 11", "Explorador Pop", "Mensajero"]);
+});
+
+test("jetpackHeight: despega y aterriza en 0, sube en el medio", () => {
+    assert.equal(jetpackHeight(0), 0);
+    assert.equal(jetpackHeight(1), 0);
+    assert.ok(jetpackHeight(0.5) > 40);
+    assert.equal(jetpackHeight(-0.2), 0);
 });

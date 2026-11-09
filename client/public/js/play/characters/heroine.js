@@ -1,4 +1,4 @@
-// Personaje "Heroína": estilo Funko de los 80 con trenzas, overol y walkie-talkie.
+// Personaje "Heroína 11": estilo Funko de los 80 con trenzas, overol y poderes (aura, walkie, frasco).
 // Adaptado de la referencia visual rpg_funko_2d_movement_demo_80s_heroine.html / virus_city_map.html.
 // drawHeroine(ctx, dir, isMoving, walkTime, config) dibuja centrada en (0, 0) con los pies en y ≈ +22.
 // config = { hairColor, outfitColor, sleeveColor, tieColor, skinColor, accessory: "walkie"|"aura"|"vial"|"none" }

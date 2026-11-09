@@ -2,7 +2,8 @@
 // gorra, sudadera, bolso cruzado, jeans y zapatillas. Toma la idea de construcción de las referencias
 // (cuerpo por capas, piernas y brazos que se balancean, perfil reflejado para la derecha).
 // drawCourier(ctx, dir, isMoving, walkTime, config) dibuja centrado en (0, 0) con los pies en y ≈ +22.
-// config = { topColor, capColor, skinColor }
+// config = { topColor, capColor, skinColor, tool: "jetpack"|"spray"|"smg"|"none", flyHeight: px (vuelo de la mochila) }
+// Las herramientas (aerosol, subfusil, mochila cohete) se adaptan de la referencia del equipo.
 
 const PANTS = "#1e3a8a";
 const SHOES = "#f8fafc";
@@ -46,6 +47,38 @@ function drawEyes(ctx, headY) {
     }
 }
 
+// Herramienta en la mano (el origen es la mano)
+function drawHeldTool(ctx, tool) {
+    if (tool === "spray") {
+        rr(ctx, -3, -2, 6, 12, 2, "#16a34a"); // lata de aerosol
+        ctx.fillStyle = "#cbd5e1";
+        ctx.fillRect(-1.5, -5, 3, 3); // válvula
+    } else if (tool === "smg") {
+        ctx.fillStyle = "#1e293b"; // subfusil compacto
+        ctx.fillRect(-4, -2, 12, 6);
+        ctx.fillRect(-1, 4, 3, 6);
+    }
+}
+
+// Mochila cohete a la espalda; con flyHeight > 0 salen llamas de las toberas
+function drawJetpack(ctx, flyHeight) {
+    rr(ctx, -16, -14, 32, 22, 5, "#334155");
+    ctx.fillStyle = "#64748b";
+    ctx.fillRect(-12, 4, 8, 10);
+    ctx.fillRect(4, 4, 8, 10);
+    if (flyHeight <= 0) return;
+    const flame = 12 + Math.abs(Math.sin(Date.now() * 0.05)) * 10;
+    ctx.fillStyle = "#f97316";
+    for (const x of [-8, 8]) {
+        ctx.beginPath();
+        ctx.moveTo(x - 4, 14);
+        ctx.lineTo(x, 14 + flame);
+        ctx.lineTo(x + 4, 14);
+        ctx.fill();
+        dot(ctx, x, 14, 3, "#fde047");
+    }
+}
+
 function drawCapFront(ctx, headY, cap) {
     // Copa de la gorra y visera hacia delante
     ctx.fillStyle = cap;
@@ -60,21 +93,25 @@ export function drawCourier(ctx, dir, isMoving, walkTime, config) {
     const top = config.topColor;
     const cap = config.capColor;
     const skin = config.skinColor;
+    const tool = config.tool ?? "none";
+    const flyHeight = tool === "jetpack" ? Math.max(0, config.flyHeight ?? 0) : 0;
 
     ctx.save();
-    const bob = isMoving ? Math.abs(Math.sin(walkTime * 12)) * 3.5 : Math.sin(Date.now() * 0.004) * 1.4;
-    const legSwing = isMoving ? Math.sin(walkTime * 12) * 8 : 0;
-    const armSwing = isMoving ? Math.sin(walkTime * 12) * 6 : 0;
+    const flying = flyHeight > 0;
+    const bob = flying ? 0 : isMoving ? Math.abs(Math.sin(walkTime * 12)) * 3.5 : Math.sin(Date.now() * 0.004) * 1.4;
+    const legSwing = isMoving && !flying ? Math.sin(walkTime * 12) * 8 : 0;
+    const armSwing = isMoving && !flying ? Math.sin(walkTime * 12) * 6 : 0;
 
     if (dir === "RIGHT") ctx.scale(-1, 1);
 
-    // Sombra en el suelo
+    // Sombra en el suelo (se achica al volar)
     ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
     ctx.beginPath();
-    ctx.ellipse(0, 24, 20, 8, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 24, Math.max(8, 20 - flyHeight * 0.25), Math.max(3, 8 - flyHeight * 0.1), 0, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.translate(0, -bob);
+    ctx.translate(0, -bob - flyHeight);
+    if (tool === "jetpack" && dir !== "UP") drawJetpack(ctx, flyHeight);
     const headY = -28;
 
     if (dir === "DOWN" || dir === "UP") {
@@ -104,6 +141,10 @@ export function drawCourier(ctx, dir, isMoving, walkTime, config) {
             ctx.rotate((side * (front ? -armSwing : armSwing) * Math.PI) / 180);
             rr(ctx, -3.5, 0, 7, 13, 3, top);
             dot(ctx, 0, 13, 4, skin);
+            if (front && side === 1) {
+                ctx.translate(0.5, 13);
+                drawHeldTool(ctx, tool);
+            }
             ctx.restore();
         }
 
@@ -140,6 +181,7 @@ export function drawCourier(ctx, dir, isMoving, walkTime, config) {
             ctx.roundRect(-24, headY - 21, 48, 18, [14, 14, 4, 4]);
             ctx.fill();
             rr(ctx, -6, headY - 6, 12, 4, 2, tint(cap, -0.3));
+            if (tool === "jetpack") drawJetpack(ctx, flyHeight);
         }
     } else {
         // Perfil (se dibuja mirando a la izquierda; la derecha se refleja arriba)
@@ -187,6 +229,8 @@ export function drawCourier(ctx, dir, isMoving, walkTime, config) {
         ctx.translate(-2 - armSwing * 0.8, -7);
         rr(ctx, -3.5, 0, 7, 13, 3, tint(top, -0.08));
         dot(ctx, 0, 13, 4, skin);
+        ctx.translate(-2, 13);
+        drawHeldTool(ctx, tool);
         ctx.restore();
     }
 
