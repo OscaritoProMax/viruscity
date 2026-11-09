@@ -41,8 +41,9 @@ const HEARTBEAT_INTERVAL_MS = Number(HEARTBEAT_RAW);
 // Mapa opcional con casillas sólidas (MAP_FILE, relativo a la carpeta del coordinator).
 // Sin MAP_FILE el mundo es un rectángulo vacío de WORLD_WIDTH × WORLD_HEIGHT.
 let map = null;
-if (process.env.MAP_FILE) {
-    const mapPath = path.resolve(__dirname, process.env.MAP_FILE);
+const MAP_FILE = (process.env.MAP_FILE ?? "").trim();
+if (MAP_FILE) {
+    const mapPath = path.resolve(__dirname, MAP_FILE);
     let data;
     try {
         data = JSON.parse(fs.readFileSync(mapPath, "utf8"));
