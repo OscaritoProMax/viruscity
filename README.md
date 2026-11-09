@@ -367,7 +367,7 @@ Los comandos están escritos para Git Bash.
 
 | Comando | Qué prueba |
 |---|---|
-| `cd auth-service && npm test` | 20 pruebas: registro, login, Google con verificador falso, migración del Taller 4 y que los logs no filtren datos |
+| `cd auth-service && npm test` | 20 pruebas: registro, login, Google con verificador falso, migración del Taller 4 y que los logs no filtren datos (el resumen dice 21 porque `node --test` también cuenta `test/helpers.js` como un archivo) |
 | `cd coordinator && npm test` | 9 pruebas de la lógica pura del juego |
 | `cd client && npm test` | 40 pruebas: flujo de Google, intención, colores, ajuste del canvas y la interfaz de Viruscity |
 | `cd coordinator && npm run smoke` | Con auth y coordinator levantados: S1–S11 (Taller 4) y G1–G12 (juego en vivo) |
