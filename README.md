@@ -3,13 +3,13 @@
 Universidad de Boyacá. Tres procesos independientes que se comunican por red:
 
 - **auth-service** (puerto 4000): registro e inicio de sesión con usuario/contraseña **y con Google**. Una sola tabla `users` en SQLite (`node:sqlite`) y JWT HS256.
-- **coordinator** (puerto 5000): **servidor autoritativo** del juego en vivo. Recibe a los jugadores por WebSocket, aplica sus *intenciones* en un game loop a 20 Hz y envía el estado a todos.
-- **client** (puerto 3000): páginas HTML + JS plano servidas con Express. `login.html` (con botón de Google) y `play.html` (el juego en canvas).
+- **coordinator** (puerto 5000): **servidor autoritativo** del juego en vivo. Recibe a los jugadores por WebSocket, aplica sus *intenciones* en un game loop a 20 Hz (con choques contra el mapa de Virus City) y envía el estado a todos.
+- **client** (puerto 3000): páginas HTML + JS plano servidas con Express. `login.html` (con botón de Google) y `play.html` (el juego sobre el mapa de la ciudad, con selector de personaje).
 
 **Parte I (Taller 4)** fue la identidad: login con JWT y lobby en vivo. **Parte II (Taller 5)** agrega el juego en vivo con el servidor como autoridad y el login con Google. Este README describe el estado actual (Taller 5); al final hay un resumen de lo que viene del Taller 4.
 
 **Contenido**
-- [Parte II · Taller 5](#parte-ii--taller-5): 1. Arquitectura · 2. Base de datos · 3. Google · 4. API del auth · 5. Coordinador · 6. Extra: color · 7. Cliente · 8. Variables · 9. Correr todo · 10. Google Cloud · 11. ngrok · 12. Decisiones · 13. Errores típicos · 14. Sustentación
+- [Parte II · Taller 5](#parte-ii--taller-5): 1. Arquitectura · 2. Base de datos · 3. Google · 4. API del auth · 5. Coordinador · 6. Extra: personaje · 7. Cliente · 8. Variables · 9. Correr todo · 10. Google Cloud · 11. ngrok · 12. Decisiones · 13. Errores típicos · 14. Sustentación
 - [Estructura del repositorio](#estructura-del-repositorio)
 - [Interfaz de Viruscity](#interfaz-de-viruscity)
 - [Parte I · Taller 4 (resumen)](#parte-i--taller-4-resumen)
@@ -48,6 +48,8 @@ Universidad de Boyacá. Tres procesos independientes que se comunican por red:
  │ (desde .env)   │   │ users.db (1 tabla)   │   │   provider, socket, x, y,     │
  └────────────────┘   └──────────┬───────────┘   │   intent, extras }            │
                                  │               │ game loop: tick() a 20 Hz     │
+                                 │               │ map/virus-city.json: casillas │
+                                 │               │   sólidas (choques)           │
                                  │               └──────────────┬────────────────┘
                                  └──────── JWT_SECRET ──────────┘
                      (el auth firma el JWT y el coordinator lo verifica; no se llaman entre sí)
@@ -70,12 +72,12 @@ Universidad de Boyacá. Tres procesos independientes que se comunican por red:
 **C. Conexión WebSocket**
 1. `play.html` abre `new WebSocket("{COORDINATOR_WS_URL}/connect?token=<JWT>")`.
 2. El coordinator verifica el JWT **en el `upgrade`** (HS256, `userId`, `username`, `provider` ∈ {local, google} y `exp`). Si falla, completa el handshake y cierra con `4001 "invalid token"`.
-3. Si es válido: aparece en una posición al azar, recibe `welcome` y todos reciben `players_update`.
+3. Si es válido: aparece en una casilla libre del centro de la ciudad, recibe `welcome` y todos reciben `players_update`.
 
 **D. Game loop (servidor autoritativo)**
 1. El cliente envía solo **intenciones** (`{ type: "intent", intent: { dir: { x, y } } }`) y **extras** (`extras_update`). El handler de mensajes solo las **guarda**.
-2. Cada tick (20 Hz) el servidor calcula `dt` real, mueve a todos con su intención normalizada, los mantiene dentro del mundo y envía **un** mensaje `state` con todos los jugadores.
-3. El cliente guarda ese mensaje en `window.lastState` y lo dibuja (con un suavizado solo visual).
+2. Cada tick (20 Hz) el servidor calcula `dt` real, mueve a todos con su intención normalizada, los frena contra las casillas sólidas del mapa (edificios, agua, árboles, vallas), los mantiene dentro del mundo y envía **un** mensaje `state` con todos los jugadores.
+3. El cliente guarda ese mensaje en `window.lastState` y lo dibuja sobre la ciudad (con un suavizado solo visual).
 
 ---
 
@@ -204,23 +206,25 @@ curl -s -w "  HTTP %{http_code}\n" -X POST http://localhost:4000/auth/google -H 
 
 **El cliente nunca mueve al jugador.** Solo dice hacia dónde quiere ir; el servidor decide dónde está.
 
-**Game loop** ([coordinator/index.js](coordinator/index.js#L274) `tick()` y lógica pura en [coordinator/game.js](coordinator/game.js#L94)):
+**Game loop** ([coordinator/index.js](coordinator/index.js#L295) `tick()` y lógica pura en [coordinator/game.js](coordinator/game.js#L187)):
 1. **`dt` real:** se mide con `Date.now()` entre ticks y se acota a 0,25 s (`clampDt`). Así la velocidad no depende del tick rate, y una pausa del proceso no provoca un salto enorme.
 2. **Movimiento normalizado:** `stepPlayers` divide la intención por `Math.hypot(x, y)`, así que la diagonal avanza lo mismo que un eje (200 px/s, no 283).
-3. **Límites del mundo:** cada jugador queda dentro de `[radio, ancho − radio]` × `[radio, alto − radio]`.
-4. **Un broadcast por tick:** `snapshot(players)` se serializa **una vez** y se envía a todos. Los handlers de mensajes nunca hacen broadcast.
-5. **20 Hz de verdad:** el loop se programa con una hora objetivo (`scheduleTick`), no con `setInterval`. En Windows `setInterval(50)` dispara cada ~60 ms (≈16,5 Hz).
+3. **Choques con el mapa:** con `MAP_FILE`, el jugador es una caja de `2·radio` y `moveAxis` lo mueve **un eje a la vez**. Si la caja entra en una casilla sólida, se pega al borde de esa casilla (y en diagonal se desliza por la pared). Avanza en pasos de media casilla, así que tampoco atraviesa paredes con un `dt` grande.
+4. **Límites del mundo:** cada jugador queda dentro de `[radio, ancho − radio]` × `[radio, alto − radio]`.
+5. **Un broadcast por tick:** `snapshot(players)` se serializa **una vez** y se envía a todos. Los handlers de mensajes nunca hacen broadcast.
+6. **20 Hz de verdad:** el loop se programa con una hora objetivo (`scheduleTick`), no con `setInterval`. En Windows `setInterval(50)` dispara cada ~60 ms (≈16,5 Hz).
 
 **Protocolo**
 
 Del servidor al cliente:
 ```json
 { "type": "welcome", "you": { "userId": "4", "username": "alice", "provider": "local" },
-  "world": { "width": 1200, "height": 800, "playerRadius": 16, "tickRate": 20 } }
+  "world": { "width": 3840, "height": 2880, "playerRadius": 16, "tickRate": 20 } }
 
 { "type": "state", "t": 1794174650735,
-  "players": [ { "userId": "4", "username": "alice", "provider": "local", "x": 108.01, "y": 589.1, "extras": { "color": "#ff5500" } },
-               { "userId": "7", "username": "bob_google", "provider": "google", "x": 1096.12, "y": 576.09, "extras": {} } ] }
+  "players": [ { "userId": "4", "username": "alice", "provider": "local", "x": 1708.01, "y": 1189.1,
+                 "extras": { "character": "mensajero", "color": "#2563eb", "detail": "#facc15", "skin": "#8d5b3c" } },
+               { "userId": "7", "username": "bob_google", "provider": "google", "x": 2096.12, "y": 1376.09, "extras": {} } ] }
 
 { "type": "players_update", "players": [ { "userId": "4", "username": "alice" }, { "userId": "7", "username": "bob_google" } ] }
 ```
@@ -228,10 +232,12 @@ Del servidor al cliente:
 Del cliente al servidor:
 ```json
 { "type": "intent", "intent": { "dir": { "x": 1, "y": -1 } } }
-{ "type": "extras_update", "extras": { "color": "#ff5500" } }
+{ "type": "extras_update", "extras": { "character": "mensajero", "color": "#2563eb", "detail": "#facc15", "skin": "#8d5b3c" } }
 ```
 
-**Validaciones y límites** ([game.js](coordinator/game.js#L60) e [index.js](coordinator/index.js#L221) `ws.on("message")`):
+**El mapa en el servidor.** `coordinator/map/virus-city.json` guarda la grilla de 80 × 60 casillas de 48 (1 = sólida) y las casillas donde se puede aparecer. Lo genera `npm run map` (en `client/`) ejecutando **el mismo** `layout.js` que dibuja el cliente, y la prueba `client/test/map.test.mjs` falla si el archivo y el dibujo no coinciden. `parseMap()` valida el archivo al arrancar, el tamaño del mundo sale del mapa (3840 × 2880) y `randomSpawn()` elige una casilla libre del centro. Sin `MAP_FILE`, el mundo es el rectángulo vacío de `WORLD_WIDTH × WORLD_HEIGHT` (1200 × 800 por defecto).
+
+**Validaciones y límites** ([game.js](coordinator/game.js#L125) e [index.js](coordinator/index.js#L242) `ws.on("message")`):
 - **`intent`:** `x` e `y` deben ser `number` finitos; se reducen a −1/0/1 con `Math.sign` (`{9999, -5}` → `{1, -1}`). Strings, NaN, Infinity, arrays o falta de `dir` → se ignora.
 - **`extras_update`:** objeto no nulo y no array, de **máximo 1024 bytes** serializado (`MAX_EXTRAS_BYTES`). Si trae `color`, debe cumplir `^#[0-9a-fA-F]{6}$` (si no, se ignora todo el mensaje) y se guarda en minúsculas. Se guarda una **copia** y **reemplaza** los extras anteriores.
 - **`maxPayload` de 2048 bytes:** un mensaje mayor cierra el socket.
@@ -244,19 +250,26 @@ Del cliente al servidor:
 - **Sesión duplicada** (Taller 4): si la misma cuenta abre otra conexión, la anterior se cierra con `4002 "replaced by new session"`. El `close` de la vieja no borra a la nueva.
 - **Heartbeat:** `ping` cada `HEARTBEAT_INTERVAL_MS`; quien no responde antes del siguiente ciclo se termina.
 - **Expiración:** al conectar se programa el cierre `4001 "token expired"` para el `exp` del token.
-- **`GET /health`:** responde `{ "status": "ok", "players": N, "tickRate": 20 }`.
+- **`GET /health`:** responde `{ "status": "ok", "players": N, "tickRate": 20, "map": "virus-city" }` (`map: null` sin mapa).
 
 ---
 
-## 6. Feature extra: color del jugador e insignia del provider
+## 6. Feature extra: personaje del jugador e insignia del provider
 
-**Color.** En `play.html` el jugador elige su color con un selector o con seis colores predefinidos.
-1. El cliente envía `{ type: "extras_update", extras: { color } }`.
-2. El coordinator lo valida (`sanitizeExtras`) y lo guarda en `p.extras` (en `ws.on("message")` de [index.js](coordinator/index.js#L221)).
-3. Desde ese tick, el color viaja en **cada `state`** dentro de `extras`, para todos los jugadores.
+**Personaje.** En el panel "Tu personaje" de `play.html` cada jugador elige:
+- un **personaje**: Heroína, Explorador o Mensajero;
+- su **color principal** (overol, chaqueta o sudadera): una de seis muestras o cualquiera con el selector;
+- un **detalle** (pelo o gorra);
+- su **tono de piel**.
+
+1. El cliente envía `{ type: "extras_update", extras: { character, color, detail, skin } }` (unos 90 bytes, lejos del límite de 1024).
+2. El coordinator lo valida (`sanitizeExtras`: objeto, tamaño, `color` con formato `#rrggbb`) y lo guarda en `p.extras` (en `ws.on("message")` de [index.js](coordinator/index.js#L242)).
+3. Desde ese tick, la apariencia viaja en **cada `state`** dentro de `extras`, y todos dibujan a ese jugador con ese personaje.
 
 - **Es replicado:** el estado vive en el servidor y todos lo reciben en el mismo mensaje.
-- **Es persistente durante la sesión:** sigue en `p.extras` hasta que el jugador se desconecta. Además el cliente lo guarda en `localStorage` (`playColor`) y lo reenvía al recibir `welcome`, así que se conserva al recargar.
+- **Es persistente durante la sesión:** sigue en `p.extras` hasta que el jugador se desconecta. Además el cliente lo guarda en `localStorage` (`playLook`) y lo reenvía al recibir `welcome`, así que se conserva al recargar.
+- **No se confía en los extras de los demás:** el servidor solo valida `color`, así que `resolveLook()` ([characters/look.js](client/public/js/play/characters/look.js#L64)) revisa cada campo que llega en el `state`: el personaje debe ser uno de los tres y los colores deben ser `#rrggbb`. Lo que no sirve se reemplaza por una apariencia **por defecto estable**, derivada del `userId`, así que todos los clientes ven lo mismo aunque alguien no haya elegido nada.
+- **Compatible con el Taller 5 original:** `color` sigue siendo el color principal. Un cliente que solo envíe `{ color }` se ve con su color.
 
 **Insignia del provider.** Cada jugador del `state` trae `provider`, que pone el servidor desde el JWT. El cliente dibuja a la derecha del nombre una **"G"** azul sobre blanco para Google o una **"L"** sobre gris para cuentas locales. Como sale del servidor, nadie puede hacerse pasar por usuario de Google enviando extras.
 
@@ -270,11 +283,20 @@ Del cliente al servidor:
   - Sin One Tap.
   - Las respuestas de `/auth/google` se interpretan con la función pura `interpretGoogleResponse` de [js/google-flow.js](client/public/js/google-flow.js).
   - Tras el login, local o de Google, se va a **`play.html`**.
-- **`play.html`** ([js/play/play.js](client/public/js/play/play.js#L57)):
-  - **Estado:** `window.lastState` guarda **el último mensaje `state` completo** del servidor. Es la única fuente de verdad: el cliente no calcula posiciones.
+- **`play.html`** ([js/play/play.js](client/public/js/play/play.js#L79)):
+  - **Estado:** `window.lastState` guarda **el último mensaje `state` completo** del servidor. Es la única fuente de verdad: el cliente no calcula posiciones ni choques.
   - **Entrada:** WASD o flechas llenan un `Set` de teclas. `computeIntent` lo convierte en una dirección y se envía **solo cuando cambia**. Al perder el foco o esconder la pestaña se envía `{0, 0}`.
-  - **Dibujo:** [js/play/render.js](client/public/js/play/render.js#L42) dibuja con un **suavizado solo visual**: `renderPos` se acerca a la posición del servidor con `1 − e^(−20·dt)` y salta si la diferencia supera 200. Si alguien edita `lastState` en DevTools, la vista lo refleja y el siguiente `state` lo corrige.
-  - **Lista de jugadores:** un punto con el color de cada uno, "(tú)" para el local y su insignia.
+  - **Dibujo:** [js/play/render.js](client/public/js/play/render.js#L111) dibuja con un **suavizado solo visual**: `renderPos` se acerca a la posición del servidor con `1 − e^(−20·dt)` y salta si la diferencia supera 200. Si alguien edita `lastState` en DevTools, la vista lo refleja y el siguiente `state` lo corrige.
+  - **Mapa de Virus City** ([js/play/map/](client/public/js/play/map/)):
+    - el suelo se pinta en trozos de 16 × 16 casillas cacheados en canvas;
+    - edificios, árboles y jugadores se ordenan por profundidad (lo de más abajo tapa a lo de arriba);
+    - un árbol o edificio que tapa al jugador local se vuelve translúcido;
+    - la cámara sigue al jugador local; el zoom (0,5× a 2×) y el minimapa son solo visuales.
+  - **Día y noche:** la hora sale del `t` que manda el servidor en cada `state` ([map/clock.js](client/public/js/play/map/clock.js)), no del reloj del navegador. Todos ven la misma hora y la misma luz (farolas, ventanas y neones de noche); un día de juego dura 15 minutos reales.
+  - **Ambiente local:** vecinos, un perro y coches recorren la ciudad. Son **decorado de cada cliente**: no viajan por la red, no chocan con nadie y no cambian ninguna posición de juego.
+  - **Animación:** la dirección del personaje y el paso se deducen de cómo cambia su posición dibujada (`nextAnim` en [view.js](client/public/js/play/view.js)); no se envían por la red.
+  - **Si el mundo del servidor no mide 3840 × 2880** (coordinator sin `MAP_FILE`), se dibuja la cuadrícula simple de antes, con los mismos personajes.
+  - **Lista de jugadores:** para cada uno muestra un retrato de su personaje, el nombre ("(tú)" para el local), la zona de la ciudad donde está (Plaza Mayor, Avenida Central…) y su insignia. Se reconstruye solo cuando cambia algo visible.
   - **Aviso:** "Conexión inestable…" si pasan más de 3 s sin `state`.
 - **Cierres:**
   - `4001` → "Tu sesión expiró o el token no es válido…";
@@ -310,8 +332,9 @@ Cada servicio tiene su `.env` (ignorado por git) y su `.env.example` (versionado
 | `PORT` | Puerto HTTP + WebSocket (por defecto 5000) | `5000` |
 | `JWT_SECRET` | La misma clave del auth-service (≥ 32 caracteres) | igual que en auth |
 | `HEARTBEAT_INTERVAL_MS` | Cada cuánto se hace ping a los sockets | `30000` |
-| `WORLD_WIDTH` / `WORLD_HEIGHT` | Tamaño del mundo en unidades | `1200` / `800` |
-| `PLAYER_RADIUS` | Radio de los jugadores (2·radio < lado menor del mundo) | `16` |
+| `WORLD_WIDTH` / `WORLD_HEIGHT` | Tamaño del mundo en unidades (por defecto 1200 × 800). Con `MAP_FILE` sale del mapa: si se definen, deben valer 3840 / 2880 o el coordinator no arranca | `3840` / `2880` |
+| `MAP_FILE` | Mapa con casillas sólidas, relativo a la carpeta del coordinator. Vacío = mundo sin obstáculos | `./map/virus-city.json` |
+| `PLAYER_RADIUS` | Mitad del lado de la caja del jugador (2·radio < lado menor del mundo; con mapa, menor que 24) | `16` |
 | `PLAYER_SPEED` | Velocidad en unidades por segundo | `200` |
 | `TICK_RATE` | Ticks por segundo del game loop (1–120) | `20` |
 | `MAX_EXTRAS_BYTES` | Tamaño máximo de `extras` serializado | `1024` |
@@ -368,9 +391,10 @@ Los comandos están escritos para Git Bash.
 | Comando | Qué prueba |
 |---|---|
 | `cd auth-service && npm test` | 20 pruebas: registro, login, Google con verificador falso, migración del Taller 4 y que los logs no filtren datos (el resumen dice 21 porque `node --test` también cuenta `test/helpers.js` como un archivo) |
-| `cd coordinator && npm test` | 9 pruebas de la lógica pura del juego |
-| `cd client && npm test` | 40 pruebas: flujo de Google, intención, colores, ajuste del canvas y la interfaz de Viruscity |
-| `cd coordinator && npm run smoke` | Con auth y coordinator levantados: S1–S11 (Taller 4) y G1–G12 (juego en vivo) |
+| `cd coordinator && npm test` | 16 pruebas de la lógica pura del juego: movimiento, saneo, mapa y choques (incluido un paseo al azar por el mapa real que nunca pisa una casilla sólida) |
+| `cd client && npm test` | 54 pruebas: flujo de Google, intención, colores, personajes, cámara, reloj, zonas, que el mapa del servidor coincida con el del cliente y la interfaz de Viruscity |
+| `cd coordinator && npm run smoke` | Con auth y coordinator levantados: S1–S11 (Taller 4) y G1–G12 (juego en vivo). Con mapa, G5–G7 eligen direcciones libres y G10 comprueba que el jugador se detiene contra la pared donde lo calcula el servidor |
+| `cd client && npm run map` | Regenera `coordinator/map/virus-city.json` si se cambia el trazado de la ciudad (`public/js/play/map/layout.js`) |
 
 ---
 
@@ -433,6 +457,10 @@ y **reinicia el client**: `/config.js` se genera al arrancar. Abre `https://<hos
   - `intent` reducido a −1/0/1;
   - body del auth de 4 kB;
   - idToken de hasta 4096 caracteres.
+- **Choques en el servidor, con el mismo mapa que dibuja el cliente:** si el cliente decidiera los choques, un cliente modificado podría atravesar edificios. El trazado se escribe una sola vez (`layout.js`, puro y determinista); el cliente lo dibuja y `npm run map` exporta su grilla para el coordinator. Una prueba impide que se desincronicen. No se agregó ningún mensaje al protocolo: el mapa es un dato de configuración del servidor (`MAP_FILE`).
+- **Ambiente local fuera de la red:** vecinos, perro y coches son decorado de cada cliente. No chocan ni empujan, porque cualquier cosa que cambie posiciones de juego tendría que vivir en el servidor. Por la misma razón se dejaron fuera los interiores y los diálogos de la referencia.
+- **Hora del juego desde el servidor:** el reloj de día y noche usa el `t` del `state`, no `Date.now()` del navegador, así que todos ven la misma luz aunque sus relojes difieran.
+- **Apariencia en `extras` validada en los dos lados:** el servidor limita tamaño y formato de `color` y el cliente revisa el resto (`resolveLook`). Un extra raro de otro jugador nunca rompe el dibujo.
 - **`state` sin `socket` ni `intent`:** `snapshot()` publica solo `userId`, `username`, `provider`, `x`, `y` (redondeadas a 2 decimales) y `extras`. La intención de los demás no se revela y el objeto interno nunca sale del servidor.
 - **bcryptjs y `node:sqlite`:** sin dependencias nativas, así que la instalación no compila nada y no hace falta Visual Studio en Windows. El costo es que hace falta Node ≥ 22.13 (o 22.5 con `--experimental-sqlite`).
 - **Username de 3–32 caracteres (`^[a-zA-Z0-9_]+$`):** se guarda y se muestra con las mayúsculas con que se registró. La **unicidad y el login no distinguen mayúsculas** ("Oscar" = "oscar"), un cambio pedido durante el desarrollo para evitar cuentas casi idénticas.
@@ -450,13 +478,13 @@ y **reinicia el client**: `/config.js` se genera al arrancar. Abre `https://<hos
 
 | # | Error típico | Dónde se evita |
 |---|---|---|
-| 1 | El cliente calcula o envía su posición | [client/public/js/play/play.js](client/public/js/play/play.js#L159) `pushIntent()` solo envía la dirección; el coordinator ignora cualquier otro tipo de mensaje |
-| 2 | Mover jugadores o hacer broadcast en el handler de mensajes | [coordinator/index.js](coordinator/index.js#L221) `ws.on("message")` solo guarda `p.intent` / `p.extras`; mover y difundir es cosa de `tick()` |
-| 3 | Velocidad que depende del tick rate (sin `dt`) | `tick()` usa `clampDt(now − lastTick)` y [game.js](coordinator/game.js#L94) `stepPlayers(players, dt, cfg)` |
+| 1 | El cliente calcula o envía su posición | [client/public/js/play/play.js](client/public/js/play/play.js#L189) `pushIntent()` solo envía la dirección; el coordinator ignora cualquier otro tipo de mensaje |
+| 2 | Mover jugadores o hacer broadcast en el handler de mensajes | [coordinator/index.js](coordinator/index.js#L242) `ws.on("message")` solo guarda `p.intent` / `p.extras`; mover y difundir es cosa de `tick()` |
+| 3 | Velocidad que depende del tick rate (sin `dt`) | `tick()` usa `clampDt(now − lastTick)` y [game.js](coordinator/game.js#L187) `stepPlayers(players, dt, cfg, map)` |
 | 4 | La diagonal es más rápida | `stepPlayers()`: dirección dividida por `Math.hypot(x, y)` |
-| 5 | Confiar en el intent (NaN, Infinity, 9999, strings) | [game.js](coordinator/game.js#L60) `sanitizeIntent()`: `Number.isFinite` + `Math.sign` |
-| 6 | Extras sin límites (tamaño, tipo, color arbitrario, flood) | [game.js](coordinator/game.js#L70) `sanitizeExtras()`, `maxPayload: 2048` y `MAX_MSGS_PER_SEC` en `index.js` |
-| 7 | El jugador sale del mundo | `stepPlayers()`: límites `[R, W − R]` y `[R, H − R]` |
+| 5 | Confiar en el intent (NaN, Infinity, 9999, strings) | [game.js](coordinator/game.js#L125) `sanitizeIntent()`: `Number.isFinite` + `Math.sign` |
+| 6 | Extras sin límites (tamaño, tipo, color arbitrario, flood) | [game.js](coordinator/game.js#L135) `sanitizeExtras()`, `maxPayload: 2048` y `MAX_MSGS_PER_SEC` en `index.js` |
+| 7 | El jugador sale del mundo (o atraviesa edificios) | `stepPlayers()`: límites `[R, W − R]` y `[R, H − R]`; con mapa, [game.js](coordinator/game.js#L159) `moveAxis()` lo frena contra las casillas sólidas |
 | 8 | Usar el email como llave de la cuenta de Google | [auth-service/app.js](auth-service/app.js#L139) `/auth/google`: `findByGoogle(sub)`; `google_sub` es `UNIQUE` |
 | 9 | No verificar `audience` ni `email_verified` | [auth-service/google.js](auth-service/google.js#L14) (`verifyIdToken` con `audience` + comparación de `aud`) y `app.js` (`email_verified !== true` → 401) |
 | 10 | Dos tablas o username duplicado entre providers | [auth-service/db.js](auth-service/db.js#L14) tabla única + índice `users_username_nocase`; `findByUsername` en `/register` y `/auth/google` |
@@ -468,10 +496,11 @@ y **reinicia el client**: `/config.js` se genera al arrancar. Abre `https://<hos
 
 Antes de empezar: los tres servicios corriendo (local o con ngrok), `GOOGLE_CLIENT_ID` real configurado y dos navegadores distintos (o uno en incógnito) en el client.
 
-**(a) Juego con dos pestañas y el extra de color · 3 min**
+**(a) Juego con dos pestañas y el extra de personaje · 3 min**
 1. Entra con un usuario en cada navegador: los dos aparecen en el mapa y en "Jugadores en línea (2)".
-2. Muévete con WASD en uno: el otro ve el movimiento en vivo. Muévete en diagonal y explica que va a la misma velocidad.
-3. Cambia el color en uno (selector o muestras): el otro lo ve al instante. Recarga: el color se mantiene.
+2. Muévete con WASD en uno: el otro ve el movimiento en vivo. Muévete en diagonal y explica que va a la misma velocidad. Camina contra un edificio o el estanque: el servidor te frena, y en diagonal te deslizas por la pared.
+3. En "Tu personaje" cambia de personaje, color, pelo o gorra y piel: el otro lo ve al instante en el mapa y en la lista. Recarga: la apariencia se mantiene.
+4. Señala el reloj del HUD: las dos pestañas muestran la misma hora, porque sale del `t` del servidor.
 
 **(b) Los dos providers · 3 min**
 1. Registra `alice` con contraseña y entra.
@@ -493,16 +522,17 @@ const yo = lastState.players.find(p => p.username === localStorage.getItem('user
 setInterval(() => { const j = lastState.players.find(p => p.username === localStorage.getItem('username')); if (j) { j.x = 100; j.y = 100; } }, 5);
 ```
 
-Esa pestaña te dibuja en (100, 100), porque edita su copia local de `lastState`. **En la otra pestaña no pasa nada**: el servidor sigue con tu posición real. Al recargar (o al detener el intervalo), el siguiente `state` del servidor corrige la vista.
+Esa pestaña te dibuja en (100, 100), en el bosque de la esquina (la cámara te sigue hasta allí), porque edita su copia local de `lastState`. **En la otra pestaña no pasa nada**: el servidor sigue con tu posición real. Al recargar (o al detener el intervalo), el siguiente `state` del servidor corrige la vista.
 
 **(d) Tour del código · 4 min**
 
 | Punto | Archivo y función |
 |---|---|
-| Game loop | [coordinator/index.js](coordinator/index.js#L274) `tick()` (y `scheduleTick()`); movimiento en [game.js](coordinator/game.js#L94) `stepPlayers()` |
-| Validación de inputs | [coordinator/game.js](coordinator/game.js#L60) `sanitizeIntent()` y `sanitizeExtras()` |
+| Game loop | [coordinator/index.js](coordinator/index.js#L295) `tick()` (y `scheduleTick()`); movimiento en [game.js](coordinator/game.js#L187) `stepPlayers()` |
+| Choques con el mapa | [coordinator/game.js](coordinator/game.js#L159) `moveAxis()` y `boxBlocked()`; el mapa se carga con `parseMap()` desde `MAP_FILE` |
+| Validación de inputs | [coordinator/game.js](coordinator/game.js#L125) `sanitizeIntent()` y `sanitizeExtras()`; en el cliente, `resolveLook()` para los extras de los demás |
 | Verificación del ID token | [auth-service/google.js](auth-service/google.js#L14) `makeGoogleVerifier()` y [auth-service/app.js](auth-service/app.js#L139) `POST /auth/google` |
-| Dónde se guardan los extras | [coordinator/index.js](coordinator/index.js#L221) `ws.on("message")` → `p.extras`; salen en `snapshot()` dentro de cada `state` |
+| Dónde se guardan los extras | [coordinator/index.js](coordinator/index.js#L242) `ws.on("message")` → `p.extras`; salen en `snapshot()` dentro de cada `state` |
 
 **(e) Preguntas probables**
 1. **¿Por qué el cliente no mueve al jugador?**
@@ -521,6 +551,8 @@ Esa pestaña te dibuja en (100, 100), porque edita su copia local de `lastState`
    Así se envía un mensaje por tick con el estado completo y consistente. Si se difundiera por mensaje, el tráfico dependería de cuántas teclas pulsa cada uno y el estado llegaría a medias.
 8. **¿Qué pasa si alguien manda extras de 10 MB?**
    El servidor ni siquiera lo lee: un mensaje de más de 2048 bytes (`maxPayload`) cierra ese socket. Uno de menos de 2048 pero con extras de más de 1024 bytes se ignora, y más de 60 mensajes por segundo se descartan.
+9. **¿Por qué los choques con los edificios los calcula el servidor y no el cliente?**
+   Por la misma razón que la posición: si el cliente decidiera los choques, uno modificado podría atravesar paredes. El servidor tiene la grilla del mapa (`MAP_FILE`), generada desde el mismo trazado que dibuja el cliente, y una prueba verifica que coinciden.
 
 ---
 
@@ -539,12 +571,14 @@ Esa pestaña te dibuja en (100, 100), porque edita su copia local de `lastState`
 ├── coordinator/
 │   ├── .env.example · package.json · package-lock.json
 │   ├── index.js        # upgrade con JWT, sesiones, mensajes, game loop, heartbeat
-│   ├── game.js         # lógica pura: config, spawn, sanitizeIntent/Extras, stepPlayers, snapshot
+│   ├── game.js         # lógica pura: config, mapa y choques, spawn, sanitizeIntent/Extras, stepPlayers, snapshot
+│   ├── map/virus-city.json     # grilla de casillas sólidas y de aparición (npm run map en client/)
 │   ├── test/           # node:test de game.js
 │   └── scripts/smoke-test.js   # S1-S11 y G1-G12 (npm run smoke)
 └── client/
     ├── .env.example · package.json · package-lock.json
     ├── server.js       # Express estático + /config.js (AUTH_URL, COORDINATOR_WS_URL, GOOGLE_CLIENT_ID)
+    ├── scripts/export-map.mjs  # exporta la grilla del mapa para el coordinator (npm run map)
     ├── public/
     │   ├── login.html · play.html · lobby.html (legado) · game.html (vista previa de diseño)
     │   ├── css/        # tokens, base, components, login, google-login, play, lobby, game
@@ -552,9 +586,11 @@ Esa pestaña te dibuja en (100, 100), porque edita su copia local de `lastState`
     │   └── js/
     │       ├── login.js · login-ui.js · google-login.js · google-flow.js
     │       ├── lobby.js · game-shell.js
-    │       ├── play/   # play.js, render.js, intent.js, colors.js, fit.js
+    │       ├── play/   # play.js, render.js, view.js, intent.js, colors.js, look-panel.js, players-panel.js
+    │       │   ├── map/        # ciudad: layout (puro), props, edificios, suelo, vecinos y coches, reloj, zonas
+    │       │   └── characters/ # Heroína, Explorador, Mensajero y look.js (apariencia validada)
     │       └── ui/     # módulos de la interfaz de Viruscity
-    └── test/           # node:test (Google, juego, interfaz)
+    └── test/           # node:test (Google, juego, personajes, mapa, interfaz)
 ```
 
 Solo existen en tu equipo (ignorados por git): `*/.env`, `*/node_modules/`, `auth-service/users.db` y sus copias `*.bak`.
@@ -648,7 +684,7 @@ El hero del login muestra el logo como un virus "blando" que rebota, basado en `
 
 ### Integración pendiente
 
-- **`game.html` sigue siendo una vista previa de diseño.** La partida del Taller 5 vive en `play.html`. Para usar el diseño de Viruscity en el juego real, el bloque "INTEGRACIÓN REAL" de [client/public/js/game-shell.js](client/public/js/game-shell.js#L21) tendría que alimentar `renderer.draw(scene)` y el HUD con los datos de `window.lastState`.
+- **`game.html` sigue siendo una vista previa de diseño** (ciudad abstracta con HUD de tareas y cura). La partida real vive en `play.html`, que ya usa el mapa de Virus City y los personajes. Para la lógica de Viruscity (infectados, tareas y cura), el HUD de `js/ui/hud.js` se podría montar sobre `play.html`, alimentado con `window.lastState`.
 - **Antes de la entrega:** poner `UI.PREVIEW_ENABLED = false` en [ui-config.js](client/public/js/ui/ui-config.js#L6).
 
 ---
@@ -695,6 +731,8 @@ La Parte I construyó la identidad y la base del coordinator. Sigue vigente:
 ## Créditos
 
 Basado en el código de referencia **SSD-CommsWS** (<https://github.com/Draklif/SSD-CommsWS>).
+
+El mapa de la ciudad y dos personajes se adaptaron de referencias visuales del equipo (`virus_city_map.html` y dos demos de personajes Funko). Se pasaron a módulos ES sin CDN ni fuentes externas. Se quitaron los interiores, los diálogos y las armas, y las colisiones pasaron al servidor. El Mensajero es un diseño original.
 
 - **Reutilizado:**
   - la estructura de `coordinator/index.js` (HTTP + WebSocket en el mismo puerto);
