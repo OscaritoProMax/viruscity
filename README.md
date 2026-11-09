@@ -256,19 +256,24 @@ Del cliente al servidor:
 
 ## 6. Feature extra: personaje del jugador e insignia del provider
 
-**Personaje.** En el panel "Tu personaje" de `play.html` cada jugador elige:
-- un **personaje**: Heroína, Explorador o Mensajero;
+**Personaje.** En el panel "Tu personaje" de `play.html` (pestañas Personaje, Colores y Poder) cada jugador elige:
+- un **personaje**: Heroína 11, Explorador Pop o Mensajero;
 - su **color principal** (overol, chaqueta o sudadera): una de seis muestras o cualquiera con el selector;
 - un **detalle** (pelo o gorra);
-- su **tono de piel**.
+- su **tono de piel**;
+- su **poder**, tomado del diseño original de cada personaje:
+  - Heroína 11: aura telequinética, walkie-talkie o frasco de esporas;
+  - Explorador Pop: escopeta, espada o frasco de esporas;
+  - Mensajero: mochila cohete, aerosol o subfusil.
 
-1. El cliente envía `{ type: "extras_update", extras: { character, color, detail, skin } }` (unos 90 bytes, lejos del límite de 1024).
+1. El cliente envía `{ type: "extras_update", extras: { character, color, detail, skin, power } }` (unos 110 bytes, lejos del límite de 1024).
 2. El coordinator lo valida (`sanitizeExtras`: objeto, tamaño, `color` con formato `#rrggbb`) y lo guarda en `p.extras` (en `ws.on("message")` de [index.js](coordinator/index.js#L242)).
 3. Desde ese tick, la apariencia viaja en **cada `state`** dentro de `extras`, y todos dibujan a ese jugador con ese personaje.
 
 - **Es replicado:** el estado vive en el servidor y todos lo reciben en el mismo mensaje.
 - **Es persistente durante la sesión:** sigue en `p.extras` hasta que el jugador se desconecta. Además el cliente lo guarda en `localStorage` (`playLook`) y lo reenvía al recibir `welcome`, así que se conserva al recargar.
 - **No se confía en los extras de los demás:** el servidor solo valida `color`, así que `resolveLook()` ([characters/look.js](client/public/js/play/characters/look.js#L64)) revisa cada campo que llega en el `state`: el personaje debe ser uno de los tres y los colores deben ser `#rrggbb`. Lo que no sirve se reemplaza por una apariencia **por defecto estable**, derivada del `userId`, así que todos los clientes ven lo mismo aunque alguien no haya elegido nada.
+- **Usar el poder (tecla E o botón "Usar poder"):** el cliente envía los mismos extras con `powerOn: true` y, 700 ms después, sin él. Como `powerOn` viaja en el `state`, **todos** dibujan el efecto: el aura que crece, ondas de radio, esporas, perdigones, corte de espada, chorro de pintura, ráfaga o el salto con la mochila. Es **solo visual**: no cambia posiciones, no daña a nadie y no agrega mensajes al protocolo (hay un uso a la vez, muy por debajo del límite de 60 mensajes/s).
 - **Compatible con el Taller 5 original:** `color` sigue siendo el color principal. Un cliente que solo envíe `{ color }` se ve con su color.
 
 **Insignia del provider.** Cada jugador del `state` trae `provider`, que pone el servidor desde el JWT. El cliente dibuja a la derecha del nombre una **"G"** azul sobre blanco para Google o una **"L"** sobre gris para cuentas locales. Como sale del servidor, nadie puede hacerse pasar por usuario de Google enviando extras.
@@ -283,7 +288,13 @@ Del cliente al servidor:
   - Sin One Tap.
   - Las respuestas de `/auth/google` se interpretan con la función pura `interpretGoogleResponse` de [js/google-flow.js](client/public/js/google-flow.js).
   - Tras el login, local o de Google, se va a **`play.html`**.
-- **`play.html`** ([js/play/play.js](client/public/js/play/play.js#L79)):
+- **`play.html`** ([js/play/play.js](client/public/js/play/play.js#L79)): el mapa ocupa **toda la pantalla** y lo demás va superpuesto en paneles translúcidos:
+  - arriba, una barra con conexión, zona, hora, usuario y "Cerrar sesión";
+  - a la derecha, el minimapa y "Jugadores en línea";
+  - abajo a la izquierda, el selector compacto "Tu personaje";
+  - abajo a la derecha, el zoom.
+
+  Los paneles se pliegan (en pantallas angostas empiezan plegados) y el estado plegado se recuerda en el navegador.
   - **Estado:** `window.lastState` guarda **el último mensaje `state` completo** del servidor. Es la única fuente de verdad: el cliente no calcula posiciones ni choques.
   - **Entrada:** WASD o flechas llenan un `Set` de teclas. `computeIntent` lo convierte en una dirección y se envía **solo cuando cambia**. Al perder el foco o esconder la pestaña se envía `{0, 0}`.
   - **Dibujo:** [js/play/render.js](client/public/js/play/render.js#L111) dibuja con un **suavizado solo visual**: `renderPos` se acerca a la posición del servidor con `1 − e^(−20·dt)` y salta si la diferencia supera 200. Si alguien edita `lastState` en DevTools, la vista lo refleja y el siguiente `state` lo corrige.
@@ -500,7 +511,8 @@ Antes de empezar: los tres servicios corriendo (local o con ngrok), `GOOGLE_CLIE
 1. Entra con un usuario en cada navegador: los dos aparecen en el mapa y en "Jugadores en línea (2)".
 2. Muévete con WASD en uno: el otro ve el movimiento en vivo. Muévete en diagonal y explica que va a la misma velocidad. Camina contra un edificio o el estanque: el servidor te frena, y en diagonal te deslizas por la pared.
 3. En "Tu personaje" cambia de personaje, color, pelo o gorra y piel: el otro lo ve al instante en el mapa y en la lista. Recarga: la apariencia se mantiene.
-4. Señala el reloj del HUD: las dos pestañas muestran la misma hora, porque sale del `t` del servidor.
+4. En la pestaña Poder elige uno y pulsa **E**: el efecto se ve en las dos pestañas, porque viaja en los extras del `state`. Explica que es solo visual.
+5. Señala el reloj del HUD: las dos pestañas muestran la misma hora, porque sale del `t` del servidor.
 
 **(b) Los dos providers · 3 min**
 1. Registra `alice` con contraseña y entra.
@@ -732,7 +744,7 @@ La Parte I construyó la identidad y la base del coordinator. Sigue vigente:
 
 Basado en el código de referencia **SSD-CommsWS** (<https://github.com/Draklif/SSD-CommsWS>).
 
-El mapa de la ciudad y dos personajes se adaptaron de referencias visuales del equipo (`virus_city_map.html` y dos demos de personajes Funko). Se pasaron a módulos ES sin CDN ni fuentes externas. Se quitaron los interiores, los diálogos y las armas, y las colisiones pasaron al servidor. El Mensajero es un diseño original.
+El mapa de la ciudad y dos personajes (Heroína 11 y Explorador Pop, con sus poderes) se adaptaron de referencias visuales del equipo (`virus_city_map.html` y dos demos de personajes Funko). Se pasaron a módulos ES sin CDN ni fuentes externas. Se quitaron los interiores y los diálogos, y las colisiones pasaron al servidor. El Mensajero es un diseño original; sus herramientas (mochila cohete, aerosol y subfusil) se tomaron de una tercera demo.
 
 - **Reutilizado:**
   - la estructura de `coordinator/index.js` (HTTP + WebSocket en el mismo puerto);
