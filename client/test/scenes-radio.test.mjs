@@ -78,3 +78,24 @@ test("estimateOffset: se queda con la muestra de menor latencia", () => {
     assert.equal(estimateOffset([1000 - 30, 1000 - 80, 1000 - 10]), 990);
     assert.equal(estimateOffset([]), 0);
 });
+
+test("radio: el programador nunca se congela en los cambios de canción y no repite ni salta notas", async () => {
+    const { createRadio } = await import("../public/js/play/radio.js");
+    // Audio simulado: cuenta las notas (osciladores) y los golpes de ruido programados
+    const run = (frameMs) => {
+        let notes = 0;
+        const node = () => new Proxy(function () {}, { get: (_, k) => (k === "frequency" || k === "gain" ? node() : () => node()), apply: () => node() });
+        const ctx = { currentTime: 0, createOscillator: () => (notes++, node()), createGain: node, createBiquadFilter: node };
+        const audio = { context: () => ctx, radioBus: node, ready: () => true, isRadioMuted: () => false, noise: () => notes++ };
+        const radio = createRadio(audio);
+        const cycle = PLAYLIST.reduce((s, x) => s + songMs(x) + GAP_MS, 0);
+        // Un ciclo completo con la hora real (≈1,8·10^12 ms, donde aparecía el error de redondeo)
+        const start = Math.floor(Date.now() / cycle) * cycle;
+        for (let t = start; t < start + cycle; t += frameMs) radio.update(t);
+        return notes;
+    };
+    const at60 = run(1000 / 60);
+    const at30 = run(1000 / 30);
+    assert.ok(at60 > 1000, `${at60} notas en un ciclo`);
+    assert.equal(at30, at60, "la cantidad de notas no depende de los cuadros por segundo");
+});

@@ -70,6 +70,8 @@ export function createRadio(audio) {
     let scheduledUntil = -Infinity; // hora del servidor hasta la que ya se programaron notas
     let lastGapStart = null; // inicio (hora del servidor) de la última pausa con sintonía
     const LOOKAHEAD_MS = 220;
+    const MIN_ADVANCE_MS = 0.5; // cada vuelta del programador avanza al menos esto
+    const MAX_STEPS_PER_UPDATE = 64; // en 220 ms caben ~4 semicorcheas: 64 es un tope de seguridad
 
     // Una nota del sintetizador en el bus de la radio
     function note(when, freq, dur, type, vol, filterFreq = null) {
@@ -149,8 +151,13 @@ export function createRadio(audio) {
         }
         if (scheduledUntil < serverNow - 100) scheduledUntil = serverNow;
         const until = serverNow + LOOKAHEAD_MS;
-        // Recorre las semicorcheas que caen en (scheduledUntil, until]
-        while (scheduledUntil < until) {
+        // Recorre las semicorcheas que caen en (scheduledUntil, until].
+        // OJO: la hora del servidor ronda 1,8·10^12 ms y a esa escala el redondeo puede dejar a programAt
+        // un pelo antes de un límite (fin de canción o de pausa). Por eso CADA vuelta avanza al menos
+        // MIN_ADVANCE_MS, los saltos de límite caen 1 ms después de él, y hay un tope de vueltas por
+        // cuadro: el bucle nunca puede quedarse girando y congelar la página.
+        let guard = 0;
+        while (scheduledUntil < until && guard++ < MAX_STEPS_PER_UPDATE) {
             const p = programAt(scheduledUntil);
             if (p.gap) {
                 // Pausa entre canciones: estática de radio y la sintonía de la emisora (una vez)
@@ -161,20 +168,23 @@ export function createRadio(audio) {
                     audio.noise(1.2, 0.05, "bandpass", 2000, Math.max(0, when - ctx.currentTime), audio.radioBus());
                     [69, 72, 76, 81].forEach((m, i) => note(when + 1.3 + i * 0.16, midiToFreq(m), 0.3, "triangle", 0.05));
                 }
-                scheduledUntil += GAP_MS - p.gapOffsetMs;
+                // Fin de la pausa: 1 ms después del límite (la canción siguiente toma ese ms como su paso 0)
+                scheduledUntil = Math.max(scheduledUntil + MIN_ADVANCE_MS, scheduledUntil + (GAP_MS - p.gapOffsetMs) + 1);
                 continue;
             }
             const sm = stepMs(p.song);
-            const step = Math.ceil(p.offsetMs / sm - 1e-6);
+            // Al empezar una canción (primeros 2 ms) se toca el paso 0 aunque el redondeo diga otra cosa
+            const step = p.offsetMs < 2 ? 0 : Math.ceil(p.offsetMs / sm - 1e-6);
             const stepT = p.songStartT + step * sm;
             if (step >= BARS * STEPS) {
-                scheduledUntil = p.songStartT + songMs(p.song); // fin de la canción: sigue la pausa
+                // Fin de la canción: 1 ms después del límite empieza la pausa
+                scheduledUntil = Math.max(scheduledUntil + MIN_ADVANCE_MS, p.songStartT + songMs(p.song) + 1);
                 continue;
             }
             if (stepT > until) break;
             const when = ctx.currentTime + Math.max(0, (stepT - serverNow) / 1000);
             playStep(p.song, step, when);
-            scheduledUntil = stepT + 0.5; // pasa a la siguiente semicorchea
+            scheduledUntil = Math.max(scheduledUntil + MIN_ADVANCE_MS, stepT + 0.5); // siguiente semicorchea
         }
     }
 
