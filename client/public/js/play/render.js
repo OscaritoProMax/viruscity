@@ -17,8 +17,8 @@ import { computeView, clampZoom, nextAnim } from "./view.js";
 import { resolveLook, POWER_MS } from "./characters/look.js";
 import { drawCharacter, CHARACTER_HEIGHT, FEET_OFFSET } from "./characters/index.js";
 import { drawPowerEffect, jetpackHeight } from "./characters/powers.js";
-import { WORLD_WIDTH, WORLD_HEIGHT, TILE_SIZE, MAP_COLS, MAP_ROWS } from "./map/constants.js";
-import { buildWorld, worldObjs, buildingsList, ground, idx, gAt, G, worldInteractables } from "./map/layout.js";
+import { WORLD_WIDTH, WORLD_HEIGHT, TILE_SIZE, MAP_COLS, MAP_ROWS, CITY_WIDTH, CITY_HEIGHT } from "./map/constants.js";
+import { buildWorld, worldObjs, buildingsList, ground, idx, gAt, G, worldInteractables, doors } from "./map/layout.js";
 import { buildScenes } from "./map/interiors.js";
 import { buildInteriorSprites, paintBurgerBase, paintMarketBase } from "./map/interior-art.js";
 import { sceneAt, sceneRect, WORLD_SCENE } from "./map/scenes.js";
@@ -47,6 +47,9 @@ const MINI_SCALE = 2; // px del minimapa base por casilla
 // La caja del jugador en el servidor (2·radio) es más alta que la caja de pies de la referencia: no se
 // acerca tanto a mostradores y carteles, así que el radio para hablar se amplía un poco
 const REACH_BONUS = 24;
+// Marcas de entrada y salida de los locales (amarillo de las puertas del minimapa de la referencia)
+const DOOR_YELLOW = "#facc15";
+const DOOR_INK = "#0b1020";
 
 // Lee una variable CSS (tokens.css) con un valor de respaldo
 function cssVar(name, fallback) {
@@ -89,6 +92,16 @@ function ensureCity() {
         const s = o.spec;
         m.fillStyle = s.roof || s.roofTop || { church: "#475569", hall: "#64748b", barn: "#7f1d1d" }[s.kind] || "#57534e";
         m.fillRect(o.c * MINI_SCALE, o.r * MINI_SCALE, s.w * MINI_SCALE, s.h * MINI_SCALE);
+    }
+    // Puertas de los locales a los que se puede entrar: cuadro amarillo con borde negro
+    for (const d of doors) {
+        const x = (d.cols[0] + d.cols.length / 2) * MINI_SCALE - 3;
+        const y = (d.row + 1) * MINI_SCALE - 3;
+        m.fillStyle = DOOR_YELLOW;
+        m.fillRect(x, y, 6, 6);
+        m.strokeStyle = "#000000";
+        m.lineWidth = 1;
+        m.strokeRect(x - 0.5, y - 0.5, 7, 7);
     }
     // Interiores: piso pintado una vez y sprites de los muebles
     const scenes = buildScenes();
@@ -420,6 +433,74 @@ export function createRenderer(canvas, minimap) {
         ctx.restore();
     }
 
+    // ---------- Entradas y salidas de los locales ----------
+    // Cartel "ENTRAR · Burger Neón" sobre la puerta y flecha en la acera; dentro, "SALIDA" en la puerta.
+    // x: centro de la puerta; doorY: borde inferior de la puerta (línea de la fachada)
+    function drawDoorSign(x, doorY, text, arrowUp, nowMs) {
+        const bob = reducedMotion.matches ? 0 : Math.sin(nowMs * 0.005) * 3;
+        ctx.save();
+        // Resplandor en el suelo frente a la puerta
+        const pulse = reducedMotion.matches ? 0.35 : 0.3 + 0.15 * Math.sin(nowMs * 0.004);
+        const g = ctx.createRadialGradient(x, doorY, 4, x, doorY, 56);
+        g.addColorStop(0, `rgba(250,204,21,${pulse.toFixed(2)})`);
+        g.addColorStop(1, "rgba(250,204,21,0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(x - 56, doorY - 56, 112, 112);
+        // Flecha que indica hacia dónde caminar
+        const ay = arrowUp ? doorY + 30 + bob : doorY - 22 + bob;
+        const dir = arrowUp ? -1 : 1;
+        ctx.fillStyle = DOOR_YELLOW;
+        ctx.strokeStyle = DOOR_INK;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x, ay + dir * 12);
+        ctx.lineTo(x - 11, ay - dir * 4);
+        ctx.lineTo(x - 4, ay - dir * 4);
+        ctx.lineTo(x - 4, ay - dir * 12);
+        ctx.lineTo(x + 4, ay - dir * 12);
+        ctx.lineTo(x + 4, ay - dir * 4);
+        ctx.lineTo(x + 11, ay - dir * 4);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        // Cartel (tamaño constante en pantalla)
+        const fs = px(11);
+        ctx.font = `800 ${fs}px ${fontMono}`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        const w = ctx.measureText(text).width + px(16);
+        const h = fs + px(10);
+        // Fuera: sobre la fachada. Dentro: sobre el vidrio de la puerta, en el suelo (no tapa a nadie)
+        const ly = arrowUp ? doorY - 100 : doorY + px(6);
+        ctx.fillStyle = DOOR_YELLOW;
+        ctx.beginPath();
+        ctx.roundRect(x - w / 2, ly, w, h, px(6));
+        ctx.fill();
+        ctx.lineWidth = px(1.5);
+        ctx.strokeStyle = DOOR_INK;
+        ctx.stroke();
+        ctx.fillStyle = DOOR_INK;
+        ctx.fillText(text, x, ly + h / 2 + px(0.5));
+        ctx.restore();
+    }
+
+    function drawCityDoors(nowMs, v) {
+        for (const d of doors) {
+            const x = (d.cols[0] + d.cols.length / 2) * TILE_SIZE;
+            const doorY = (d.row + 1) * TILE_SIZE;
+            if (x < v.vx0 - 200 || x > v.vx1 + 200 || doorY < v.vy0 - 200 || doorY > v.vy1 + 200) continue;
+            const name = sceneRect(d.to)?.name ?? "";
+            drawDoorSign(x, doorY, `ENTRAR · ${name.toUpperCase()}`, true, nowMs);
+        }
+    }
+
+    function drawSceneExit(sc, nowMs) {
+        const ex = sc.exit;
+        const x = sc.ox + (ex.cols[0] + ex.cols.length / 2) * TILE_SIZE;
+        const doorY = sc.oy + ex.row * TILE_SIZE;
+        drawDoorSign(x, doorY, "SALIDA", false, nowMs);
+    }
+
     // ---------- Interiores ----------
     function drawInterior(sc, nowMs, dt, players, positions, looks, powerTs, radius, meId) {
         ctx.drawImage(sc.base, sc.ox, sc.oy);
@@ -429,6 +510,7 @@ export function createRenderer(canvas, minimap) {
         const la = Math.min(0.17, 1.1 / Math.max(1, sc.lights.length));
         for (const l of sc.lights) glow(ctx, sc.ox + l.x, sc.oy + l.y, l.r, l.c, la);
         ctx.restore();
+        drawSceneExit(sc, nowMs); // en el suelo: muebles y personas pasan por encima
 
         const f = Math.min(dt, 0.1) * 60;
         for (const n of sc.npcs) updateNPC(n, f, talkingTo);
@@ -474,8 +556,9 @@ export function createRenderer(canvas, minimap) {
         mc.clearRect(0, 0, minimap.width, minimap.height);
         if (!city) return;
         mc.drawImage(city.mini, 0, 0, minimap.width, minimap.height);
-        const kx = minimap.width / world.width;
-        const ky = minimap.height / world.height;
+        // El minimapa muestra solo la ciudad (los interiores están debajo, fuera de él)
+        const kx = minimap.width / CITY_WIDTH;
+        const ky = minimap.height / CITY_HEIGHT;
         mc.strokeStyle = "rgba(255,255,255,0.85)";
         mc.lineWidth = 1;
         mc.strokeRect(view.x * kx, view.y * ky, view.w * kx, view.h * ky);
@@ -631,6 +714,7 @@ export function createRenderer(canvas, minimap) {
         }
 
         if (inCity) cityEffects(ctx, nowMs, gameMinutes(lastState.t), v);
+        if (inCity) drawCityDoors(nowMs, v);
 
         // Efectos de poderes encima de la noche (brillan)
         for (const p of visible) drawPlayerPower(p, positions.get(p.userId), radius, looks.get(p.userId), powerTs.get(p.userId));
