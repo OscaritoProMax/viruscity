@@ -572,10 +572,10 @@ Esa pestaña te dibuja en (100, 100), en el bosque de la esquina (la cámara te 
    Así se envía un mensaje por tick con el estado completo y consistente. Si se difundiera por mensaje, el tráfico dependería de cuántas teclas pulsa cada uno y el estado llegaría a medias.
 8. **¿Qué pasa si alguien manda extras de 10 MB?**
    El servidor ni siquiera lo lee: un mensaje de más de 2048 bytes (`maxPayload`) cierra ese socket. Uno de menos de 2048 pero con extras de más de 1024 bytes se ignora, y más de 60 mensajes por segundo se descartan.
-10. **¿Cómo escuchan todos la misma radio si no se envía audio?**
-   La música es una partitura fija que cada navegador sintetiza. Qué canción y qué compás suenan se calcula con la hora del servidor (el `t` de cada `state`), igual que el reloj del día.
 9. **¿Por qué los choques con los edificios los calcula el servidor y no el cliente?**
    Por la misma razón que la posición: si el cliente decidiera los choques, uno modificado podría atravesar paredes. El servidor tiene la grilla del mapa (`MAP_FILE`), generada desde el mismo trazado que dibuja el cliente, y una prueba verifica que coinciden.
+10. **¿Cómo escuchan todos la misma radio si no se envía audio?**
+   La música es una partitura fija que cada navegador sintetiza. Qué canción y qué compás suenan se calcula con la hora del servidor (el `t` de cada `state`), igual que el reloj del día.
 
 ---
 
