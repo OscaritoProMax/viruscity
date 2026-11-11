@@ -3,7 +3,9 @@
 // para que ningún archivo del cliente tenga URLs escritas a mano.
 //
 // Configuración: variables de entorno cargadas desde .env (ver .env.example).
-// PORT, AUTH_URL y COORDINATOR_WS_URL son obligatorios; GOOGLE_CLIENT_ID es opcional.
+// PORT y AUTH_URL son obligatorios; GOOGLE_CLIENT_ID y COORDINATOR_WS_URL son opcionales.
+// Taller 6: el juego ya no se conecta a un coordinador fijo: pide uno a GET {AUTH_URL}/coordinator.
+// COORDINATOR_WS_URL queda solo por compatibilidad (vacío por defecto; /config.js lo sigue entregando).
 
 require("dotenv").config({ quiet: true }); // quiet: evita que dotenv imprima su propio mensaje en consola
 
@@ -41,9 +43,8 @@ const GOOGLE_CLIENT_ID = trimSlash((process.env.GOOGLE_CLIENT_ID || "").trim());
 if (!process.env.PORT) fatal("PORT es obligatorio");
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) fatal("PORT debe ser un número de puerto válido");
 if (!AUTH_URL) fatal("AUTH_URL es obligatorio");
-if (!COORDINATOR_WS_URL) fatal("COORDINATOR_WS_URL es obligatorio");
 checkUrl("AUTH_URL", AUTH_URL, ["http:", "https:"]);
-checkUrl("COORDINATOR_WS_URL", COORDINATOR_WS_URL, ["ws:", "wss:"]);
+if (COORDINATOR_WS_URL) checkUrl("COORDINATOR_WS_URL", COORDINATOR_WS_URL, ["ws:", "wss:"]); // opcional (Taller 6)
 
 // ---------- HTTP ----------
 const app = express();
