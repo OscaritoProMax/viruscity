@@ -1,5 +1,6 @@
 // Auth service (Taller 5): registro e inicio de sesión con usuario/contraseña y con Google.
 // Ambas vías emiten el mismo JWT HS256 { userId, username, provider } y conviven en una sola tabla users.
+// Taller 6: además es el directory service de los coordinadores (heartbeat, /coordinator, /peers, /directory).
 //
 // Este archivo solo arranca: valida la configuración, abre la base (node:sqlite), aplica el esquema o la
 // migración del Taller 4 y levanta la app de app.js. Configuración en .env (ver .env.example).
@@ -28,6 +29,10 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "1h";
 const ROUNDS_RAW = process.env.BCRYPT_ROUNDS || "10";
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_ID_SUFFIX = ".apps.googleusercontent.com";
+// Directory service (Taller 6)
+const CLUSTER_SECRET = process.env.CLUSTER_SECRET;
+const TTL_RAW = process.env.COORDINATOR_TTL_MS || "6000";
+const RESERVATION_RAW = process.env.RESERVATION_TTL_MS || "3000";
 
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) fatal("PORT debe ser un número de puerto válido");
 
@@ -41,6 +46,13 @@ if (BCRYPT_ROUNDS > 31) fatal("BCRYPT_ROUNDS no puede ser mayor que 31 (límite 
 
 if (!GOOGLE_CLIENT_ID) fatal("GOOGLE_CLIENT_ID es obligatorio");
 if (!GOOGLE_CLIENT_ID.endsWith(GOOGLE_ID_SUFFIX)) fatal(`GOOGLE_CLIENT_ID debe terminar en "${GOOGLE_ID_SUFFIX}"`);
+if (!CLUSTER_SECRET) fatal("CLUSTER_SECRET es obligatorio (secreto compartido con los coordinadores)");
+if (CLUSTER_SECRET.length < 32) fatal("CLUSTER_SECRET debe tener al menos 32 caracteres");
+if (!/^\d+$/.test(TTL_RAW) || Number(TTL_RAW) < 1000) fatal("COORDINATOR_TTL_MS debe ser un entero mayor o igual a 1000 (milisegundos)");
+const COORDINATOR_TTL_MS = Number(TTL_RAW);
+if (!/^\d+$/.test(RESERVATION_RAW)) fatal("RESERVATION_TTL_MS debe ser un entero mayor o igual a 0 (milisegundos; 0 desactiva las reservas)");
+const RESERVATION_TTL_MS = Number(RESERVATION_RAW);
+
 if (GOOGLE_CLIENT_ID.includes("localtest")) {
     console.warn("Advertencia: GOOGLE_CLIENT_ID es de prueba: el login con Google no funcionará hasta poner el real");
 }
