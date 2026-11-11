@@ -307,6 +307,20 @@ body.play {
     color: var(--muted, #8f9bc4);
 }
 
+/* Coordinador del jugador: texto pequeño y atenuado */
+.play-player__coord {
+    color: var(--muted, #8f9bc4);
+    font-family: var(--font-mono, monospace);
+    font-size: .6875rem;
+    opacity: .85;
+}
+
+/* Pastilla del coordinador en el header */
+.play-pill--coord {
+    font-family: var(--font-mono, monospace);
+    font-size: .75rem;
+}
+
 .play-players:empty::after {
     content: "Nadie conectado todavía";
     color: var(--muted, #8f9bc4);

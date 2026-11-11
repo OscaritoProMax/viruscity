@@ -1,4 +1,5 @@
-// Lista "Jugadores en línea": retrato del personaje, nombre, zona del mapa, poder e insignia del proveedor.
+// Lista "Jugadores en línea": retrato del personaje, nombre, zona del mapa, poder, coordinador (Taller 6)
+// e insignia del proveedor.
 // Sale de window.lastState (el servidor): no hay otra fuente. Se reconstruye solo cuando cambia algo
 // visible (alguien entra o sale, cambia de apariencia o de zona).
 //
@@ -33,7 +34,7 @@ export function createPlayersPanel(listEl, countEl) {
         // El jugador local primero; los demás por nombre
         const sorted = [...players].sort((a, b) => (b.userId === meId) - (a.userId === meId) || String(a.username).localeCompare(String(b.username), "es"));
         const rows = sorted.map((p) => ({ p, look: resolveLook(p), zone: zoneOf(p), isMe: p.userId === meId }));
-        const next = rows.map(({ p, look, zone, isMe }) => [p.userId, p.username, p.provider, look.character, look.color, look.detail, look.skin, look.power, zone, isMe].join("|")).join(";");
+        const next = rows.map(({ p, look, zone, isMe }) => [p.userId, p.username, p.provider, look.character, look.color, look.detail, look.skin, look.power, zone, isMe, p.coordinatorId].join("|")).join(";");
         if (next === signature) return;
         signature = next;
 
@@ -61,6 +62,13 @@ export function createPlayersPanel(listEl, countEl) {
                 const power = look.power !== "none" ? powerLabel(look.character, look.power) : "";
                 meta.textContent = [zone ?? "En el mapa", power].filter(Boolean).join(" · ");
                 info.append(name, meta);
+                // Coordinador dueño del jugador (donde está conectado su cliente)
+                if (typeof p.coordinatorId === "string" && p.coordinatorId) {
+                    const coord = document.createElement("span");
+                    coord.className = "play-player__coord";
+                    coord.textContent = p.coordinatorId;
+                    info.append(coord);
+                }
 
                 li.append(portrait(look, dpr), info);
                 if (PROVIDER_LABELS[p.provider]) {

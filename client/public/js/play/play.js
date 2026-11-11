@@ -1,6 +1,8 @@
 // Página del juego en vivo (Talleres 5 y 6).
 // Taller 6: antes de conectar se pide un coordinador al directorio (GET {AUTH_URL}/coordinator) y el
 // WebSocket va a su publicUrl. Hay varios coordinadores intercambiables con el mismo estado del juego.
+// Si la conexión se cae (salvo 4001, 4002 o cerrar sesión) NO se reconecta al mismo: se pide otro al
+// directorio (que solo devuelve coordinadores vivos), esperando 1, 2, 3, 3… s, hasta 20 intentos.
 // El SERVIDOR es la autoridad: este cliente no calcula posiciones ni choques. Solo:
 //   - guarda el último mensaje state en window.lastState y lo dibuja sobre el mapa de Virus City,
 //   - envía intenciones de movimiento y extras (la apariencia de su personaje y su poder).
@@ -20,7 +22,7 @@ import { createAudio } from "./audio.js";
 import { createRadio, STATION, estimateOffset } from "./radio.js";
 import { createDialogue } from "./dialogue.js";
 import { sceneAt, WORLD_SCENE } from "./map/scenes.js";
-import { parseCoordinatorResponse, buildWsUrl, isMixedContent } from "./directory.js";
+import { parseCoordinatorResponse, buildWsUrl, isMixedContent, nextDelay, classifyClose, MAX_ATTEMPTS } from "./directory.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -29,7 +31,6 @@ const CLOSE_MESSAGES = {
     4001: "Tu sesión expiró o el token no es válido. Inicia sesión de nuevo.",
     4002: "Tu sesión se abrió en otra pestaña. Esta sesión fue cerrada.",
 };
-const DEFAULT_CLOSE_MESSAGE = "Se perdió la conexión con el coordinador. Inicia sesión de nuevo.";
 const NO_COORDINATOR_MESSAGE = "No hay coordinadores disponibles. Inténtalo más tarde.";
 const NGROK_HEADERS = { "ngrok-skip-browser-warning": "true" }; // evita la página de aviso de ngrok
 
@@ -131,6 +132,8 @@ function startGame(token) {
     // ---------- Coordinador y WebSocket (Taller 6) ----------
     let ws = null; // conexión VIGENTE (los eventos de una conexión vieja se ignoran)
     let coordinatorId = null; // coordinador actual (el de welcome manda sobre el del directorio)
+    let attempts = 0; // intentos fallidos seguidos (se reinicia con cada welcome)
+    let retryTimer = null;
     const isOpen = () => ws !== null && ws.readyState === WebSocket.OPEN;
     const sendJson = (msg) => {
         if (isOpen()) ws.send(JSON.stringify(msg));
@@ -141,8 +144,15 @@ function startGame(token) {
         $("clusterNotice").textContent = text ?? "";
         $("clusterNotice").hidden = !text;
     }
+    // Pastilla del header: "Tick: 20 Hz · Coordinador: coord-a" (antes del welcome, "Coordinador: —")
+    function setCoordinatorPill(tickRate, id) {
+        $("coordText").textContent = id ? `Tick: ${tickRate} Hz · Coordinador: ${id}` : "Coordinador: —";
+    }
+    setCoordinatorPill(null, null);
+
     function leaveToLogin(message, clearToken = true) {
         loggingOut = true;
+        clearTimeout(retryTimer);
         clearInterval(tokenWatch);
         sessionStorage.setItem("sessionMessage", message);
         if (clearToken) clearSession(token);
@@ -181,10 +191,22 @@ function startGame(token) {
         openSocket(url, result.coordinatorId);
     }
 
-    // Sin coordinador del directorio: por ahora se vuelve al login
-    function onDirectoryFailure() {
+    // Nuevo intento dentro de nextDelay(intento); tras MAX_ATTEMPTS fallos seguidos, al login
+    function retry(text) {
+        attempts += 1;
+        if (attempts >= MAX_ATTEMPTS) {
+            leaveToLogin(NO_COORDINATOR_MESSAGE);
+            return;
+        }
+        showClusterNotice(text(attempts));
+        clearTimeout(retryTimer);
+        retryTimer = setTimeout(conectar, nextDelay(attempts));
+    }
+
+    // El directorio no dio coordinador: sin vivos (503) o el auth no respondió
+    function onDirectoryFailure(kind) {
         setConnection("disconnected");
-        leaveToLogin(NO_COORDINATOR_MESSAGE);
+        retry(() => (kind === "none" ? "Sin coordinadores disponibles. Reintentando…" : "No se pudo contactar al servicio de autenticación. Reintentando…"));
     }
 
     function openSocket(url, assignedId) {
@@ -218,6 +240,10 @@ function startGame(token) {
                 world = { width: w.width, height: w.height, playerRadius: w.playerRadius, tickRate: w.tickRate };
                 welcomeAt = performance.now();
             }
+            // Conectado: se reinician los intentos y se muestra el coordinador
+            attempts = 0;
+            showClusterNotice(null);
+            setCoordinatorPill(world?.tickRate ?? "?", coordinatorId);
             if (msg.you?.userId) me = { userId: String(msg.you.userId) };
             // Apariencia guardada de sesiones anteriores; si no hay, la que le corresponde por su userId
             const saved = parseSavedLook(readPref("playLook"), readPref("playColor"));
@@ -235,16 +261,25 @@ function startGame(token) {
         // players_update se ignora: la lista sale de lastState
     }
 
-    // Cierre del WebSocket vigente: se guarda el motivo y se vuelve al login.
-    // Con 4002 el token guardado ya es de la sesión nueva (otra pestaña): no se borra.
+    // Cierre del WebSocket vigente (decisión 23):
+    //   4001 → login (token vencido o inválido) · 4002 → login (la sesión se abrió en otro lado; el token
+    //   guardado ya es de la sesión nueva y no se borra) · cualquier otro → pedir OTRO coordinador.
     function handleClose(event) {
         setConnection("disconnected");
-        if (loggingOut) return;
-        leaveToLogin(CLOSE_MESSAGES[event.code] || DEFAULT_CLOSE_MESSAGE, event.code !== 4002);
+        const action = classifyClose(event.code, loggingOut);
+        if (action === "none") return;
+        if (action === "login-invalid") return leaveToLogin(CLOSE_MESSAGES[4001]);
+        if (action === "login-replaced") return leaveToLogin(CLOSE_MESSAGES[4002], false);
+        const previous = coordinatorId ?? "el coordinador";
+        ws = null;
+        window.lastState = null;
+        setCoordinatorPill(null, null);
+        retry((n) => `Conexión perdida con ${previous}. Buscando otro coordinador… (intento ${n})`);
     }
 
     $("logoutButton").addEventListener("click", () => {
         loggingOut = true;
+        clearTimeout(retryTimer); // cancela cualquier reconexión pendiente
         clearSession(token);
         ws?.close(1000, "logout");
         window.location.href = "login.html";
@@ -256,6 +291,7 @@ function startGame(token) {
         const stored = localStorage.getItem("token");
         if (loggingOut || stored === token) return;
         loggingOut = true;
+        clearTimeout(retryTimer);
         clearInterval(tokenWatch);
         sessionStorage.setItem("sessionMessage", stored === null ? TOKEN_REMOVED_MESSAGE : TOKEN_CHANGED_MESSAGE);
         ws?.close(1000, "invalid token");
