@@ -21,6 +21,7 @@ const jwt = require("jsonwebtoken");
 const { resumePosition, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot, isLocal, countLocal } = require("./game.js");
 const { startHeartbeatLoop } = require("./directory-client.js");
 const { createPeerNetwork } = require("./peers.js");
+const { buildJoined, buildLeft, buildIntent, buildExtras } = require("./mesh.js");
 
 // ---------- Configuración ----------
 
@@ -87,6 +88,22 @@ const net = createPeerNetwork({
     discoveryMs: conf.peerDiscoveryMs,
     cfg,
     players,
+    // Un peer agregó o quitó jugadores: los clientes locales reciben la lista nueva
+    onMembershipChanged: () => broadcastPlayers(),
+    // La sesión más nueva del usuario está en otro coordinador: se cierra la local (SIN player_left;
+    // el jugador ya quedó como remoto en el Map, así que el 'close' del socket no lo borra)
+    onCloseLocal(action) {
+        console.log(`Sesión de ${action.userId} reemplazada por una más nueva en otro coordinador`);
+        action.socket?.close(action.code, action.reason);
+    },
+});
+
+// Los eventos de los jugadores LOCALES se anuncian a los peers (cada uno solo habla de los suyos)
+Object.assign(hooks, {
+    onLocalJoin: (userId, p) => net.sendToPeers(buildJoined(userId, p, COORDINATOR_ID)),
+    onLocalLeave: (userId) => net.sendToPeers(buildLeft(userId, COORDINATOR_ID)),
+    onLocalIntent: (userId, intent) => net.sendToPeers(buildIntent(userId, intent, COORDINATOR_ID)),
+    onLocalExtras: (userId, extras) => net.sendToPeers(buildExtras(userId, extras, COORDINATOR_ID)),
 });
 // userId -> { x, y }: última posición de quien se desconectó. Al volver (recargar la página, otra pestaña,
 // reconexión) aparece donde estaba: el cliente no puede elegir dónde aparecer. Vive en memoria: se pierde

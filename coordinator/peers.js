@@ -2,11 +2,16 @@
 // TODA decisión (quién inicia, conexiones duplicadas, validación, propiedad, resync) la toma mesh.js;
 // aquí solo se conectan los cables.
 //
-// createPeerNetwork({ selfId, peerPort, clusterSecret, authUrl, discoveryMs, cfg, players, log }) → {
+// createPeerNetwork({ selfId, peerPort, clusterSecret, authUrl, discoveryMs, cfg, players,
+//                     onMembershipChanged, onCloseLocal, log }) → {
 //   start()            levanta el servidor de peers en PEER_PORT y empieza el descubrimiento
 //   stop()             detiene temporizadores y cierra conexiones y servidor
 //   readyPeerIds()     ids de los peers con handshake completo
+//   sendToPeers(obj)   serializa UNA vez y envía a los peers listos
 // }
+// Mensajes recibidos: JSON.parse → validatePeerMessage → applyPeerMessage (mesh.js). Si cambió la lista
+// de jugadores se llama onMembershipChanged(); las acciones close-local van a onCloseLocal(action).
+// Nada se retransmite: cada coordinador envía SUS mensajes directamente a cada peer.
 //
 // Descubrimiento: al arrancar y cada discoveryMs se pide GET {authUrl}/peers y se abre conexión SOLO
 // hacia los peers de id mayor (shouldInitiate) que aún no tengan conexión ni intento en curso. Los de id
@@ -19,15 +24,27 @@
 const http = require("node:http");
 const crypto = require("node:crypto");
 const { WebSocketServer, WebSocket } = require("ws");
-const { shouldInitiate, resolveLink, validatePeerMessage, buildResync } = require("./mesh.js");
+const { shouldInitiate, resolveLink, validatePeerMessage, applyPeerMessage, buildResync } = require("./mesh.js");
 const { fetchPeers } = require("./directory-client.js");
 
 const PEER_MAX_PAYLOAD = 262144;
 const HELLO_TIMEOUT_MS = 3000;
+const PEER_MSGS_PER_SEC = 500; // por conexión; el exceso se ignora
 
 const sha256 = (text) => crypto.createHash("sha256").update(String(text), "utf8").digest();
 
-function createPeerNetwork({ selfId, peerPort, clusterSecret, authUrl, discoveryMs, cfg, players, log = console }) {
+function createPeerNetwork({
+    selfId,
+    peerPort,
+    clusterSecret,
+    authUrl,
+    discoveryMs,
+    cfg,
+    players,
+    onMembershipChanged = () => {},
+    onCloseLocal = () => {},
+    log = console,
+}) {
     // peerId → { ws, direction: "in" | "out", ready }
     const peers = new Map();
     const connecting = new Set(); // peers con una conexión saliente en curso
@@ -59,6 +76,7 @@ function createPeerNetwork({ selfId, peerPort, clusterSecret, authUrl, discovery
     // Handshake completo: se registra el peer y se le manda el estado de nuestros jugadores locales
     function registerPeer(peerId, ws, direction) {
         peers.set(peerId, { ws, direction, ready: true });
+        attachMessageHandler(peerId, ws);
         ws.on("close", () => {
             // Solo si sigue siendo ESA conexión (una reemplazada no borra a la nueva)
             if (peers.get(peerId)?.ws !== ws) return;
@@ -67,6 +85,38 @@ function createPeerNetwork({ selfId, peerPort, clusterSecret, authUrl, discovery
         });
         for (const m of buildResync(players, selfId)) sendRaw(ws, JSON.stringify(m));
         log.log(`Peer ${peerId} conectado (${direction === "in" ? "entrante" : "saliente"})`);
+    }
+
+    // Único manejador de mensajes de una conexión con handshake completo (entrante o saliente).
+    // No se registra el contenido de los mensajes.
+    function attachMessageHandler(peerId, ws) {
+        let windowStart = Date.now();
+        let count = 0;
+        ws.on("message", (raw) => {
+            const now = Date.now();
+            if (now - windowStart >= 1000) {
+                windowStart = now;
+                count = 0;
+            }
+            if (++count > PEER_MSGS_PER_SEC) return;
+            let msg;
+            try {
+                msg = JSON.parse(raw.toString());
+            } catch {
+                return; // JSON roto
+            }
+            const v = validatePeerMessage(msg, cfg);
+            if (!v.ok) return;
+            const result = applyPeerMessage(players, selfId, peerId, v.msg, cfg);
+            for (const action of result.actions) onCloseLocal(action);
+            if (result.membershipChanged) onMembershipChanged();
+        });
+    }
+
+    // Serializa UNA vez y envía a todos los peers listos
+    function sendToPeers(obj) {
+        const text = JSON.stringify(obj);
+        for (const { ws, ready } of peers.values()) if (ready) sendRaw(ws, text);
     }
 
     // ---------- Servidor de peers (conexiones entrantes) ----------
@@ -199,7 +249,7 @@ function createPeerNetwork({ selfId, peerPort, clusterSecret, authUrl, discovery
 
     const readyPeerIds = () => [...peers].filter(([, e]) => e.ready && isOpen(e.ws)).map(([id]) => id);
 
-    return { start, stop, readyPeerIds };
+    return { start, stop, readyPeerIds, sendToPeers };
 }
 
 module.exports = { createPeerNetwork };
