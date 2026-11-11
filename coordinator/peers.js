@@ -2,7 +2,7 @@
 // TODA decisión (quién inicia, conexiones duplicadas, validación, propiedad, resync) la toma mesh.js;
 // aquí solo se conectan los cables.
 //
-// createPeerNetwork({ selfId, peerPort, clusterSecret, authUrl, discoveryMs, cfg, players,
+// createPeerNetwork({ selfId, peerPort, clusterSecret, authUrl, discoveryMs, pingMs, syncMs, cfg, players,
 //                     onMembershipChanged, onCloseLocal, log }) → {
 //   start()            levanta el servidor de peers en PEER_PORT y empieza el descubrimiento
 //   stop()             detiene temporizadores y cierra conexiones y servidor
@@ -12,6 +12,10 @@
 // Mensajes recibidos: JSON.parse → validatePeerMessage → applyPeerMessage (mesh.js). Si cambió la lista
 // de jugadores se llama onMembershipChanged(); las acciones close-local van a onCloseLocal(action).
 // Nada se retransmite: cada coordinador envía SUS mensajes directamente a cada peer.
+//
+// Al completar el handshake se manda el resync (buildResync); cada syncMs, positions_sync con las
+// posiciones de los locales (corrige la deriva); cada pingMs, ping (terminate si no hubo pong en el ciclo
+// anterior). Si se cierra la conexión con un peer, sus jugadores remotos se eliminan.
 //
 // Descubrimiento: al arrancar y cada discoveryMs se pide GET {authUrl}/peers y se abre conexión SOLO
 // hacia los peers de id mayor (shouldInitiate) que aún no tengan conexión ni intento en curso. Los de id
@@ -24,7 +28,7 @@
 const http = require("node:http");
 const crypto = require("node:crypto");
 const { WebSocketServer, WebSocket } = require("ws");
-const { shouldInitiate, resolveLink, validatePeerMessage, applyPeerMessage, buildResync } = require("./mesh.js");
+const { shouldInitiate, resolveLink, validatePeerMessage, applyPeerMessage, dropPeerPlayers, buildResync, buildPositionsSync } = require("./mesh.js");
 const { fetchPeers } = require("./directory-client.js");
 
 const PEER_MAX_PAYLOAD = 262144;
@@ -39,6 +43,8 @@ function createPeerNetwork({
     clusterSecret,
     authUrl,
     discoveryMs,
+    pingMs,
+    syncMs,
     cfg,
     players,
     onMembershipChanged = () => {},
@@ -51,6 +57,8 @@ function createPeerNetwork({
     const failing = new Set(); // peers cuyo último intento falló (para avisar UNA vez, sin spam)
     const pending = new Set(); // sockets salientes todavía sin handshake (para cerrarlos al apagar)
     let discoveryTimer = null;
+    let pingTimer = null;
+    let syncTimer = null;
     let stopped = false;
     const secretHash = sha256(clusterSecret);
 
@@ -75,13 +83,20 @@ function createPeerNetwork({
 
     // Handshake completo: se registra el peer y se le manda el estado de nuestros jugadores locales
     function registerPeer(peerId, ws, direction) {
-        peers.set(peerId, { ws, direction, ready: true });
+        const entry = { ws, direction, ready: true, alive: true };
+        peers.set(peerId, entry);
         attachMessageHandler(peerId, ws);
+        ws.on("pong", () => {
+            entry.alive = true;
+        });
         ws.on("close", () => {
             // Solo si sigue siendo ESA conexión (una reemplazada no borra a la nueva)
             if (peers.get(peerId)?.ws !== ws) return;
             peers.delete(peerId);
-            log.log(`Peer ${peerId} desconectado`);
+            // Peer caído: sus jugadores ya no tienen dueño conectado a este mesh
+            const removed = dropPeerPlayers(players, peerId);
+            log.log(`Peer ${peerId} desconectado · se quitaron ${removed.length} jugadores suyos`);
+            if (removed.length > 0) onMembershipChanged();
         });
         for (const m of buildResync(players, selfId)) sendRaw(ws, JSON.stringify(m));
         log.log(`Peer ${peerId} conectado (${direction === "in" ? "entrante" : "saliente"})`);
@@ -225,6 +240,24 @@ function createPeerNetwork({
         }
     }
 
+    // Ping a cada peer; si no respondió al anterior, la conexión está muerta (sin cierre limpio)
+    function pingPeers() {
+        for (const entry of peers.values()) {
+            if (!entry.alive) {
+                entry.ws.terminate(); // dispara 'close' → se quitan sus jugadores
+                continue;
+            }
+            entry.alive = false;
+            if (isOpen(entry.ws)) entry.ws.ping();
+        }
+    }
+
+    // Posiciones de los locales (la simulación de los demás coordinadores puede derivar un poco)
+    function syncPositions() {
+        const msg = buildPositionsSync(players, selfId);
+        if (msg) sendToPeers(msg);
+    }
+
     function start() {
         return new Promise((resolve, reject) => {
             server.once("error", reject);
@@ -232,6 +265,8 @@ function createPeerNetwork({
                 server.off("error", reject);
                 discover();
                 discoveryTimer = setInterval(discover, discoveryMs);
+                pingTimer = setInterval(pingPeers, pingMs);
+                syncTimer = setInterval(syncPositions, syncMs);
                 resolve();
             });
         });
@@ -240,6 +275,8 @@ function createPeerNetwork({
     function stop() {
         stopped = true;
         clearInterval(discoveryTimer);
+        clearInterval(pingTimer);
+        clearInterval(syncTimer);
         for (const ws of pending) ws.terminate();
         for (const { ws } of peers.values()) ws.close(1001, "server shutting down");
         for (const ws of wss.clients) ws.terminate();

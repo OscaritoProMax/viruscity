@@ -86,6 +86,8 @@ const net = createPeerNetwork({
     clusterSecret: conf.clusterSecret,
     authUrl: conf.authUrl,
     discoveryMs: conf.peerDiscoveryMs,
+    pingMs: conf.peerPingMs,
+    syncMs: conf.peerSyncMs,
     cfg,
     players,
     // Un peer agregó o quitó jugadores: los clientes locales reciben la lista nueva
