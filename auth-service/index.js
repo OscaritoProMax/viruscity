@@ -13,6 +13,7 @@ const { OAuth2Client } = require("google-auth-library");
 const { ensureSchema } = require("./db.js");
 const { makeGoogleVerifier } = require("./google.js");
 const { createApp } = require("./app.js");
+const { createDirectory } = require("./directory.js");
 
 // ---------- Configuración ----------
 
@@ -65,12 +66,21 @@ ensureSchema(db, { dbPath: DB_PATH });
 // El Client ID es público; el Client Secret no se usa ni se guarda
 const verifyGoogle = makeGoogleVerifier(new OAuth2Client(GOOGLE_CLIENT_ID), GOOGLE_CLIENT_ID);
 
+// Directorio de coordinadores en memoria (Taller 6): se pierde si el auth se reinicia y los
+// coordinadores vuelven a registrarse con su siguiente heartbeat
+const SWEEP_EVERY_MS = 2 * 1000;
+const directory = createDirectory({ ttlMs: COORDINATOR_TTL_MS, reservationTtlMs: RESERVATION_TTL_MS });
+const sweepTimer = setInterval(() => directory.sweep(), SWEEP_EVERY_MS);
+sweepTimer.unref(); // el barrido no mantiene vivo el proceso
+
 const app = createApp({
     db,
     jwtSecret: JWT_SECRET,
     jwtExpiresIn: JWT_EXPIRES_IN,
     bcryptRounds: BCRYPT_ROUNDS,
     verifyGoogle,
+    directory,
+    clusterSecret: CLUSTER_SECRET,
 });
 
 const server = app.listen(PORT, (err) => {
@@ -79,7 +89,7 @@ const server = app.listen(PORT, (err) => {
         console.error(`No se pudo iniciar el servidor: ${err.message}`);
         process.exit(1);
     }
-    console.log(`Auth service en puerto ${PORT}`);
+    console.log(`Auth service en puerto ${PORT} · directorio de coordinadores (TTL ${COORDINATOR_TTL_MS} ms, reservas ${RESERVATION_TTL_MS} ms)`);
 });
 
 // ---------- Cierre ordenado ----------
@@ -90,6 +100,7 @@ function shutdown(signal) {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`${signal} recibido, cerrando auth service...`);
+    clearInterval(sweepTimer);
 
     server.close(() => {
         db.close();
