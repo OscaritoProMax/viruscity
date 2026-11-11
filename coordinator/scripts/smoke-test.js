@@ -8,7 +8,7 @@
 // Uso:  npm run smoke
 // Lee de variables de entorno o de coordinator/.env:
 //   AUTH_URL            (por defecto http://localhost:4000)
-//   COORDINATOR_WS_URL  (por defecto ws://localhost:5000)
+//   COORDINATOR_WS_URL  (por defecto ws://localhost:5001, coord-a)
 //   JWT_SECRET          (el mismo del coordinator; se usa para fabricar tokens de prueba)
 // Sale con código 1 si alguna comprobación falla.
 
@@ -21,7 +21,7 @@ const fs = require("node:fs");
 const { createConfig, parseMap, stepPlayers, boxBlocked } = require("../game.js");
 
 const AUTH_URL = (process.env.AUTH_URL || "http://localhost:4000").replace(/\/+$/, "");
-const WS_URL = (process.env.COORDINATOR_WS_URL || "ws://localhost:5000").replace(/\/+$/, "");
+const WS_URL = (process.env.COORDINATOR_WS_URL || "ws://localhost:5001").replace(/\/+$/, "");
 const HTTP_URL = WS_URL.replace(/^ws/, "http"); // mismo host y puerto del coordinator (para /health)
 const JWT_SECRET = process.env.JWT_SECRET;
 const TIMEOUT_MS = 3000;

@@ -264,7 +264,7 @@ function clampDt(ms) {
 const round2 = (n) => Math.round(n * 100) / 100;
 
 // Estado público de los jugadores: nunca incluye socket ni intent.
-// players es un Map userId → jugador.
+// players es un Map userId → jugador. Taller 6: cada jugador lleva coordinatorId (su dueño, ownerId).
 function snapshot(players) {
     return [...players].map(([userId, p]) => ({
         userId,
@@ -273,7 +273,38 @@ function snapshot(players) {
         x: round2(p.x),
         y: round2(p.y),
         extras: p.extras ?? {},
+        ...(p.ownerId !== undefined && { coordinatorId: p.ownerId }),
     }));
 }
 
-module.exports = { DEFAULTS, createConfig, parseMap, boxBlocked, portalAt, randomSpawn, resumePosition, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot };
+// ---------- Propiedad (Taller 6) ----------
+// Un jugador es LOCAL si su cliente está conectado a este coordinador (tiene socket); los REMOTOS
+// (de otros coordinadores del mesh) tienen socket null y ownerId del peer.
+const isLocal = (p) => Boolean(p && p.socket);
+
+// [[userId, jugador], …] de los jugadores locales
+const localPlayers = (players) => [...players].filter(([, p]) => isLocal(p));
+
+function countLocal(players) {
+    let n = 0;
+    for (const p of players.values()) if (isLocal(p)) n++;
+    return n;
+}
+
+module.exports = {
+    DEFAULTS,
+    createConfig,
+    parseMap,
+    boxBlocked,
+    portalAt,
+    randomSpawn,
+    resumePosition,
+    sanitizeIntent,
+    sanitizeExtras,
+    stepPlayers,
+    clampDt,
+    snapshot,
+    isLocal,
+    localPlayers,
+    countLocal,
+};

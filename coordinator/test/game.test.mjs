@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { createConfig, parseMap, boxBlocked, portalAt, randomSpawn, resumePosition, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot } from "../game.js";
+import { createConfig, parseMap, boxBlocked, portalAt, randomSpawn, resumePosition, isLocal, localPlayers, countLocal, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot } from "../game.js";
 
 const cfg = createConfig({});
 const R = cfg.PLAYER_RADIUS;
@@ -282,4 +282,18 @@ test("resumePosition: se recupera la posición guardada si es válida; si no, ap
     // Sin mapa también respeta los bordes del mundo
     assert.deepEqual(resumePosition({ x: 600, y: 400 }, cfg), { x: 600, y: 400 });
     assert.notDeepEqual(resumePosition({ x: 1199, y: 400 }, cfg, null, () => 0.5), { x: 1199, y: 400 });
+});
+
+test("propiedad (Taller 6): locales con socket, remotos sin socket; snapshot con coordinatorId", () => {
+    const local = { ...player(10, 10), ownerId: "coord-a", socket: {} };
+    const remote = { ...player(20, 20), ownerId: "coord-b", socket: null };
+    const players = new Map([["1", local], ["2", remote], ["3", { ...player(30, 30), ownerId: "coord-a", socket: {} }]]);
+    assert.equal(isLocal(local), true);
+    assert.equal(isLocal(remote), false);
+    assert.equal(isLocal(undefined), false);
+    assert.equal(countLocal(players), 2);
+    assert.deepEqual(localPlayers(players).map(([id]) => id), ["1", "3"]);
+    const snap = snapshot(players);
+    assert.deepEqual(snap.map((p) => [p.userId, p.coordinatorId]), [["1", "coord-a"], ["2", "coord-b"], ["3", "coord-a"]]);
+    assert.ok(snap.every((p) => !("socket" in p) && !("intent" in p) && !("ownerId" in p)));
 });
