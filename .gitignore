@@ -9,3 +9,9 @@ npm-debug.log*
 _base-ref/
 BASE-ANALISIS.md
 *.bak
+
+# Taller 6: un .env por instancia (.env.coord-a, ...) ignorado; los .example sí se versionan
+.env.*
+!.env.example
+!.env.*.example
+ngrok.yml
