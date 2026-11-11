@@ -1,0 +1,32 @@
+# Plantilla de ngrok para la sustentación del Taller 6 (ngrok v3, formato "version: 3").
+# Abre 5 túneles: el client, el auth (directorio) y los puertos PÚBLICOS de los tres coordinadores.
+# Los puertos de peers (5101-5103) NO se exponen: los coordinadores corren en la misma máquina y se
+# hablan por localhost.
+#
+# Esta plantilla NO lleva authtoken. Guárdalo una vez en la configuración por defecto de ngrok:
+#     ngrok config add-authtoken <TU_AUTHTOKEN>
+# y arranca los túneles combinando ambos archivos (ngrok junta los --config):
+#     Windows (cmd):  ngrok start --all --config "%LOCALAPPDATA%\ngrok\ngrok.yml" --config ngrok.example.yml
+#     macOS:          ngrok start --all --config "$HOME/Library/Application Support/ngrok/ngrok.yml" --config ngrok.example.yml
+#     Linux:          ngrok start --all --config "$HOME/.config/ngrok/ngrok.yml" --config ngrok.example.yml
+# (`ngrok config check` sin argumentos dice dónde está tu archivo por defecto).
+# (o copia este archivo como ngrok.yml, que está en .gitignore, y úsalo en lugar de ngrok.example.yml).
+#
+# El plan gratuito puede limitar cuántos túneles simultáneos se permiten: verifícalo en tu panel de ngrok.
+version: "3"
+endpoints:
+  - name: client
+    upstream:
+      url: 3000
+  - name: auth
+    upstream:
+      url: 4000
+  - name: coord-a
+    upstream:
+      url: 5001
+  - name: coord-b
+    upstream:
+      url: 5002
+  - name: coord-c
+    upstream:
+      url: 5003
