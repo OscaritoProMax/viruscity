@@ -1,4 +1,6 @@
-// Página del juego en vivo (Taller 5).
+// Página del juego en vivo (Talleres 5 y 6).
+// Taller 6: antes de conectar se pide un coordinador al directorio (GET {AUTH_URL}/coordinator) y el
+// WebSocket va a su publicUrl. Hay varios coordinadores intercambiables con el mismo estado del juego.
 // El SERVIDOR es la autoridad: este cliente no calcula posiciones ni choques. Solo:
 //   - guarda el último mensaje state en window.lastState y lo dibuja sobre el mapa de Virus City,
 //   - envía intenciones de movimiento y extras (la apariencia de su personaje y su poder).
@@ -18,6 +20,7 @@ import { createAudio } from "./audio.js";
 import { createRadio, STATION, estimateOffset } from "./radio.js";
 import { createDialogue } from "./dialogue.js";
 import { sceneAt, WORLD_SCENE } from "./map/scenes.js";
+import { parseCoordinatorResponse, buildWsUrl, isMixedContent } from "./directory.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -27,6 +30,8 @@ const CLOSE_MESSAGES = {
     4002: "Tu sesión se abrió en otra pestaña. Esta sesión fue cerrada.",
 };
 const DEFAULT_CLOSE_MESSAGE = "Se perdió la conexión con el coordinador. Inicia sesión de nuevo.";
+const NO_COORDINATOR_MESSAGE = "No hay coordinadores disponibles. Inténtalo más tarde.";
+const NGROK_HEADERS = { "ngrok-skip-browser-warning": "true" }; // evita la página de aviso de ngrok
 
 // Vigilancia del token guardado (igual que el lobby): si cambia o desaparece, la sesión se cae
 const TOKEN_CHECK_MS = 1000;
@@ -123,15 +128,81 @@ function startGame(token) {
     $("zoomOut").addEventListener("click", () => setZoom(renderer.getZoom() - ZOOM_STEP));
     $("zoomReset").addEventListener("click", () => setZoom(1));
 
-    // ---------- WebSocket ----------
-    const ws = new WebSocket(`${window.APP_CONFIG.COORDINATOR_WS_URL}/connect?token=${encodeURIComponent(token)}`);
+    // ---------- Coordinador y WebSocket (Taller 6) ----------
+    let ws = null; // conexión VIGENTE (los eventos de una conexión vieja se ignoran)
+    let coordinatorId = null; // coordinador actual (el de welcome manda sobre el del directorio)
+    const isOpen = () => ws !== null && ws.readyState === WebSocket.OPEN;
     const sendJson = (msg) => {
-        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+        if (isOpen()) ws.send(JSON.stringify(msg));
     };
 
-    ws.onopen = () => setConnection("connected");
+    // Aviso del clúster (contenido mixto, reconexión…)
+    function showClusterNotice(text) {
+        $("clusterNotice").textContent = text ?? "";
+        $("clusterNotice").hidden = !text;
+    }
+    function leaveToLogin(message, clearToken = true) {
+        loggingOut = true;
+        clearInterval(tokenWatch);
+        sessionStorage.setItem("sessionMessage", message);
+        if (clearToken) clearSession(token);
+        window.location.href = "login.html";
+    }
 
-    ws.onmessage = (event) => {
+    // login → GET /coordinator → WebSocket al coordinador asignado
+    async function conectar() {
+        if (loggingOut) return;
+        setConnection("connecting");
+        let result;
+        try {
+            const res = await fetch(`${window.APP_CONFIG.AUTH_URL}/coordinator`, { headers: NGROK_HEADERS, cache: "no-store" });
+            let body = null;
+            try {
+                body = await res.json();
+            } catch {
+                body = null; // p. ej. una página de aviso en vez de JSON
+            }
+            result = parseCoordinatorResponse(res.status, body);
+        } catch {
+            result = { kind: "network" };
+        }
+        if (loggingOut) return;
+        if (result.kind !== "ok") {
+            onDirectoryFailure(result.kind);
+            return;
+        }
+        const url = buildWsUrl(result.publicUrl, token);
+        if (isMixedContent(window.location.protocol, window.location.hostname, url)) {
+            // El navegador bloquearía ws:// desde una página https: se explica y no se intenta
+            setConnection("disconnected");
+            showClusterNotice(`El coordinador ${result.coordinatorId} usa ws:// y esta página es https://: el navegador bloquea esa conexión (contenido mixto). Su PUBLIC_URL debe empezar por wss://.`);
+            return;
+        }
+        openSocket(url, result.coordinatorId);
+    }
+
+    // Sin coordinador del directorio: por ahora se vuelve al login
+    function onDirectoryFailure() {
+        setConnection("disconnected");
+        leaveToLogin(NO_COORDINATOR_MESSAGE);
+    }
+
+    function openSocket(url, assignedId) {
+        const socket = new WebSocket(url);
+        ws = socket;
+        coordinatorId = assignedId;
+        socket.onopen = () => {
+            if (ws === socket) setConnection("connected");
+        };
+        socket.onmessage = (event) => {
+            if (ws === socket) handleMessage(event);
+        };
+        socket.onclose = (event) => {
+            if (ws === socket) handleClose(event);
+        };
+    }
+
+    function handleMessage(event) {
         let msg;
         try {
             msg = JSON.parse(event.data);
@@ -141,6 +212,7 @@ function startGame(token) {
         if (!msg || typeof msg !== "object") return;
 
         if (msg.type === "welcome") {
+            if (typeof msg.coordinatorId === "string" && msg.coordinatorId) coordinatorId = msg.coordinatorId;
             const w = msg.world;
             if (w && [w.width, w.height, w.playerRadius].every(Number.isFinite)) {
                 world = { width: w.width, height: w.height, playerRadius: w.playerRadius, tickRate: w.tickRate };
@@ -161,23 +233,20 @@ function startGame(token) {
             }
         }
         // players_update se ignora: la lista sale de lastState
-    };
+    }
 
-    // Cierre inesperado: se guarda el motivo y se vuelve al login (sin reconexión automática).
+    // Cierre del WebSocket vigente: se guarda el motivo y se vuelve al login.
     // Con 4002 el token guardado ya es de la sesión nueva (otra pestaña): no se borra.
-    ws.onclose = (event) => {
+    function handleClose(event) {
         setConnection("disconnected");
-        clearInterval(tokenWatch);
         if (loggingOut) return;
-        sessionStorage.setItem("sessionMessage", CLOSE_MESSAGES[event.code] || DEFAULT_CLOSE_MESSAGE);
-        if (event.code !== 4002) clearSession(token);
-        window.location.href = "login.html";
-    };
+        leaveToLogin(CLOSE_MESSAGES[event.code] || DEFAULT_CLOSE_MESSAGE, event.code !== 4002);
+    }
 
     $("logoutButton").addEventListener("click", () => {
         loggingOut = true;
         clearSession(token);
-        ws.close(1000, "logout");
+        ws?.close(1000, "logout");
         window.location.href = "login.html";
     });
 
@@ -189,7 +258,7 @@ function startGame(token) {
         loggingOut = true;
         clearInterval(tokenWatch);
         sessionStorage.setItem("sessionMessage", stored === null ? TOKEN_REMOVED_MESSAGE : TOKEN_CHANGED_MESSAGE);
-        ws.close(1000, "invalid token");
+        ws?.close(1000, "invalid token");
         window.location.href = "login.html";
     }
     const tokenWatch = setInterval(checkStoredToken, TOKEN_CHECK_MS);
@@ -205,7 +274,7 @@ function startGame(token) {
     function pushIntent() {
         const intent = computeIntent(keys);
         if (intent.x === lastIntent.x && intent.y === lastIntent.y) return;
-        if (ws.readyState !== WebSocket.OPEN) return;
+        if (!isOpen()) return;
         lastIntent = intent;
         sendJson({ type: "intent", intent: { dir: { x: intent.x, y: intent.y } } });
     }
@@ -340,7 +409,7 @@ function startGame(token) {
     function usePower() {
         const look = lookPanel.getLook();
         const now = performance.now();
-        if (look.power === "none" || now < powerBusyUntil || ws.readyState !== WebSocket.OPEN) return;
+        if (look.power === "none" || now < powerBusyUntil || !isOpen()) return;
         powerBusyUntil = now + POWER_MS + 100;
         sendJson({ type: "extras_update", extras: { ...lookToExtras(look), powerOn: true } });
         setTimeout(() => sendJson({ type: "extras_update", extras: lookToExtras(lookPanel.getLook()) }), POWER_MS);
@@ -388,10 +457,12 @@ function startGame(token) {
 
         // Aviso discreto si dejan de llegar state
         const since = lastStateAt || welcomeAt;
-        $("unstableNotice").hidden = !(ws.readyState === WebSocket.OPEN && since && now - since > UNSTABLE_AFTER_MS);
+        $("unstableNotice").hidden = !(isOpen() && since && now - since > UNSTABLE_AFTER_MS);
         requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
+
+    conectar();
 
     return { sendJson, isClosing: () => loggingOut };
 }

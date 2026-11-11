@@ -157,6 +157,14 @@ body.play {
     font-size: var(--fs-s, .8125rem);
 }
 
+/* Aviso del clúster (Taller 6): debajo del de conexión inestable, borde de acento */
+.play-notice--cluster {
+    top: 124px;
+    max-width: calc(100% - 24px);
+    border-color: var(--accent, #4dd2ff);
+    text-align: center;
+}
+
 /* ---------- Paneles plegables (jugadores y personaje) ---------- */
 .play-float {
     border-radius: var(--radius-l, 20px);
@@ -711,6 +719,8 @@ body.play {
     }
 
     .play-notice { top: 128px; }
+
+    .play-notice--cluster { top: 168px; }
 
     .play-look-panel {
         left: var(--space-2, 8px);
