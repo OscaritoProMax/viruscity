@@ -83,6 +83,8 @@ const net = createPeerNetwork({
     selfId: COORDINATOR_ID,
     peerPort: conf.peerPort,
     clusterSecret: conf.clusterSecret,
+    authUrl: conf.authUrl,
+    discoveryMs: conf.peerDiscoveryMs,
     cfg,
     players,
 });
