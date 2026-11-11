@@ -5,9 +5,13 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
+    "start:a": "node index.js --env .env.coord-a",
+    "start:b": "node index.js --env .env.coord-b",
+    "start:c": "node index.js --env .env.coord-c",
     "dev": "node --watch index.js",
     "test": "node --test test/*.test.mjs",
-    "smoke": "node scripts/smoke-test.js"
+    "smoke": "node scripts/smoke-test.js",
+    "smoke:cluster": "node scripts/cluster-smoke.js"
   },
   "keywords": [],
   "author": "",

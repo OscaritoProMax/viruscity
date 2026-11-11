@@ -3,20 +3,22 @@
 // Los clientes solo mandan intenciones (dirección) y extras; el servidor mueve a todos en un game loop
 // y envía el estado completo en cada tick. HTTP y WebSocket comparten el mismo puerto.
 //
-// Configuración: variables de entorno cargadas desde .env (ver .env.example).
-// JWT_SECRET es obligatorio y debe ser idéntico al del auth-service.
+// Taller 6: puede haber varias instancias a la vez. Cada una se configura con su propio archivo:
+//   node index.js --env .env.coord-a     (npm run start:a, start:b, start:c)
+// Sin --env se usa coordinator/.env. Las variables que ya están en el entorno NO se pisan.
+// JWT_SECRET y CLUSTER_SECRET deben ser idénticos a los del auth-service.
 //
 // Basado en coordinator/index.js del código de referencia SSD-CommsWS.
 
-require("dotenv").config({ quiet: true }); // quiet: evita que dotenv imprima su propio mensaje en consola
-
 const fs = require("node:fs");
 const path = require("node:path");
+const dotenv = require("dotenv");
+const { loadConfig, envFileArg } = require("./config.js");
 const http = require("node:http");
 const express = require("express");
 const { WebSocketServer } = require("ws");
 const jwt = require("jsonwebtoken");
-const { createConfig, parseMap, resumePosition, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot } = require("./game.js");
+const { resumePosition, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot } = require("./game.js");
 
 // ---------- Configuración ----------
 
@@ -26,44 +28,31 @@ function fatal(reason) {
     process.exit(1);
 }
 
-const PORT = Number(process.env.PORT || 5000);
-const JWT_SECRET = process.env.JWT_SECRET;
-const HEARTBEAT_RAW = process.env.HEARTBEAT_INTERVAL_MS || "30000";
-
-if (!JWT_SECRET) fatal("JWT_SECRET es obligatorio");
-if (JWT_SECRET.length < 32) fatal("JWT_SECRET debe tener al menos 32 caracteres");
-if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) fatal("PORT debe ser un número de puerto válido");
-if (!/^\d+$/.test(HEARTBEAT_RAW) || Number(HEARTBEAT_RAW) < 1) {
-    fatal("HEARTBEAT_INTERVAL_MS debe ser un entero positivo (milisegundos)");
-}
-const HEARTBEAT_INTERVAL_MS = Number(HEARTBEAT_RAW);
-
-// Mapa opcional con casillas sólidas (MAP_FILE, relativo a la carpeta del coordinator).
-// Sin MAP_FILE el mundo es un rectángulo vacío de WORLD_WIDTH × WORLD_HEIGHT.
-let map = null;
-const MAP_FILE = (process.env.MAP_FILE ?? "").trim();
-if (MAP_FILE) {
-    const mapPath = path.resolve(__dirname, MAP_FILE);
-    let data;
-    try {
-        data = JSON.parse(fs.readFileSync(mapPath, "utf8"));
-    } catch {
-        fatal(`no se pudo leer MAP_FILE como JSON (${mapPath})`);
-    }
-    try {
-        map = parseMap(data);
-    } catch (err) {
-        fatal(err.message);
-    }
+// Archivo de entorno: --env <ruta> (relativa a la carpeta desde donde se lanza) o coordinator/.env.
+// dotenv no pisa las variables que ya existen en el entorno (las pruebas pueden inyectarlas).
+const envArg = envFileArg(process.argv);
+if (envArg !== null) {
+    if (!envArg) fatal("--env necesita la ruta de un archivo (por ejemplo --env .env.coord-a)");
+    const envPath = path.resolve(process.cwd(), envArg);
+    if (!fs.existsSync(envPath)) fatal(`no existe el archivo de entorno ${envPath}`);
+    dotenv.config({ path: envPath, quiet: true }); // quiet: evita que dotenv imprima su propio mensaje
+} else {
+    dotenv.config({ path: path.join(__dirname, ".env"), quiet: true });
 }
 
-// Mundo, velocidad, tick y límites de mensajes (game.js valida cada valor)
-let cfg;
+// Identidad, puertos, URLs, secretos, tiempos del clúster, mapa y juego (config.js valida todo)
+let conf;
 try {
-    cfg = createConfig(process.env, map);
+    conf = loadConfig(process.env, { baseDir: __dirname });
 } catch (err) {
     fatal(err.message);
 }
+const COORDINATOR_ID = conf.coordinatorId;
+const PORT = conf.port;
+const JWT_SECRET = conf.jwtSecret;
+const HEARTBEAT_INTERVAL_MS = conf.clientHeartbeatMs;
+const map = conf.map;
+const cfg = conf.game;
 
 const PROVIDERS = new Set(["local", "google"]);
 const RATE_WINDOW_MS = 1000;
@@ -342,7 +331,7 @@ server.on("error", (err) => {
 
 server.listen(PORT, () => {
     const mapText = map ? `mapa "${map.id}" ${map.cols}×${map.rows}` : `mundo ${cfg.WORLD_WIDTH}×${cfg.WORLD_HEIGHT} sin mapa`;
-    console.log(`Coordinator en puerto ${PORT} (HTTP y WebSocket en /connect) · game loop a ${cfg.TICK_RATE} Hz · ${mapText}`);
+    console.log(`Coordinator ${COORDINATOR_ID} en puerto ${PORT} (HTTP y WebSocket en /connect) · game loop a ${cfg.TICK_RATE} Hz · ${mapText}`);
 });
 
 // ---------- Cierre ordenado ----------
