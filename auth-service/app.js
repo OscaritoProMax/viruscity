@@ -1,17 +1,29 @@
 // App Express del auth-service (sin listen, para poder probarla con una base en memoria).
 //
-// createApp({ db, jwtSecret, jwtExpiresIn, bcryptRounds, verifyGoogle }) → app
+// createApp({ db, jwtSecret, jwtExpiresIn, bcryptRounds, verifyGoogle, directory, clusterSecret }) → app
 //   db            DatabaseSync ya preparado con ensureSchema
 //   verifyGoogle  async (idToken) => payload (en producción, makeGoogleVerifier; en pruebas, uno falso)
+//   directory     directorio de coordinadores (directory.js); si falta, se crea uno con los valores por defecto
+//   clusterSecret secreto compartido con los coordinadores; si falta, POST /heartbeat responde siempre 401
 //
 // Reglas (CLAUDE.md, Taller 5): una sola tabla users; usernames únicos sin distinguir mayúsculas;
 // errores siempre como JSON { error }; nunca se registran contraseñas, hashes, tokens, idTokens ni emails.
 
+const crypto = require("node:crypto");
 const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { createStatements } = require("./db.js");
+const { createDirectory } = require("./directory.js");
+
+// Valores por defecto del directorio si createApp no recibe uno (CLAUDE.md, Taller 6)
+const DEFAULT_TTL_MS = 6000;
+const DEFAULT_RESERVATION_TTL_MS = 3000;
+
+// sha256 de un texto: así las dos entradas de timingSafeEqual miden lo mismo (32 bytes)
+// y la comparación no revela por tiempo ni el contenido ni la longitud del secreto
+const sha256 = (text) => crypto.createHash("sha256").update(String(text), "utf8").digest();
 
 // ---------- Validación ----------
 const USERNAME_MIN = 3;
@@ -39,8 +51,18 @@ function validateUsername(username) {
 // Violación de UNIQUE en node:sqlite (SQLITE_CONSTRAINT_UNIQUE = 2067)
 const isUniqueViolation = (err) => err?.errcode === 2067 || /UNIQUE constraint failed/i.test(err?.message ?? "");
 
-function createApp({ db, jwtSecret, jwtExpiresIn = "1h", bcryptRounds = 10, verifyGoogle }) {
+function createApp({ db, jwtSecret, jwtExpiresIn = "1h", bcryptRounds = 10, verifyGoogle, directory, clusterSecret }) {
     const users = createStatements(db);
+
+    // Directory service (Taller 6)
+    const coordinators = directory ?? createDirectory({ ttlMs: DEFAULT_TTL_MS, reservationTtlMs: DEFAULT_RESERVATION_TTL_MS });
+    const clusterSecretHash = clusterSecret ? sha256(clusterSecret) : null;
+
+    // ¿El header x-cluster-secret coincide con CLUSTER_SECRET? (tiempo constante; nunca se registra)
+    function clusterSecretMatches(given) {
+        if (!clusterSecretHash || typeof given !== "string" || given.length === 0) return false;
+        return crypto.timingSafeEqual(sha256(given), clusterSecretHash);
+    }
 
     // jsonwebtoken interpreta un string numérico ("3600") como milisegundos: solo dígitos → segundos
     const expiresIn = /^\d+$/.test(String(jwtExpiresIn)) ? Number(jwtExpiresIn) : jwtExpiresIn;
@@ -199,6 +221,42 @@ function createApp({ db, jwtSecret, jwtExpiresIn = "1h", bcryptRounds = 10, veri
             console.error("error interno en /auth/google"); // texto fijo, sin detalles
             return res.status(500).json({ error: "internal" });
         }
+    });
+
+    // ---------- Directory service de coordinadores (Taller 6) ----------
+    // Latido de un coordinador: solo con el secreto del clúster. No se registra el header ni el body.
+    app.post("/heartbeat", (req, res) => {
+        if (!clusterSecretMatches(req.get("x-cluster-secret"))) {
+            return res.status(401).json({ error: "invalid_cluster_secret" });
+        }
+        const check = coordinators.validateHeartbeat(req.body);
+        if (!check.ok) return res.status(400).json({ error: check.error });
+        const result = coordinators.heartbeat(check.value);
+        if (!result.ok) return res.status(result.status).json({ error: result.error });
+        res.status(200).json({ ok: true });
+    });
+
+    // Las consultas del directorio son públicas y nunca se guardan en caché (cambian cada 2 s)
+    const noStore = (req, res, next) => {
+        res.set("Cache-Control", "no-store");
+        next();
+    };
+
+    // Coordinador asignado a un cliente: el vivo con menor carga (jugadores + reservas recientes)
+    app.get("/coordinator", noStore, (req, res) => {
+        const chosen = coordinators.pick();
+        if (!chosen) return res.status(503).json({ error: "no_coordinators_available" });
+        res.status(200).json({ coordinatorId: chosen.coordinatorId, publicUrl: chosen.publicUrl });
+    });
+
+    // Coordinadores vivos para armar el mesh (en orden de registro)
+    app.get("/peers", noStore, (req, res) => {
+        res.status(200).json({ peers: coordinators.peers() });
+    });
+
+    // Vista de depuración del directorio (cluster.html)
+    app.get("/directory", noStore, (req, res) => {
+        res.status(200).json({ coordinators: coordinators.list(), ttlMs: coordinators.ttlMs });
     });
 
     // ---------- Errores ----------
