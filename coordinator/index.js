@@ -20,6 +20,7 @@ const { WebSocketServer } = require("ws");
 const jwt = require("jsonwebtoken");
 const { resumePosition, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot, isLocal, countLocal } = require("./game.js");
 const { startHeartbeatLoop } = require("./directory-client.js");
+const { createPeerNetwork } = require("./peers.js");
 
 // ---------- Configuración ----------
 
@@ -76,6 +77,15 @@ const hooks = {
 
 // Estado del heartbeat al auth (null = todavía sin respuesta)
 let authReachable = null;
+
+// Mesh con los otros coordinadores (Taller 6): servidor de peers en PEER_PORT
+const net = createPeerNetwork({
+    selfId: COORDINATOR_ID,
+    peerPort: conf.peerPort,
+    clusterSecret: conf.clusterSecret,
+    cfg,
+    players,
+});
 // userId -> { x, y }: última posición de quien se desconectó. Al volver (recargar la página, otra pestaña,
 // reconexión) aparece donde estaba: el cliente no puede elegir dónde aparecer. Vive en memoria: se pierde
 // si el coordinator se reinicia.
@@ -106,7 +116,7 @@ app.get("/status", (req, res) => {
         uptime: Math.floor(process.uptime()),
         localPlayers: countLocal(players),
         totalPlayers: players.size,
-        peers: [], // ids de peers con handshake completo (llega con el mesh)
+        peers: net.readyPeerIds(), // ids de peers con handshake completo
         authReachable: authReachable === true,
     });
 });
@@ -401,6 +411,13 @@ server.listen(PORT, () => {
     console.log(`Coordinator ${COORDINATOR_ID} en puerto ${PORT} (HTTP y WebSocket en /connect) · game loop a ${cfg.TICK_RATE} Hz · ${mapText}`);
 });
 
+net.start()
+    .then(() => console.log(`Mesh de ${COORDINATOR_ID} en el puerto ${conf.peerPort} (peers en ${conf.peerUrl})`))
+    .catch((err) => {
+        console.error(`No se pudo iniciar el servidor de peers: ${err.message}`);
+        process.exit(1);
+    });
+
 // ---------- Cierre ordenado ----------
 let shuttingDown = false;
 const SHUTDOWN_TIMEOUT_MS = 5 * 1000; // espera máxima antes de forzar la salida
@@ -412,6 +429,7 @@ function shutdown(signal) {
 
     // No se desregistra del auth: el directorio lo descarta por TTL (decisión 19)
     stopAuthHeartbeat();
+    net.stop();
     // 1001 = "going away": el servidor se está apagando
     for (const ws of wss.clients) ws.close(1001, "server shutting down");
     clearTimeout(gameLoop);
