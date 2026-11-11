@@ -1,0 +1,111 @@
+/* Vista de depuración del clúster (Taller 6). Usa los tokens de css/tokens.css con valores de respaldo. */
+
+body.cluster {
+    min-height: 100dvh;
+    margin: 0;
+    background: var(--bg, #0b1020);
+    color: var(--text, #e6e9f5);
+    font-family: var(--font-ui, system-ui, sans-serif);
+}
+
+.cluster-page {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: var(--space-5, 24px) var(--space-4, 16px);
+    display: grid;
+    gap: var(--space-4, 16px);
+}
+
+.cluster-title {
+    margin: 0;
+    font-family: var(--font-mono, monospace);
+    font-size: var(--fs-l, 1.25rem);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+}
+
+.cluster-title__city { color: var(--accent, #4dd2ff); }
+
+.cluster-sub,
+.cluster-foot {
+    margin: var(--space-1, 4px) 0 0;
+    color: var(--muted, #8f9bc4);
+    font-size: var(--fs-s, .8125rem);
+    overflow-wrap: anywhere;
+}
+
+.cluster-summary {
+    margin: 0;
+    padding: var(--space-3, 12px) var(--space-4, 16px);
+    border: 1px solid var(--border, #2a3560);
+    border-radius: var(--radius-m, 12px);
+    background: var(--panel, #121a33);
+    font-family: var(--font-mono, monospace);
+    font-weight: 700;
+}
+
+/* Aviso discreto de error de red (la tabla anterior se conserva) */
+.cluster-notice {
+    margin: 0;
+    padding: var(--space-2, 8px) var(--space-3, 12px);
+    border: 1px solid var(--cure, #ffd166);
+    border-radius: var(--radius-s, 8px);
+    background: color-mix(in srgb, var(--cure, #ffd166) 12%, var(--bg, #0b1020));
+    font-size: var(--fs-s, .8125rem);
+}
+
+.cluster-table-box {
+    overflow-x: auto;
+    border: 1px solid var(--border, #2a3560);
+    border-radius: var(--radius-l, 20px);
+    background: var(--panel, #121a33);
+}
+
+.cluster-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--fs-s, .8125rem);
+}
+
+.cluster-table th,
+.cluster-table td {
+    padding: var(--space-3, 12px) var(--space-4, 16px);
+    border-bottom: 1px solid var(--border, #2a3560);
+    text-align: left;
+    white-space: nowrap;
+}
+
+.cluster-table th {
+    color: var(--muted, #8f9bc4);
+    font-family: var(--font-mono, monospace);
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.cluster-table tbody tr:last-child td { border-bottom: 0; }
+
+.cluster-id {
+    color: var(--accent, #4dd2ff);
+    font-family: var(--font-mono, monospace);
+    font-weight: 700;
+}
+
+.cluster-url { font-family: var(--font-mono, monospace); }
+
+.cluster-num { font-variant-numeric: tabular-nums; }
+
+.cluster-state {
+    color: var(--accent, #4dd2ff);
+    font-weight: 700;
+}
+
+/* Fila de un coordinador que dejó de latir (todavía dentro del TTL) */
+.cluster-table tr.is-stale td { color: var(--muted, #8f9bc4); }
+
+.cluster-table tr.is-stale .cluster-state--stale { color: var(--danger, #ff4d6d); }
+
+.cluster-empty {
+    color: var(--muted, #8f9bc4);
+    text-align: center;
+}

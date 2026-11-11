@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<meta name="color-scheme" content="dark">
+<title>Viruscity · Clúster de coordinadores</title>
+<link rel="icon" type="image/svg+xml" href="img/favicon.svg">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/cluster.css">
+</head>
+<body class="cluster">
+<main class="cluster-page">
+    <header class="cluster-header">
+        <h1 class="cluster-title">VIRUS<span class="cluster-title__city">CITY</span> · Clúster</h1>
+        <p class="cluster-sub">Directorio de coordinadores del auth-service (<span id="authUrl"></span>) · se actualiza cada segundo</p>
+    </header>
+
+    <p id="summary" class="cluster-summary" aria-live="polite">Cargando…</p>
+    <p id="netNotice" class="cluster-notice" role="status" hidden></p>
+
+    <div class="cluster-table-box">
+        <table class="cluster-table">
+            <caption class="sr-only">Coordinadores vivos del clúster</caption>
+            <thead>
+                <tr>
+                    <th scope="col">Coordinador</th>
+                    <th scope="col">URL pública</th>
+                    <th scope="col">Jugadores</th>
+                    <th scope="col">Activo hace</th>
+                    <th scope="col">Último latido</th>
+                    <th scope="col">Estado</th>
+                </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+            <tbody>
+                <tr id="emptyRow" hidden><td colspan="6" class="cluster-empty">No hay coordinadores vivos</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <p class="cluster-foot"><span id="updated"></span> · Un coordinador que deja de latir se marca "sin latir" a los 4 s y desaparece cuando vence su TTL (6 s).</p>
+</main>
+
+<script src="/config.js"></script>
+<script type="module" src="js/cluster.js"></script>
+</body>
+</html>
