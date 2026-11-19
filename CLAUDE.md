@@ -180,3 +180,48 @@ Varios coordinadores en paralelo, intercambiables, con el mismo estado del juego
 ### Seguridad y pruebas
 - Nunca registrar CLUSTER_SECRET, JWT_SECRET, tokens ni contenido de mensajes. Secreto comparado con sha256 + crypto.timingSafeEqual.
 - Pruebas: node:test para la lógica pura (directory.js, mesh.js, módulos del cliente) y un smoke multi-proceso (`npm run smoke:cluster`) que levanta auth + coordinadores en puertos de prueba. Regresión: `npm run smoke` del Taller 5 debe seguir pasando con un coordinador solo.
+
+## VIRUSCITY – METODOLOGÍA (rama viruscity; prevalece sobre decisiones anteriores en caso de conflicto)
+
+### Ciclo de la partida
+1. Fases: open_world → countdown → playing → ended → (RESULTS_MS) → open_world.
+2. open_world: es el mundo abierto actual; todos caminan libres, sin roles, misiones ni cura. Cuando hay >= MIN_PLAYERS_TO_START (3) jugadores conectados EN TODO EL CLÚSTER empieza countdown de MATCH_COUNTDOWN_MS (10 s). Si baja de 3 durante la cuenta, vuelve a open_world.
+3. Al llegar a 0 arranca la partida con roster = los jugadores conectados en ese instante. Se sortea UN infectado inicial al azar. Todos aparecen en la plaza (centro del mundo) en círculo de radio 80, ordenados por userId. Quien entre durante la partida es espectador ("fantasma") hasta la siguiente.
+4. Fin: ended durante RESULTS_MS (15 s) con los roles revelados; luego open_world (se borran roles, misiones y cura).
+
+### Infección
+5. Acción 'infect' (tecla F). Solo un infectado con infectReadyAt <= ahora, sobre el SANO del roster más cercano a INFECT_RANGE (70 px; el árbitro aplica además RANGE_TOLERANCE 25 px). Sin objetivo → { ok:false, reason:'no_target' } y NO consume enfriamiento. Con éxito: la víctima pasa a infectada con infectReadyAt = ahora + NEW_INFECTED_LOCK_MS (3 min); el atacante infectReadyAt = ahora + INFECT_COOLDOWN_MS (2 min). El infectado inicial empieza con infectReadyAt = inicio + INITIAL_LOCK_MS (60 s). La víctima pierde su misión en curso.
+6. Todo infectado puede contagiar (el virus se propaga). Los infectados no hacen misiones.
+7. Información oculta: ningún cliente recibe el rol de otro jugador salvo en game_over (results). Un infectado no sabe quiénes más lo están. Los extras (color) NUNCA llevan datos de la partida. /status y state nunca llevan roles.
+8. Alerta pública: cada contagio genera un evento 'contagion_alert' para TODOS con la zona más cercana a la víctima ("Nuevo contagio detectado cerca de <zona>"), sin nombres ni ids.
+
+### Misiones y cura
+9. Ciudad: 6 zonas (Hospital, Laboratorio, Farmacia, Central de datos, Planta de síntesis, Almacén) con 2 estaciones cada una = 12 misiones fijas. Se definen en coordinator/city.js normalizadas × tamaño del mundo, y el servidor las envía al cliente en welcome.city.
+10. Por partida se eligen al azar M = min(12, 3 × (roster − 1)) misiones. Son compartidas y se completan UNA sola vez; cualquier sano puede hacer cualquiera.
+11. Flujo: mission_start (estar a <= MISSION_RANGE 60 px + tolerancia de la estación, misión 'available', rol sano en el roster, sin otra misión activa) → la misión pasa a 'in_progress' reservada a ese jugador, que queda INMÓVIL (el servidor ignora su movimiento) → mission_complete (el cliente resolvió el minijuego): válido si pasaron >= MISSION_MIN_MS (8 s) y <= MISSION_MAX_MS (45 s) desde mission_start, el jugador sigue en rango y sigue sano → misión 'done' y cure += 100/M (la última deja exactamente 100). mission_cancel la libera. Se libera sola si expira MISSION_MAX_MS, si el jugador se infecta, se desconecta o se aleja más del rango + tolerancia.
+12. La barra de cura (0-100) es pública para todos, infectados incluidos. La lista de misiones es pública (zona, título, tipo, estado available/in_progress/done), NUNCA quién la hace.
+13. Misiones (id = id de la estación; zona; título; minijuego): hospital-1 "Recolectar muestras de pacientes" sequence; hospital-2 "Esterilizar el quirófano" hold; laboratorio-1 "Analizar la muestra del paciente cero" slider; laboratorio-2 "Secuenciar el genoma del virus" code; farmacia-1 "Preparar el suero base" wires; farmacia-2 "Etiquetar las dosis" code; central-1 "Restaurar el registro de contagios" wires; central-2 "Descargar el historial clínico" hold; planta-1 "Sintetizar el compuesto" slider; planta-2 "Purificar el reactor" sequence; almacen-1 "Cargar el suero en los camiones" hold; almacen-2 "Inventariar el cargamento" code. Tipos de minijuego: sequence, code, wires, slider, hold.
+
+### Victoria
+14. Ganan los jugadores (winner "players") cuando cure >= 100. Ganan los infectados (winner "infected") cuando no queda ningún sano en el roster (se evalúa tras cada contagio y cada baja) o cuando se agota MATCH_DURATION_MS (15 min) sin cura. Si no queda ningún infectado en el roster, ganan los jugadores. Si el roster queda con menos de 2 personas (conectadas o en gracia) la partida se cancela y vuelve a open_world con aviso. Orden de evaluación: cure, sin sanos, sin infectados, tiempo.
+15. Desconexión: el miembro del roster desconectado conserva su rol RECONNECT_GRACE_MS (60 s) y su misión se libera de inmediato; si reconecta (a cualquier coordinador) en ese plazo recupera su rol y reaparece en su punto de la plaza; si no, sale del roster y se reevalúan las condiciones de victoria.
+
+### Árbitro y clúster
+16. Un solo árbitro decide la partida: el coordinador de menor coordinatorId entre él mismo y sus peers ready. Los demás reenvían las acciones de sus jugadores al árbitro y reciben el estado replicado. Si el árbitro cae, el siguiente menor asume con el último estado replicado (una misión en curso puede perderse). La partida usa las posiciones de la simulación de cada coordinador (las remotas con tolerancia).
+17. Mensajes nuevos del mesh (validados como todos): game_action { type, origin, userId, action:{ kind:'infect'|'mission_start'|'mission_complete'|'mission_cancel', missionId? } } (solo el dueño del jugador la envía; solo el árbitro la procesa) y game_state { type, origin, handover?, match, events:[...] } (del árbitro a todos). El árbitro replica cada MATCH_REPLICATE_MS (250 ms) en countdown/playing/ended, cada 1000 ms en open_world, y de inmediato tras procesar una acción (máximo una por 50 ms). match.rev crece en cada cambio.
+18. Aceptación de game_state en un coordinador C: (a) si origin es el árbitro que C calcula, se adopta siempre; (b) si trae handover:true, C es el árbitro calculado y (C aún no tiene estado o (matchId, rev) del mensaje es mayor que el propio), se adopta y C sigue siendo árbitro; (c) en cualquier otro caso se ignora. Un árbitro recién elegido SIN estado (arrancó de cero o se reincorporó) con al menos un peer ready espera hasta GAME_SYNC_WAIT_MS (1500) un handover antes de avanzar la partida. El árbitro saliente (el que deja de serlo porque aparece un id menor) envía handover:true a ese peer al completar el handshake.
+19. Eventos: cada evento lleva eid creciente (match.eid, que no se reinicia entre partidas) y opcionalmente to (userId). Cada coordinador entrega a sus clientes locales solo eventos con eid mayor al último entregado (si match.eid retrocede respecto al último entregado, se reinicia ese contador); los que llevan to solo si ese jugador es local.
+
+### Protocolo con el cliente
+20. Cliente → servidor: { type:'game_action', action:'infect'|'mission_start'|'mission_complete'|'mission_cancel', missionId? } (máx. 5/s por socket; missionId con patrón ^[a-z0-9-]{1,40}$).
+    Servidor → cliente:
+    - welcome gana city:{ zones:[{id,name,x,y,w,h}], stations:[{id,zoneId,x,y}], plaza:{x,y} } y game:{ minPlayers, missionMinMs, missionMaxMs, infectRange, missionRange }.
+    - game (cada GAME_VIEW_MS=250 y tras cada evento; personalizado): { type:'game', serverTime, phase, minPlayers, connected, countdownEndsAt?, startedAt?, endsAt?, resultsEndsAt?, cure, missions:[{id,zoneId,stationId,x,y,title,kind,status}], you:{ role:'healthy'|'infected'|'spectator'|null, infectReadyAt:number|null, missionId:string|null, missionStartedAt:number|null }, results?:{ winner, reason, players:[{userId,username,role}] } }. you.role es null en open_world y countdown; results solo en ended; infectReadyAt solo para un infectado del roster.
+    - event: { type:'event', kind, ... } con kinds: match_started {role}; you_infected; infect_result {ok, reason?}; mission_started {missionId}; mission_result {ok, missionId, reason?}; contagion_alert {zone}; cure_update {cure}; match_cancelled {reason}; match_ended {winner}. Motivos de fallo: not_playing, spectator, not_infected, cooldown, no_target, not_healthy, busy, not_available, too_far, too_fast, expired, infected, cancelled, no_active_mission, arbiter_unavailable.
+    - state (20 Hz) mantiene su formato y añade ghost:true a los jugadores fuera del roster durante playing (se dibujan translúcidos y no interactúan).
+
+### Config del coordinador (env; defaults; solo balance y pruebas)
+MIN_PLAYERS_TO_START=3, MATCH_COUNTDOWN_MS=10000, INITIAL_LOCK_MS=60000, INFECT_COOLDOWN_MS=120000, NEW_INFECTED_LOCK_MS=180000, MATCH_DURATION_MS=900000, RESULTS_MS=15000, RECONNECT_GRACE_MS=60000, MISSION_MIN_MS=8000, MISSION_MAX_MS=45000, INFECT_RANGE=70, MISSION_RANGE=60, RANGE_TOLERANCE=25, MATCH_REPLICATE_MS=250, GAME_TICK_MS=200, GAME_VIEW_MS=250, GAME_SYNC_WAIT_MS=1500.
+
+### Pruebas
+- El reducer de la partida (match.js) y las vistas son PUROS, con reloj (ctx.now) y rng inyectables; pruebas node:test exhaustivas e inmutabilidad verificada. Smoke de partidas completas con tiempos reducidos por env: `npm run smoke:viruscity` (con 1 y con 3 coordinadores).
