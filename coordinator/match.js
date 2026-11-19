@@ -6,6 +6,7 @@
 // createMatchState()                        → estado inicial (open_world)
 // advance(state, ctx)                       → { state, events, changed }   paso del tiempo y de las conexiones
 // applyAction(state, userId, action, ctx)   → { state, events, changed }   infect / mission_start / _complete / _cancel
+// buildClientView(state, userId, ctx)       → mensaje 'game' personalizado (sin información oculta)
 // frozenUserIds(state)                      → Set de userId con una misión en curso (el servidor no los mueve)
 // isGhost(state, userId)                    → true si se juega y el usuario no está en el roster (espectador)
 // plazaSpawns(state, city)                  → { [userId]: { x, y } } en círculo alrededor de la plaza
@@ -445,6 +446,52 @@ function plazaSpawns(state, city) {
     return out;
 }
 
+// ---------- Vistas personalizadas (decisiones 7 y 20) ----------
+// Información oculta: la vista de un jugador solo lleva SU rol. No incluye el roster, ni quién hace cada
+// misión (sin 'by'), ni roles ajenos; los roles de todos aparecen solo en results, durante 'ended'.
+
+// Lista pública de misiones: zona, título, tipo, posición y estado; NUNCA quién la hace
+const publicMission = (m) => ({ id: m.id, zoneId: m.zoneId, stationId: m.stationId, x: m.x, y: m.y, title: m.title, kind: m.kind, status: m.status });
+
+// ctx = { now, connected (jugadores conectados en todo el clúster), cfg }
+function buildClientView(state, userId, ctx) {
+    const id = String(userId);
+    const { phase } = state;
+    const inMatch = phase === "playing" || phase === "ended";
+    const me = inMatch ? member(state.roster, id) : undefined;
+    const mission = phase === "playing" ? activeMission(state, id) : null;
+
+    const view = {
+        type: "game",
+        serverTime: ctx.now,
+        phase,
+        minPlayers: ctx.cfg.MIN_PLAYERS_TO_START,
+        connected: Number.isFinite(ctx.connected) ? ctx.connected : 0,
+    };
+    if (phase === "countdown") view.countdownEndsAt = state.countdownEndsAt;
+    if (inMatch) {
+        view.startedAt = state.startedAt;
+        view.endsAt = state.endsAt;
+    }
+    if (phase === "ended") view.resultsEndsAt = state.resultsEndsAt;
+    view.cure = state.cure;
+    view.missions = state.missions.map(publicMission);
+    view.you = {
+        role: !inMatch ? null : me ? me.role : "spectator", // null en open_world y countdown
+        infectReadyAt: phase === "playing" && me?.role === "infected" ? me.infectReadyAt : null,
+        missionId: mission ? mission.id : null,
+        missionStartedAt: mission ? mission.startedAt : null,
+    };
+    if (phase === "ended" && state.results) {
+        view.results = {
+            winner: state.results.winner,
+            reason: state.results.reason,
+            players: state.results.players.map((p) => ({ userId: p.userId, username: p.username, role: p.role })),
+        };
+    }
+    return view;
+}
+
 module.exports = {
     PLAZA_RADIUS,
     createMatchState,
@@ -453,4 +500,5 @@ module.exports = {
     frozenUserIds,
     isGhost,
     plazaSpawns,
+    buildClientView,
 };
