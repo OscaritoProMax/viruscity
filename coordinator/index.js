@@ -18,10 +18,13 @@ const http = require("node:http");
 const express = require("express");
 const { WebSocketServer } = require("ws");
 const jwt = require("jsonwebtoken");
-const { resumePosition, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot, isLocal, countLocal } = require("./game.js");
+const { resumePosition, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot, isLocal, localPlayers, countLocal } = require("./game.js");
 const { startHeartbeatLoop } = require("./directory-client.js");
 const { createPeerNetwork } = require("./peers.js");
 const { buildJoined, buildLeft, buildIntent, buildExtras } = require("./mesh.js");
+const { createMatchState, advance, applyAction, buildClientView } = require("./match.js");
+const { buildCity } = require("./city.js");
+const { sanitizeGameAction, selectEventsToDeliver, routeEvents, GAME_ACTIONS_PER_SEC } = require("./arbiter.js");
 
 // ---------- Configuración ----------
 
@@ -78,6 +81,13 @@ const hooks = {
 
 // Estado del heartbeat al auth (null = todavía sin respuesta)
 let authReachable = null;
+
+// ---------- Partida de Viruscity ----------
+// Toda la lógica está en match.js (reducer puro); aquí solo se cablea. Por ahora este coordinador es su
+// propio árbitro (en V3 lo será el de menor id del clúster). La ciudad (zonas y estaciones) sale de city.js.
+const city = buildCity({ width: cfg.WORLD_WIDTH, height: cfg.WORLD_HEIGHT });
+let match = createMatchState();
+let lastDeliveredEid = 0; // último eid de evento entregado a los clientes locales (decisión 19)
 
 // Mesh con los otros coordinadores (Taller 6): servidor de peers en PEER_PORT
 const net = createPeerNetwork({
@@ -139,6 +149,15 @@ app.get("/status", (req, res) => {
         totalPlayers: players.size,
         peers: net.readyPeerIds(), // ids de peers con handshake completo
         authReachable: authReachable === true,
+        // Partida (sin roles): fase, número de partida, versión, cura y tamaño del roster
+        match: {
+            phase: match.phase,
+            matchId: match.matchId,
+            rev: match.rev,
+            cure: match.cure,
+            rosterSize: Object.keys(match.roster).length,
+            arbiterId: COORDINATOR_ID,
+        },
     });
 });
 
@@ -306,6 +325,7 @@ wss.on("connection", (ws, payload) => {
     // y nada de lo recibido se registra en logs.
     let windowStart = Date.now();
     let messagesInWindow = 0;
+    let actionsInWindow = 0; // game_action: límite propio de GAME_ACTIONS_PER_SEC por segundo
 
     ws.on("message", (raw) => {
         // Límite de mensajes por segundo y por socket: el exceso se descarta en silencio
@@ -313,6 +333,7 @@ wss.on("connection", (ws, payload) => {
         if (now - windowStart >= RATE_WINDOW_MS) {
             windowStart = now;
             messagesInWindow = 0;
+            actionsInWindow = 0;
         }
         messagesInWindow += 1;
         if (messagesInWindow > cfg.MAX_MSGS_PER_SEC) return;
@@ -339,6 +360,13 @@ wss.on("connection", (ws, payload) => {
             if (!extras) return;
             p.extras = extras; // reemplazo completo
             hooks.onLocalExtras(userId, extras);
+        } else if (msg?.type === "game_action") {
+            // Acción de la partida (decisión 20): validada y con su propio límite por segundo
+            const action = sanitizeGameAction(msg);
+            if (!action) return;
+            actionsInWindow += 1;
+            if (actionsInWindow > GAME_ACTIONS_PER_SEC) return;
+            handleAction(userId, action);
         }
         // Cualquier otro tipo se ignora
     });
@@ -399,6 +427,76 @@ function scheduleTick() {
 }
 scheduleTick();
 
+// ---------- Partida: tick, acciones, eventos y vistas ----------
+// El reducer recibe a TODOS los jugadores del mundo (locales y remotos) con su posición actual.
+function matchCtx(now = Date.now()) {
+    const list = [];
+    for (const [userId, p] of players) list.push({ userId, username: p.username, x: p.x, y: p.y });
+    return { now, players: list, cfg, city, rng: Math.random };
+}
+
+const localIds = () => new Set(localPlayers(players).map(([userId]) => userId));
+
+// Vista personalizada 'game' para un jugador local (sin información oculta)
+function sendView(userId, p, now) {
+    send(p.socket, buildClientView(match, userId, { now, connected: players.size, cfg }));
+}
+
+// Entrega a los clientes locales los eventos nuevos y luego su vista actualizada
+function deliverEvents(events) {
+    const { deliver, newLast } = selectEventsToDeliver(events, lastDeliveredEid, match.eid);
+    lastDeliveredEid = newLast;
+    if (deliver.length === 0) return;
+    const affected = new Set();
+    for (const { userId, msg } of routeEvents(deliver, localIds())) {
+        if (userId === null) {
+            for (const [id, p] of localPlayers(players)) {
+                send(p.socket, msg);
+                affected.add(id);
+            }
+        } else {
+            const p = players.get(userId);
+            if (p && isLocal(p)) {
+                send(p.socket, msg);
+                affected.add(userId);
+            }
+        }
+    }
+    const now = Date.now();
+    for (const userId of affected) {
+        const p = players.get(userId);
+        if (p && isLocal(p)) sendView(userId, p, now);
+    }
+}
+
+// Adopta un estado nuevo del reducer: registra los cambios de fase (sin roles) y reparte los eventos
+function commitMatch(result) {
+    const previous = match;
+    match = result.state;
+    if (match.phase !== previous.phase) {
+        console.log(`Partida ${match.matchId}: ${previous.phase} → ${match.phase} · roster ${Object.keys(match.roster).length}`);
+    }
+    deliverEvents(result.events);
+}
+
+// Acción de un jugador local (ya validada). En V3 se reenviará al árbitro si no es este coordinador.
+function handleAction(userId, action) {
+    const result = applyAction(match, userId, action, matchCtx());
+    if (result.changed) commitMatch(result);
+}
+
+// Cada GAME_TICK_MS: tiempo y conexiones (cuenta regresiva, inicio, gracia, misiones vencidas, victoria)
+const matchTicker = setInterval(() => {
+    const result = advance(match, matchCtx());
+    if (result.changed) commitMatch(result);
+}, cfg.GAME_TICK_MS);
+
+// Cada GAME_VIEW_MS: la vista 'game' a cada cliente local
+const viewTicker = setInterval(() => {
+    const now = Date.now();
+    for (const [userId, p] of localPlayers(players)) sendView(userId, p, now);
+}, cfg.GAME_VIEW_MS);
+
 // ---------- Arranque ----------
 server.on("error", (err) => {
     // p. ej. puerto ocupado
@@ -454,6 +552,8 @@ function shutdown(signal) {
     // 1001 = "going away": el servidor se está apagando
     for (const ws of wss.clients) ws.close(1001, "server shutting down");
     clearTimeout(gameLoop);
+    clearInterval(matchTicker);
+    clearInterval(viewTicker);
     clearInterval(heartbeat);
     wss.close();
 
