@@ -4,6 +4,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { sanitizeGameAction, selectEventsToDeliver, routeEvents } = require("../arbiter.js");
+const { createConfig, stepPlayers, snapshot } = require("../game.js");
 
 // ---------- sanitizeGameAction ----------
 
@@ -91,4 +92,47 @@ test("selectEventsToDeliver: si match.eid retrocede se reinicia el contador", ()
     assert.deepEqual(selectEventsToDeliver([], 2, 5), { deliver: [], newLast: 5 });
     // Entradas raras no rompen
     assert.deepEqual(selectEventsToDeliver(null, undefined, undefined), { deliver: [], newLast: 0 });
+});
+
+// ---------- stepPlayers con frozen y snapshot con ghost ----------
+
+const CFG = createConfig({}); // mundo de 1200 × 800 sin mapa, 200 px/s
+const mover = (extra = {}) => ({ username: "ana", provider: "local", x: 600, y: 400, intent: { x: 1, y: 0 }, extras: {}, ...extra });
+
+test("stepPlayers: un jugador congelado no se mueve aunque tenga intención", () => {
+    const players = new Map([["u1", mover({ frozen: true })]]);
+    stepPlayers(players, 0.25, CFG);
+    assert.deepEqual([players.get("u1").x, players.get("u1").y], [600, 400]);
+    players.get("u1").intent = { x: -1, y: 1 };
+    stepPlayers(players, 0.25, CFG);
+    assert.deepEqual([players.get("u1").x, players.get("u1").y], [600, 400]);
+});
+
+test("stepPlayers: sin frozen (o frozen false) se mueve igual que antes", () => {
+    const players = new Map([
+        ["u1", mover()],
+        ["u2", mover({ frozen: false })],
+        ["u3", mover({ frozen: true })],
+    ]);
+    stepPlayers(players, 0.25, CFG);
+    assert.equal(players.get("u1").x, 650, "200 px/s × 0,25 s");
+    assert.equal(players.get("u2").x, 650);
+    assert.equal(players.get("u3").x, 600);
+    // Al descongelarse vuelve a moverse
+    players.get("u3").frozen = false;
+    stepPlayers(players, 0.25, CFG);
+    assert.equal(players.get("u3").x, 650);
+});
+
+test("snapshot: ghost:true solo para quien isGhost indica; nunca roles", () => {
+    const players = new Map([
+        ["u1", mover({ ownerId: "coord-a" })],
+        ["u2", mover({ ownerId: "coord-a", role: "infected" })], // aunque el objeto tuviera un rol, no se copia
+    ]);
+    const plain = snapshot(players);
+    assert.ok(plain.every((p) => !("ghost" in p)));
+    const withGhost = snapshot(players, (id) => id === "u2");
+    assert.equal(withGhost.find((p) => p.userId === "u2").ghost, true);
+    assert.ok(!("ghost" in withGhost.find((p) => p.userId === "u1")));
+    assert.ok(!JSON.stringify(withGhost).includes("role") && !JSON.stringify(withGhost).includes("infected"));
 });

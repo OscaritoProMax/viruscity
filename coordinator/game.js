@@ -229,9 +229,11 @@ function moveAxis(p, axis, delta, r, map) {
 // Aplica las intenciones: la diagonal se normaliza (misma velocidad que un eje)
 // y cada jugador queda dentro del mundo. Con mapa, además no atraviesa casillas sólidas
 // (se mueve un eje a la vez: al chocar en diagonal se desliza por la pared).
+// Viruscity: un jugador con frozen = true (haciendo una misión) no se mueve aunque tenga intención.
 function stepPlayers(players, dt, cfg, map = null) {
     const r = cfg.PLAYER_RADIUS;
     for (const p of players.values()) {
+        if (p.frozen) continue;
         const ix = p.intent?.x ?? 0;
         const iy = p.intent?.y ?? 0;
         const mag = Math.hypot(ix, iy);
@@ -265,7 +267,9 @@ const round2 = (n) => Math.round(n * 100) / 100;
 
 // Estado público de los jugadores: nunca incluye socket ni intent.
 // players es un Map userId → jugador. Taller 6: cada jugador lleva coordinatorId (su dueño, ownerId).
-function snapshot(players) {
+// Viruscity: isGhost(userId) opcional; si devuelve true se agrega ghost:true (espectador durante la partida).
+// Nunca se incluye el rol de la partida.
+function snapshot(players, isGhost = null) {
     return [...players].map(([userId, p]) => ({
         userId,
         username: p.username,
@@ -274,6 +278,7 @@ function snapshot(players) {
         y: round2(p.y),
         extras: p.extras ?? {},
         ...(p.ownerId !== undefined && { coordinatorId: p.ownerId }),
+        ...(isGhost && isGhost(userId) && { ghost: true }),
     }));
 }
 

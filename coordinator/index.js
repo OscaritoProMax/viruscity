@@ -22,7 +22,7 @@ const { resumePosition, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, sn
 const { startHeartbeatLoop } = require("./directory-client.js");
 const { createPeerNetwork } = require("./peers.js");
 const { buildJoined, buildLeft, buildIntent, buildExtras } = require("./mesh.js");
-const { createMatchState, advance, applyAction, buildClientView } = require("./match.js");
+const { createMatchState, advance, applyAction, buildClientView, frozenUserIds, isGhost, plazaSpawns } = require("./match.js");
 const { buildCity } = require("./city.js");
 const { sanitizeGameAction, selectEventsToDeliver, routeEvents, GAME_ACTIONS_PER_SEC } = require("./arbiter.js");
 
@@ -256,9 +256,12 @@ wss.on("connection", (ws, payload) => {
     // La posición NO se elige de nuevo: la sesión nueva sigue donde estaba la anterior (o donde quedó
     // al desconectarse); solo la primera vez se aparece al azar.
     // Si existía como REMOTO (conectado en otro coordinador), el local nuevo lo reemplaza.
+    // Viruscity: un miembro del roster que VUELVE durante la partida (no tenía sesión abierta) reaparece en
+    // su punto de la plaza; si solo reemplaza una sesión abierta, sigue donde estaba (no es un teletransporte).
     const previous = players.get(userId);
+    const plazaSpot = !previous && match.phase === "playing" && Object.hasOwn(match.roster, userId) ? plazaSpawns(match, city)[userId] : null;
     const saved = previous ? { x: previous.x, y: previous.y } : lastPositions.get(userId);
-    const { x, y } = resumePosition(saved, cfg, map);
+    const { x, y } = plazaSpot ?? resumePosition(saved, cfg, map);
     const player = {
         username,
         provider, // lo pone el servidor desde el JWT (no es un extra del cliente)
@@ -282,13 +285,23 @@ wss.on("connection", (ws, payload) => {
     }
     hooks.onLocalJoin(userId, player);
 
-    // Bienvenida: quién soy y cómo es el mundo
+    // Bienvenida: quién soy, cómo es el mundo, la ciudad de la partida (zonas, estaciones y plaza) y las
+    // reglas que el cliente necesita para dibujar (decisión 20). Luego, de inmediato, su vista 'game'.
     send(ws, {
         type: "welcome",
         coordinatorId: COORDINATOR_ID,
         you: { userId, username, provider },
         world: { width: cfg.WORLD_WIDTH, height: cfg.WORLD_HEIGHT, playerRadius: cfg.PLAYER_RADIUS, tickRate: cfg.TICK_RATE },
+        city,
+        game: {
+            minPlayers: cfg.MIN_PLAYERS_TO_START,
+            missionMinMs: cfg.MISSION_MIN_MS,
+            missionMaxMs: cfg.MISSION_MAX_MS,
+            infectRange: cfg.INFECT_RANGE,
+            missionRange: cfg.MISSION_RANGE,
+        },
     });
+    sendView(userId, player, Date.now());
     broadcastPlayers();
 
     // Heartbeat: se marca vivo al conectar y cada vez que responde un ping
@@ -400,11 +413,16 @@ function tick() {
     lastTick = now;
     if (players.size === 0) return;
 
+    // Viruscity: quien hace una misión queda inmóvil (el servidor ignora su intención)
+    const frozen = frozenUserIds(match);
+    for (const [userId, p] of players) p.frozen = frozen.has(userId);
     stepPlayers(players, dt, cfg, map);
     if (countLocal(players) === 0) return; // nadie a quien enviarle el state
 
-    // El JSON se arma una sola vez por tick y se reutiliza para todos los sockets locales
-    const message = JSON.stringify({ type: "state", t: now, coordinatorId: COORDINATOR_ID, players: snapshot(players) });
+    // El JSON se arma una sola vez por tick y se reutiliza para todos los sockets locales.
+    // Durante la partida, los que no están en el roster van con ghost:true (nunca se envían roles).
+    const ghostOf = match.phase === "playing" ? (userId) => isGhost(match, userId) : null;
+    const message = JSON.stringify({ type: "state", t: now, coordinatorId: COORDINATOR_ID, players: snapshot(players, ghostOf) });
     for (const p of players.values()) {
         if (isLocal(p) && p.socket.readyState === p.socket.OPEN) p.socket.send(message);
     }
@@ -476,7 +494,21 @@ function commitMatch(result) {
     if (match.phase !== previous.phase) {
         console.log(`Partida ${match.matchId}: ${previous.phase} → ${match.phase} · roster ${Object.keys(match.roster).length}`);
     }
+    // Empezó una partida nueva: todo el roster aparece en su punto de la plaza, quieto
+    if (match.matchId > previous.matchId && match.phase === "playing") placeRosterAtPlaza();
     deliverEvents(result.events);
+}
+
+function placeRosterAtPlaza() {
+    for (const [userId, spot] of Object.entries(plazaSpawns(match, city))) {
+        const p = players.get(userId);
+        if (!p) continue;
+        p.x = spot.x;
+        p.y = spot.y;
+        const moving = p.intent.x !== 0 || p.intent.y !== 0;
+        p.intent = { x: 0, y: 0 };
+        if (moving && isLocal(p)) hooks.onLocalIntent(userId, p.intent); // los peers dejan de moverlo
+    }
 }
 
 // Acción de un jugador local (ya validada). En V3 se reenviará al árbitro si no es este coordinador.
