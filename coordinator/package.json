@@ -9,7 +9,7 @@
     "start:b": "node index.js --env .env.coord-b",
     "start:c": "node index.js --env .env.coord-c",
     "dev": "node --watch index.js",
-    "test": "node --test test/*.test.mjs",
+    "test": "node --test test/*.test.mjs test/*.test.js",
     "smoke": "node scripts/smoke-test.js",
     "smoke:cluster": "node scripts/cluster-smoke.js"
   },

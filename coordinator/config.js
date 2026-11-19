@@ -5,7 +5,8 @@
 //
 // Cada instancia tiene su id, su puerto para clientes (PORT) y su puerto para el mesh (PEER_PORT),
 // la URL que usan los CLIENTES (PUBLIC_URL) y la que usan los otros coordinadores (PEER_URL).
-// Las variables del juego del Taller 5 se validan con createConfig/parseMap de game.js.
+// Las variables del juego del Taller 5 se validan con createConfig/parseMap de game.js, y las del balance
+// de la partida de Viruscity con readMatchConfig (se agregan al mismo objeto game).
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -24,6 +25,32 @@ const TIMINGS = {
 };
 const TIMING_MIN = 100;
 const CLIENT_HEARTBEAT_DEFAULT = 30000; // ping WS a los clientes (Taller 4)
+
+// Partida de Viruscity (balance/pruebas): valor por defecto y mínimo de cada clave. Todas son enteros.
+//   - tiempos y duraciones: >= 0 (0 sirve para pruebas: p. ej. sin bloqueo inicial);
+//   - periodos de temporizadores (replicación, tick y vista de la partida): >= 1 (0 haría un bucle sin pausa);
+//   - rangos de infección y de misión: > 0; la tolerancia puede ser 0;
+//   - MIN_PLAYERS_TO_START: >= 2 (hace falta un infectado y al menos un sano).
+const MATCH_SETTINGS = {
+    MIN_PLAYERS_TO_START: { def: 3, min: 2, unit: "jugadores" },
+    MATCH_COUNTDOWN_MS: { def: 10000, min: 0 },
+    INITIAL_LOCK_MS: { def: 60000, min: 0 },
+    INFECT_COOLDOWN_MS: { def: 120000, min: 0 },
+    NEW_INFECTED_LOCK_MS: { def: 180000, min: 0 },
+    MATCH_DURATION_MS: { def: 900000, min: 0 },
+    RESULTS_MS: { def: 15000, min: 0 },
+    RECONNECT_GRACE_MS: { def: 60000, min: 0 },
+    MISSION_MIN_MS: { def: 8000, min: 0 },
+    MISSION_MAX_MS: { def: 45000, min: 0 },
+    INFECT_RANGE: { def: 70, min: 1, unit: "px" },
+    MISSION_RANGE: { def: 60, min: 1, unit: "px" },
+    RANGE_TOLERANCE: { def: 25, min: 0, unit: "px" },
+    MATCH_REPLICATE_MS: { def: 250, min: 1 },
+    GAME_TICK_MS: { def: 200, min: 1 },
+    GAME_VIEW_MS: { def: 250, min: 1 },
+    GAME_SYNC_WAIT_MS: { def: 1500, min: 0 },
+};
+const MATCH_DEFAULTS = Object.freeze(Object.fromEntries(Object.entries(MATCH_SETTINGS).map(([k, s]) => [k, s.def])));
 
 function readPort(env, key) {
     const raw = String(env[key] ?? "").trim();
@@ -65,6 +92,25 @@ function readInt(env, key, defaultValue, min) {
     return Number(text);
 }
 
+// Configuración de la partida de Viruscity (ver MATCH_SETTINGS). Lanza un Error con el motivo si algo no vale.
+function readMatchConfig(env = {}) {
+    const cfg = {};
+    for (const [key, { def, min, unit = "milisegundos" }] of Object.entries(MATCH_SETTINGS)) {
+        const raw = env[key];
+        if (raw === undefined || String(raw).trim() === "") {
+            cfg[key] = def;
+            continue;
+        }
+        const text = String(raw).trim();
+        if (!/^\d+$/.test(text) || Number(text) < min || !Number.isSafeInteger(Number(text))) {
+            throw new Error(`${key} debe ser un entero mayor o igual a ${min} (${unit})`);
+        }
+        cfg[key] = Number(text);
+    }
+    if (cfg.MISSION_MIN_MS > cfg.MISSION_MAX_MS) throw new Error("MISSION_MIN_MS no puede ser mayor que MISSION_MAX_MS");
+    return cfg;
+}
+
 // Mapa opcional (MAP_FILE, relativo a baseDir) validado con parseMap
 function readMap(env, baseDir) {
     const file = String(env.MAP_FILE ?? "").trim();
@@ -100,9 +146,10 @@ function loadConfig(env = process.env, { baseDir = __dirname } = {}) {
     for (const [key, def] of Object.entries(TIMINGS)) timings[key] = readInt(env, key, def, TIMING_MIN);
     const clientHeartbeatMs = readInt(env, "HEARTBEAT_INTERVAL_MS", CLIENT_HEARTBEAT_DEFAULT, 1);
 
-    // Juego (Taller 5): mapa y mundo, velocidad, tick y límites de mensajes
+    // Juego (Taller 5): mapa y mundo, velocidad, tick y límites de mensajes; más el balance de la
+    // partida de Viruscity, en el mismo objeto para que el reducer reciba un solo cfg
     const map = readMap(env, baseDir);
-    const game = createConfig(env, map);
+    const game = { ...createConfig(env, map), ...readMatchConfig(env) };
 
     return {
         coordinatorId,
@@ -132,4 +179,4 @@ function envFileArg(argv = process.argv) {
     return null;
 }
 
-module.exports = { loadConfig, envFileArg, ID_REGEX };
+module.exports = { loadConfig, envFileArg, readMatchConfig, MATCH_DEFAULTS, ID_REGEX };
