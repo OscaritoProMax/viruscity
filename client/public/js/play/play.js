@@ -23,9 +23,11 @@ import { createRadio, STATION, estimateOffset } from "./radio.js";
 import { createDialogue } from "./dialogue.js";
 import { sceneAt, WORLD_SCENE } from "./map/scenes.js";
 import { parseCoordinatorResponse, buildWsUrl, isMixedContent, nextDelay, classifyClose, MAX_ATTEMPTS } from "./directory.js";
-import { parseServerMessage, parseCity, parseRules, eventText, eventTone } from "../vc/view.js";
+import { parseServerMessage, parseCity, parseRules, eventText, eventTone, reasonText } from "../vc/view.js";
 import { createClock } from "../vc/clock.js";
 import { createHud } from "../vc/hud.js";
+import { decideMissionKey } from "../vc/actions.js";
+import { createMissionController } from "../vc/mission.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -117,6 +119,19 @@ function startGame(token) {
     let rules = parseRules(null);
     let matchCity = null;
     const hud = createHud();
+    // Misión en curso: el minijuego se abre cuando el SERVIDOR confirma mission_started. Mientras está abierto
+    // el jugador queda quieto (el servidor además ignora su movimiento) y la entrada va solo al minijuego.
+    const missionUi = createMissionController({
+        container: $("canvasBox"),
+        send: (msg) => sendJson(msg),
+        clock,
+        getRules: () => rules,
+        onOpenChange(open) {
+            if (!open) return;
+            if (dialogue.isOpen()) endDialogue();
+            releaseAll(); // {0, 0} antes de que se bloquee la entrada
+        },
+    });
 
     // Cabecera: username y proveedor (solo para mostrar; el servidor manda el suyo en welcome)
     const provider = payload?.provider;
@@ -248,6 +263,7 @@ function startGame(token) {
         if (parsed.kind === "game") {
             setLastGame(parsed.msg);
             clock.sync(parsed.msg.serverTime, Date.now());
+            missionUi.onGame(parsed.msg);
             refreshGameHud();
             return;
         }
@@ -302,6 +318,7 @@ function startGame(token) {
         ws = null;
         window.lastState = null;
         setLastGame(null);
+        missionUi.close();
         hud.reset();
         setCoordinatorPill(null, null);
         retry((n) => `Conexión perdida con ${previous}. Buscando otro coordinador… (intento ${n})`);
@@ -337,9 +354,9 @@ function startGame(token) {
     let lastIntent = { x: 0, y: 0 };
 
     // Envía la intención solo si cambió respecto a la última enviada.
-    // Con la pantalla de rol abierta no se envían intenciones (al abrirla ya se mandó {0, 0}).
+    // Con la pantalla de rol o un minijuego abiertos no se envían intenciones (al abrirlos ya se mandó {0, 0}).
     function pushIntent() {
-        if (hud.roleOpen()) return;
+        if (hud.roleOpen() || missionUi.isOpen()) return;
         const intent = computeIntent(keys);
         if (intent.x === lastIntent.x && intent.y === lastIntent.y) return;
         if (!isOpen()) return;
@@ -358,8 +375,10 @@ function startGame(token) {
             hud.closeRole();
             return;
         }
+        // Con un minijuego abierto el teclado es solo suyo (el modal ya detiene sus propias teclas)
+        if (missionUi.isOpen()) return;
         if (!event.repeat && !inTextField(event.target)) {
-            if (event.code === "KeyE") interact(); // hablar con un vecino o mirar un cartel
+            if (event.code === "KeyE") onKeyE(); // misión cercana, o hablar con un vecino o mirar un cartel
             if (event.code === "KeyQ" && !dialogue.isOpen()) usePower();
             if (event.code === "Escape" && dialogue.isOpen()) endDialogue();
         }
@@ -510,8 +529,26 @@ function startGame(token) {
         hud.update({ game: lastGame, clock, localNow: Date.now(), pos, players, selfId: me.userId, city: matchCity, rules });
     }
 
+    // Posición del jugador local según el servidor (la que usa el árbitro para los rangos)
+    function serverPosition() {
+        const mine = window.lastState?.players?.find((p) => p.userId === me.userId);
+        return mine && Number.isFinite(mine.x) && Number.isFinite(mine.y) ? { x: mine.x, y: mine.y } : null;
+    }
+
+    // Tecla E: en partida, un sano junto a una estación disponible pide la misión (el minijuego se abre
+    // cuando el servidor la confirma); un infectado recibe el aviso de que no puede. Si no, E habla o mira.
+    function onKeyE() {
+        if (dialogue.isOpen()) return interact();
+        const decision = decideMissionKey({ game: lastGame, pos: serverPosition(), rules, blocked: hud.roleOpen() || missionUi.isOpen() });
+        if (decision.action === "start") return missionUi.requestStart(decision.missionId);
+        if (decision.action === "toast") return hud.toast(reasonText(decision.reason), "danger");
+        interact();
+    }
+
     // Eventos de la partida: aviso de 3 s y, según el kind, pantalla de rol o refresco inmediato del HUD
     function onGameEvent(event) {
+        // El minijuego reacciona primero (abrir, cerrar o reintentar); un reintento por too_fast no se avisa
+        if (missionUi.onEvent(event)) return;
         if (event.kind === "match_started") {
             // El jugador se detiene y ve su rol; mientras la pantalla está abierta no se envían intenciones
             if (dialogue.isOpen()) endDialogue();
@@ -535,6 +572,7 @@ function startGame(token) {
         $("hudArea").textContent = renderer.area() ?? "Virus City";
         $("radioTitle").textContent = radioText();
         refreshGameHud();
+        missionUi.tick(Date.now()); // tiempo restante de la misión en el minijuego
         // Minimapa solo en la ciudad (sin mapa del servidor o dentro de un local se oculta)
         $("minimap").hidden = !withMap() || renderer.scene() !== WORLD_SCENE;
         if (state && Number.isFinite(state.t)) {
