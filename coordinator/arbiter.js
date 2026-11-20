@@ -27,6 +27,8 @@ function sanitizeGameAction(msg) {
 // Decisión 19: se entregan solo los eventos con eid mayor al último entregado. Si el eid de la partida
 // retrocede respecto al último entregado (otro árbitro empezó de cero), el contador se reinicia.
 // Nunca se entrega un eid mayor que el de la partida, ni dos veces el mismo eid.
+// newLast: si se entregó algo, el último eid entregado (así un game_state partido en trozos de 100 eventos
+// llega completo); si no, match.eid (lo anterior que no llegó en este mensaje ya no se espera).
 function selectEventsToDeliver(events, lastDeliveredEid, matchEid) {
     const eid = Number.isFinite(matchEid) ? matchEid : 0;
     const base = Number.isFinite(lastDeliveredEid) && eid >= lastDeliveredEid ? lastDeliveredEid : 0;
@@ -35,7 +37,8 @@ function selectEventsToDeliver(events, lastDeliveredEid, matchEid) {
         .filter((e) => isObject(e) && Number.isFinite(e.eid) && e.eid > base && e.eid <= eid)
         .sort((a, b) => a.eid - b.eid)
         .filter((e) => (seen.has(e.eid) ? false : seen.add(e.eid)));
-    return { deliver, newLast: Math.max(base, eid) };
+    const newLast = deliver.length > 0 ? deliver[deliver.length - 1].eid : Math.max(base, eid);
+    return { deliver, newLast };
 }
 
 // Mensaje para el cliente: { type:'event', kind, ...datos } SIN eid ni to

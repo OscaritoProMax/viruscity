@@ -24,7 +24,7 @@ const { createPeerNetwork } = require("./peers.js");
 const { buildJoined, buildLeft, buildIntent, buildExtras } = require("./mesh.js");
 const { createMatchState, advance, applyAction, buildClientView, frozenUserIds, isGhost, plazaSpawns } = require("./match.js");
 const { buildCity } = require("./city.js");
-const { sanitizeGameAction, selectEventsToDeliver, routeEvents, GAME_ACTIONS_PER_SEC } = require("./arbiter.js");
+const { sanitizeGameAction, selectEventsToDeliver, routeEvents, computeArbiter, shouldAdoptGameState, GAME_ACTIONS_PER_SEC } = require("./arbiter.js");
 
 // ---------- Configuración ----------
 
@@ -83,11 +83,17 @@ const hooks = {
 let authReachable = null;
 
 // ---------- Partida de Viruscity ----------
-// Toda la lógica está en match.js (reducer puro); aquí solo se cablea. Por ahora este coordinador es su
-// propio árbitro (en V3 lo será el de menor id del clúster). La ciudad (zonas y estaciones) sale de city.js.
+// Toda la lógica está en match.js (reducer puro) y arbiter.js; aquí solo se cablea. La ciudad (zonas y
+// estaciones) sale de city.js. Un solo ÁRBITRO decide la partida: el coordinador de menor id entre este y sus
+// peers ready (decisión 16). El árbitro ejecuta advance/applyAction y replica game_state a los peers; los
+// demás (seguidores) solo adoptan lo que replica el árbitro.
 const city = buildCity({ width: cfg.WORLD_WIDTH, height: cfg.WORLD_HEIGHT });
 let match = createMatchState();
 let lastDeliveredEid = 0; // último eid de evento entregado a los clientes locales (decisión 19)
+let arbiterId = COORDINATOR_ID; // se recalcula cuando un peer pasa a ready o se cierra
+let hasState = false; // true al adoptar un game_state, tras la espera de sincronización o jugando solo
+let pendingEvents = []; // eventos generados desde el último game_state (los replica el árbitro)
+const isArbiter = () => arbiterId === COORDINATOR_ID;
 
 // Mesh con los otros coordinadores (Taller 6): servidor de peers en PEER_PORT
 const net = createPeerNetwork({
@@ -108,6 +114,11 @@ const net = createPeerNetwork({
         console.log(`Sesión de ${action.userId} reemplazada por una más nueva en otro coordinador`);
         action.socket?.close(action.code, action.reason);
     },
+    // Partida (V3): estado replicado por el árbitro y acciones reenviadas por los dueños de los jugadores
+    onGameMessage: (peerId, action) => {
+        if (action.type === "game_state") onGameState(action);
+    },
+    onPeerReady: (peerId) => onPeerReady(peerId),
 });
 
 // Los eventos de los jugadores LOCALES se anuncian a los peers (cada uno solo habla de los suyos)
@@ -156,7 +167,7 @@ app.get("/status", (req, res) => {
             rev: match.rev,
             cure: match.cure,
             rosterSize: Object.keys(match.roster).length,
-            arbiterId: COORDINATOR_ID,
+            arbiterId,
         },
     });
 });
@@ -487,8 +498,10 @@ function deliverEvents(events) {
     }
 }
 
-// Adopta un estado nuevo del reducer: registra los cambios de fase (sin roles) y reparte los eventos
-function commitMatch(result) {
+// Adopta un estado nuevo (del reducer, si soy el árbitro, o replicado por el árbitro): registra los cambios de
+// fase (sin roles), coloca a todos en la plaza si empezó una partida y reparte los eventos a los locales.
+// Como árbitro, además guarda los eventos para replicarlos y, si cambió la fase, replica enseguida.
+function commitMatch(result, { fromArbiter = false } = {}) {
     const previous = match;
     match = result.state;
     if (match.phase !== previous.phase) {
@@ -497,6 +510,10 @@ function commitMatch(result) {
     // Empezó una partida nueva: todo el roster aparece en su punto de la plaza, quieto
     if (match.matchId > previous.matchId && match.phase === "playing") placeRosterAtPlaza();
     deliverEvents(result.events);
+    if (!fromArbiter) {
+        pendingEvents.push(...result.events);
+        if (match.phase !== previous.phase) scheduleReplicate();
+    }
 }
 
 function placeRosterAtPlaza() {
@@ -511,23 +528,112 @@ function placeRosterAtPlaza() {
     }
 }
 
-// Acción de un jugador local (ya validada). En V3 se reenviará al árbitro si no es este coordinador.
-function handleAction(userId, action) {
-    const result = applyAction(match, userId, action, matchCtx());
-    if (result.changed) commitMatch(result);
+const sendViewsToLocals = (now = Date.now()) => {
+    for (const [userId, p] of localPlayers(players)) sendView(userId, p, now);
+};
+
+// Respuesta local cuando no hay árbitro que procese la acción (decisión 20: 'arbiter_unavailable')
+function replyArbiterUnavailable(userId, action) {
+    const p = players.get(userId);
+    if (!p || !isLocal(p)) return;
+    const kind = action.kind === "infect" ? "infect_result" : "mission_result";
+    send(p.socket, { type: "event", kind, ok: false, ...(kind === "mission_result" && { missionId: action.missionId ?? null }), reason: "arbiter_unavailable" });
 }
 
-// Cada GAME_TICK_MS: tiempo y conexiones (cuenta regresiva, inicio, gracia, misiones vencidas, victoria)
+// ¿El árbitro (yo) puede procesar acciones y avanzar la partida?
+const arbiterReady = () => isArbiter();
+
+// Acción de un jugador local (ya validada). Si soy el árbitro la proceso; si no, no hay árbitro disponible.
+function handleAction(userId, action) {
+    if (!isArbiter()) return replyArbiterUnavailable(userId, action);
+    if (!arbiterReady()) return replyArbiterUnavailable(userId, action);
+    processAction(userId, action);
+}
+
+function processAction(userId, action) {
+    const result = applyAction(match, userId, action, matchCtx());
+    if (result.changed) commitMatch(result);
+    scheduleReplicate(); // de inmediato tras una acción (máximo una réplica cada 50 ms)
+}
+
+// Cada GAME_TICK_MS (solo el árbitro): tiempo y conexiones (cuenta regresiva, inicio, gracia, misiones
+// vencidas, victoria). Los seguidores no ejecutan advance: adoptan lo que replica el árbitro.
 const matchTicker = setInterval(() => {
+    if (!arbiterReady()) return;
+    if (net.readyPeerIds().length === 0) hasState = true; // árbitro solo: su estado ES la partida
     const result = advance(match, matchCtx());
     if (result.changed) commitMatch(result);
 }, cfg.GAME_TICK_MS);
 
 // Cada GAME_VIEW_MS: la vista 'game' a cada cliente local
-const viewTicker = setInterval(() => {
-    const now = Date.now();
-    for (const [userId, p] of localPlayers(players)) sendView(userId, p, now);
-}, cfg.GAME_VIEW_MS);
+const viewTicker = setInterval(() => sendViewsToLocals(), cfg.GAME_VIEW_MS);
+
+// ---------- Replicación del árbitro (decisión 17) ----------
+const REPLICATE_MIN_GAP_MS = 50; // tras una acción, como mucho una réplica cada 50 ms
+const OPEN_WORLD_REPLICATE_MS = 1000;
+const MAX_EVENTS_PER_STATE = 100; // validatePeerMessage acepta hasta 100 eventos por game_state
+let lastReplicateAt = 0;
+let replicateTimer = null;
+
+// game_state { origin, match, events } a todos los peers ready, con los eventos acumulados desde el último
+function replicate() {
+    clearTimeout(replicateTimer);
+    replicateTimer = null;
+    lastReplicateAt = Date.now();
+    const events = pendingEvents;
+    pendingEvents = [];
+    if (!isArbiter() || net.readyPeerIds().length === 0) return;
+    let i = 0;
+    do {
+        net.sendToPeers({ type: "game_state", origin: COORDINATOR_ID, match, events: events.slice(i, i + MAX_EVENTS_PER_STATE) });
+        i += MAX_EVENTS_PER_STATE;
+    } while (i < events.length);
+}
+
+function scheduleReplicate() {
+    if (!isArbiter() || replicateTimer) return;
+    const wait = REPLICATE_MIN_GAP_MS - (Date.now() - lastReplicateAt);
+    if (wait <= 0) replicate();
+    else replicateTimer = setTimeout(replicate, wait);
+}
+
+// Cada MATCH_REPLICATE_MS en cuenta regresiva, partida y resultados; cada 1000 ms en el mundo abierto
+const replicateTicker = setInterval(() => {
+    if (!arbiterReady()) return;
+    const every = match.phase === "open_world" ? OPEN_WORLD_REPLICATE_MS : cfg.MATCH_REPLICATE_MS;
+    if (Date.now() - lastReplicateAt >= every - 5) replicate();
+}, cfg.MATCH_REPLICATE_MS);
+
+// ---------- Seguidor: estado replicado por el árbitro (decisión 18) ----------
+function onGameState(msg) {
+    const adopt = shouldAdoptGameState({
+        selfId: COORDINATOR_ID,
+        arbiterId,
+        origin: msg.origin,
+        handover: msg.handover,
+        hasState,
+        own: { matchId: match.matchId, rev: match.rev },
+        incoming: { matchId: msg.match.matchId, rev: msg.match.rev },
+    });
+    if (!adopt) return;
+    hasState = true;
+    // La réplica periódica sin novedades no cambia nada: no hace falta reenviar las vistas
+    if (msg.match.matchId === match.matchId && msg.match.rev === match.rev && msg.events.length === 0) return;
+    commitMatch({ state: msg.match, events: msg.events }, { fromArbiter: true });
+    sendViewsToLocals();
+}
+
+// ---------- Elección del árbitro ----------
+function recomputeArbiter() {
+    const before = arbiterId;
+    arbiterId = computeArbiter(COORDINATOR_ID, net.readyPeerIds());
+    if (arbiterId !== before) console.log(`Árbitro de la partida: ${arbiterId} (antes ${before})`);
+    return before;
+}
+
+function onPeerReady() {
+    recomputeArbiter();
+}
 
 // ---------- Arranque ----------
 server.on("error", (err) => {
@@ -586,6 +692,8 @@ function shutdown(signal) {
     clearTimeout(gameLoop);
     clearInterval(matchTicker);
     clearInterval(viewTicker);
+    clearInterval(replicateTicker);
+    clearTimeout(replicateTimer);
     clearInterval(heartbeat);
     wss.close();
 

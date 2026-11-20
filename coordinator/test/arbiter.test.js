@@ -65,6 +65,22 @@ test("selectEventsToDeliver: el relevo continúa la numeración (sin duplicados 
     assert.equal(r.newLast, 3);
 });
 
+test("selectEventsToDeliver: un game_state partido en trozos (máx. 100 eventos) llega completo", () => {
+    const all = Array.from({ length: 230 }, (_, i) => ({ eid: 50 + i + 1, kind: "match_started" })); // eid 51..280
+    const chunks = [all.slice(0, 100), all.slice(100, 200), all.slice(200)];
+    let last = 50;
+    const got = [];
+    for (const chunk of chunks) {
+        const r = selectEventsToDeliver(chunk, last, 280); // el mismo match (eid 280) en cada trozo
+        got.push(...r.deliver.map((e) => e.eid));
+        last = r.newLast;
+    }
+    assert.equal(got.length, 230);
+    assert.deepEqual([got[0], got[229], last], [51, 280, 280]);
+    // Repetir un trozo no duplica
+    assert.deepEqual(selectEventsToDeliver(chunks[1], last, 280).deliver, []);
+});
+
 // ---------- validateMatchState ----------
 
 const CFG = { ...readMatchConfig({}), WORLD_WIDTH: 1200, WORLD_HEIGHT: 800 };

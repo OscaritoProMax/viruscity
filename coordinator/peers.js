@@ -50,6 +50,8 @@ function createPeerNetwork({
     onMembershipChanged = () => {},
     onCloseLocal = () => {},
     onGameMessage = () => {}, // (peerId, { type: 'game_action' | 'game_state', … })
+    onPeerReady = () => {}, // (peerId) handshake completo (después del resync)
+    onPeerClosed = () => {}, // (peerId) se cerró la conexión vigente con ese peer
     log = console,
 }) {
     // peerId → { ws, direction: "in" | "out", ready }
@@ -98,9 +100,11 @@ function createPeerNetwork({
             const removed = dropPeerPlayers(players, peerId);
             log.log(`Peer ${peerId} desconectado · se quitaron ${removed.length} jugadores suyos`);
             if (removed.length > 0) onMembershipChanged();
+            onPeerClosed(peerId);
         });
         for (const m of buildResync(players, selfId)) sendRaw(ws, JSON.stringify(m));
         log.log(`Peer ${peerId} conectado (${direction === "in" ? "entrante" : "saliente"})`);
+        onPeerReady(peerId);
     }
 
     // Único manejador de mensajes de una conexión con handshake completo (entrante o saliente).
@@ -289,8 +293,19 @@ function createPeerNetwork({
     }
 
     const readyPeerIds = () => [...peers].filter(([, e]) => e.ready && isOpen(e.ws)).map(([id]) => id);
+    const isPeerReady = (peerId) => {
+        const e = peers.get(peerId);
+        return Boolean(e && e.ready && isOpen(e.ws));
+    };
 
-    return { start, stop, readyPeerIds, sendToPeers };
+    // Envía a UN peer listo (p. ej. una acción al árbitro o un handover); false si no hay conexión
+    function sendToPeer(peerId, obj) {
+        if (!isPeerReady(peerId)) return false;
+        sendRaw(peers.get(peerId).ws, JSON.stringify(obj));
+        return true;
+    }
+
+    return { start, stop, readyPeerIds, isPeerReady, sendToPeers, sendToPeer };
 }
 
 module.exports = { createPeerNetwork };
