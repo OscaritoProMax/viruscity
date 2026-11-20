@@ -8,6 +8,7 @@
 // nearestAvailableStation(pos, missions, range)    → misión 'available' más cercana dentro del rango (o null)
 // nearestPlayer(pos, players, range, selfId)       → jugador más cercano dentro del rango, sin fantasmas ni el propio
 // infectStatus(game, clock, localNow)              → { ready, secondsLeft } o null si no eres un infectado en partida
+//                                                    (sin infectReadyAt todavía: { ready:false, secondsLeft:null })
 // eventText(event) / eventTone(event)              → frase en español y tono del aviso
 // contextHint({...})                               → pista contextual de abajo al centro (o null)
 // roleScreen(game, role) / endSummary(game, meId)  → contenido de las pantallas de rol y de fin
@@ -243,7 +244,8 @@ export function nearestPlayer(pos, players, range, selfId = null) {
 export function infectStatus(game, clock, localNow) {
     if (game?.phase !== "playing" || game.you?.role !== "infected") return null;
     const readyAt = game.you.infectReadyAt;
-    if (!isNum(readyAt)) return { ready: true, secondsLeft: null };
+    // Recién infectado: el bloqueo lo decide el servidor y llega en el próximo 'game'. Mientras, no está listo.
+    if (!isNum(readyAt)) return { ready: false, secondsLeft: null };
     const left = clock.remaining(readyAt, localNow);
     return left > 0 ? { ready: false, secondsLeft: Math.ceil(left / 1000) } : { ready: true, secondsLeft: null };
 }
@@ -342,7 +344,7 @@ export function contextHint({ game, clock, localNow, pos, players, selfId, city,
     }
     if (role === "infected") {
         const st = infectStatus(game, clock, localNow);
-        if (st && !st.ready) return `Infección disponible en ${formatMMSS(st.secondsLeft * 1000)}`;
+        if (st && !st.ready) return st.secondsLeft === null ? null : `Infección disponible en ${formatMMSS(st.secondsLeft * 1000)}`;
         return nearestPlayer(pos, players, r.infectRange, selfId) ? "F: infectar" : null;
     }
     return null;

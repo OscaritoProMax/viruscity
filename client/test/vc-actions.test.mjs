@@ -1,7 +1,7 @@
 // Pruebas de las decisiones puras de las acciones de la partida (js/vc/actions.js)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decideMissionKey, completeDelayMs, missionTimeLeftMs, COMPLETE_MARGIN_MS } from "../public/js/vc/actions.js";
+import { decideMissionKey, canInfect, completeDelayMs, missionTimeLeftMs, COMPLETE_MARGIN_MS } from "../public/js/vc/actions.js";
 import { createClock } from "../public/js/vc/clock.js";
 import { DEFAULT_RULES } from "../public/js/vc/view.js";
 
@@ -57,4 +57,13 @@ test("missionTimeLeftMs: hasta missionStartedAt + missionMaxMs, nunca negativo",
     assert.equal(missionTimeLeftMs({ missionStartedAt: 10_000, missionMaxMs: 45_000, clock, localNow: 50_000 }), 5_000);
     assert.equal(missionTimeLeftMs({ missionStartedAt: 10_000, missionMaxMs: 45_000, clock, localNow: 99_000 }), 0);
     assert.equal(missionTimeLeftMs({ missionStartedAt: null, missionMaxMs: 45_000, clock, localNow: 12_000, openedAtLocal: 10_000 }), 43_000);
+});
+
+test("canInfect: solo un infectado en partida y sin pantallas ni modales; sin enfriamiento local", () => {
+    assert.equal(canInfect({ game: game("infected") }), true);
+    assert.equal(canInfect({ game: game("infected", { you: { role: "infected", infectReadyAt: 9e15 } }) }), true, "aunque falte enfriamiento: decide el servidor");
+    assert.equal(canInfect({ game: game("infected"), blocked: true }), false, "pantalla de rol o minijuego abiertos");
+    for (const role of ["healthy", "spectator", null]) assert.equal(canInfect({ game: game(role) }), false, String(role));
+    for (const phase of ["open_world", "countdown", "ended"]) assert.equal(canInfect({ game: game("infected", { phase }) }), false, phase);
+    assert.equal(canInfect({ game: null }), false);
 });

@@ -2,6 +2,7 @@
 // todo; aquí solo se decide qué mensaje mandar y cuánto esperar, a partir del último 'game'.
 //
 // decideMissionKey({ game, pos, rules, blocked }) → { action:'start', missionId } | { action:'toast', reason } | { action:'none' }
+// canInfect({ game, blocked })                    → ¿la tecla F envía 'infect'? (el enfriamiento lo decide el servidor)
 // completeDelayMs({ missionStartedAt, missionMinMs, clock, localNow, openedAtLocal }) → ms a esperar antes de mission_complete
 // missionTimeLeftMs({ missionStartedAt, missionMaxMs, clock, localNow, openedAtLocal }) → ms que le quedan a la misión
 
@@ -22,6 +23,12 @@ export function decideMissionKey({ game, pos, rules, blocked = false }) {
     // Un infectado junto a una estación: se le recuerda que no puede hacer misiones (sin molestar al servidor)
     if (role === "infected" && station) return { action: "toast", reason: "not_healthy" };
     return { action: "none" };
+}
+
+// Tecla F: solo un infectado en plena partida y sin pantallas ni modales encima. No hay enfriamiento local:
+// si aún no puede, el servidor contesta infect_result { ok:false, reason:'cooldown' } y el HUD lo muestra.
+export function canInfect({ game, blocked = false }) {
+    return !blocked && game?.phase === "playing" && game.you?.role === "infected";
 }
 
 // Hasta missionStartedAt + missionMinMs + margen (hora del servidor). Sin missionStartedAt todavía, se cuenta

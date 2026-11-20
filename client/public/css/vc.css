@@ -59,6 +59,25 @@
 
 .vc-phase__label { color: var(--text, #e6e9f5); }
 
+/* Etiqueta de tu rol (solo el tuyo); en modo infectado el chip se vuelve verde */
+.vc-phase__role {
+    padding: var(--space-1, 4px) var(--space-2, 8px);
+    border-radius: var(--radius-m, 12px);
+    background: var(--bg, #0b1020);
+    color: var(--accent, #4dd2ff);
+    letter-spacing: .08em;
+    font-variant-numeric: tabular-nums;
+}
+
+.vc-phase[data-role="infected"] {
+    border-color: var(--infected, #7cff6b);
+    box-shadow: 0 0 16px color-mix(in srgb, var(--infected, #7cff6b) 35%, transparent);
+}
+
+.vc-phase[data-role="infected"] .vc-phase__role { color: var(--infected, #7cff6b); }
+
+.vc-phase[data-role="spectator"] .vc-phase__role { color: var(--muted, #8f9bc4); }
+
 .vc-phase__timer {
     min-width: 5ch;
     padding: var(--space-1, 4px) var(--space-2, 8px);

@@ -224,6 +224,7 @@ test("infectStatus: listo, falta N s, no infectado → null", () => {
     assert.deepEqual(infectStatus(infected(990_000), clock, 1_000_000), { ready: true, secondsLeft: null });
     assert.deepEqual(infectStatus(infected(1_060_000), clock, 1_000_000), { ready: false, secondsLeft: 60 });
     assert.deepEqual(infectStatus(infected(1_000_001), clock, 1_000_000), { ready: false, secondsLeft: 1 });
+    assert.deepEqual(infectStatus(infected(null), clock, 1_000_000), { ready: false, secondsLeft: null }, "recién infectado: pendiente hasta el próximo game");
     assert.equal(infectStatus(game("playing"), clock, 1_000_000), null, "sano");
     assert.equal(infectStatus(game("playing", { you: { role: "spectator" } }), clock, 1_000_000), null);
     assert.equal(infectStatus(game("ended", { you: { role: "infected" } }), clock, 1_000_000), null, "fuera de playing");
@@ -252,6 +253,7 @@ test("contextHint: mundo abierto, espectador, sano junto a una estación, infect
     const near = [{ userId: "b", x: 50, y: 0 }];
     assert.equal(contextHint({ ...base, game: inf(999_000), pos: { x: 0, y: 0 }, players: near }), "F: infectar");
     assert.equal(contextHint({ ...base, game: inf(999_000), pos: { x: 0, y: 0 }, players: [{ userId: "g", x: 5, y: 0, ghost: true }] }), null);
+    assert.equal(contextHint({ ...base, game: inf(null), pos: { x: 0, y: 0 }, players: near }), null, "recién infectado: ni F ni cuenta hasta saber el bloqueo");
     assert.equal(contextHint({ ...base, game: game("ended") }), null);
     assert.equal(contextHint({ ...base, game: null }), null);
 });

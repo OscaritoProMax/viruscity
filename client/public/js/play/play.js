@@ -26,7 +26,7 @@ import { parseCoordinatorResponse, buildWsUrl, isMixedContent, nextDelay, classi
 import { parseServerMessage, parseCity, parseRules, eventText, eventTone, reasonText } from "../vc/view.js";
 import { createClock } from "../vc/clock.js";
 import { createHud } from "../vc/hud.js";
-import { decideMissionKey } from "../vc/actions.js";
+import { decideMissionKey, canInfect } from "../vc/actions.js";
 import { createMissionController } from "../vc/mission.js";
 
 const $ = (id) => document.getElementById(id);
@@ -379,6 +379,7 @@ function startGame(token) {
         if (missionUi.isOpen()) return;
         if (!event.repeat && !inTextField(event.target)) {
             if (event.code === "KeyE") onKeyE(); // misión cercana, o hablar con un vecino o mirar un cartel
+            if (event.code === "KeyF") onKeyF(); // infectar (solo un infectado en partida)
             if (event.code === "KeyQ" && !dialogue.isOpen()) usePower();
             if (event.code === "Escape" && dialogue.isOpen()) endDialogue();
         }
@@ -545,6 +546,11 @@ function startGame(token) {
         interact();
     }
 
+    // Tecla F: el servidor decide si hay alguien en rango y si el enfriamiento terminó (infect_result)
+    function onKeyF() {
+        if (canInfect({ game: lastGame, blocked: hud.roleOpen() || missionUi.isOpen() })) sendJson({ type: "game_action", action: "infect" });
+    }
+
     // Eventos de la partida: aviso de 3 s y, según el kind, pantalla de rol o refresco inmediato del HUD
     function onGameEvent(event) {
         // El minijuego reacciona primero (abrir, cerrar o reintentar); un reintento por too_fast no se avisa
@@ -557,6 +563,11 @@ function startGame(token) {
             return;
         }
         hud.toast(eventText(event), eventTone(event));
+        // Recién infectado: la viñeta verde y el chip cambian YA (el próximo 'game' trae el bloqueo del servidor)
+        if (event.kind === "you_infected" && lastGame?.phase === "playing") {
+            setLastGame({ ...lastGame, you: { ...lastGame.you, role: "infected", infectReadyAt: null, missionId: null, missionStartedAt: null } });
+            refreshGameHud();
+        }
         if (event.kind === "match_ended" || event.kind === "match_cancelled") refreshGameHud();
     }
 

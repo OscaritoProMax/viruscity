@@ -15,11 +15,12 @@
 //   pantalla de fin   mientras la fase es ended: ganador, motivo, ganaste/perdiste y roles revelados
 
 import { formatMMSS, secondsLeft } from "./clock.js";
-import { phaseLabel, contextHint, curePercent, missionStatusLabel, zoneName, roleScreen, endSummary } from "./view.js";
+import { phaseLabel, contextHint, curePercent, missionStatusLabel, zoneName, roleScreen, endSummary, infectStatus } from "./view.js";
 
 const TOAST_MS = 3000;
 const MAX_TOASTS = 4;
 const ROLE_MS = 4000;
+const ROLE_TAGS = { healthy: "SANO", infected: "INFECTADO", spectator: "ESPECTADOR" };
 
 const $ = (id) => document.getElementById(id);
 
@@ -38,6 +39,7 @@ export function createHud() {
     const el = {
         phase: $("vcPhase"),
         phaseLabel: $("vcPhaseLabel"),
+        roleTag: $("vcRoleTag"),
         timer: $("vcTimer"),
         cure: $("vcCure"),
         cureBar: $("vcCureBar"),
@@ -181,6 +183,17 @@ export function createHud() {
         // Fase y temporizador
         el.phase.dataset.phase = phase;
         setText(el.phaseLabel, phaseLabel(game));
+
+        // Tu rol (solo el tuyo) junto a la fase; el infectado ve además si F está lista
+        const role = game.you.role;
+        el.phase.dataset.role = role ?? "none";
+        setHidden(el.roleTag, role === null);
+        if (role !== null) {
+            let tag = ROLE_TAGS[role] ?? "";
+            const st = role === "infected" ? infectStatus(game, clock, localNow) : null;
+            if (st) tag += st.ready ? " · F lista" : st.secondsLeft === null ? "" : ` · ${formatMMSS(st.secondsLeft * 1000)}`;
+            setText(el.roleTag, tag);
+        }
         const target = phase === "countdown" ? game.countdownEndsAt : phase === "playing" ? game.endsAt : null;
         setHidden(el.timer, target === null);
         if (target !== null) setText(el.timer, formatMMSS(clock.remaining(target, localNow)));
