@@ -98,7 +98,7 @@
     display: flex;
     align-items: center;
     gap: var(--space-2, 8px);
-    width: clamp(200px, calc(100% - 620px), 440px);
+    width: clamp(200px, calc(100% - 820px), 440px); /* deja sitio al chip de fase con tu rol y a la columna derecha */
     padding: var(--space-2, 8px) var(--space-3, 12px);
     border-color: color-mix(in srgb, var(--cure, #ffd166) 55%, var(--border, #2a3560));
     border-radius: var(--radius-l, 20px);
@@ -485,8 +485,9 @@
     from { opacity: 0; }
 }
 
-/* ---------- Menos de 800px: la barra de cura ocupa todo el ancho y la fase baja una fila ---------- */
-@media (max-width: 799.98px) {
+/* ---------- Menos de 1180px (incluye < 800px): la barra de cura ocupa todo el ancho y la fase con tu rol baja
+   una fila (en el centro no caben juntos el chip, la barra y la columna derecha) ---------- */
+@media (max-width: 1179.98px) {
     .vc-cure {
         left: var(--space-3, 12px);
         right: var(--space-3, 12px);
@@ -522,6 +523,18 @@
         top: var(--vc-top);
         left: var(--space-2, 8px);
     }
+
+    /* Chip compacto en una sola línea: fase, tiempo y tu rol caben en 360 px */
+    .vc-phase {
+        max-width: calc(100% - 16px);
+        gap: var(--space-2, 8px);
+        font-size: .6875rem;
+        letter-spacing: .04em;
+        white-space: nowrap;
+    }
+
+    .vc-phase__timer,
+    .vc-phase__role { padding: 2px var(--space-1, 4px); }
 
     .vc-cure { top: calc(var(--vc-top) + var(--vc-row)); }
 
