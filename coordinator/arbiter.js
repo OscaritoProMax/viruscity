@@ -4,8 +4,8 @@
 // sanitizeGameAction(msg)                               → { kind, missionId? } o null si el mensaje no vale
 // selectEventsToDeliver(events, lastDeliveredEid, eid)  → { deliver, newLast }  (sin duplicados, con reinicio)
 // routeEvents(events, localUserIds)                     → [{ userId|null, msg }]  (null = a todos los locales)
-//
-// En V3 aquí también vivirá la elección del árbitro.
+// computeArbiter(selfId, readyPeerIds)                  → id del árbitro (decisión 16)
+// shouldAdoptGameState({...})                           → ¿adopto un game_state recibido? (decisión 18)
 "use strict";
 
 const GAME_ACTIONS = new Set(["infect", "mission_start", "mission_complete", "mission_cancel"]);
@@ -59,4 +59,34 @@ function routeEvents(events, localUserIds) {
     return out;
 }
 
-module.exports = { GAME_ACTIONS, GAME_ACTIONS_PER_SEC, MISSION_ID_REGEX, sanitizeGameAction, selectEventsToDeliver, routeEvents };
+// ---------- Árbitro (decisiones 16 y 18) ----------
+
+// El árbitro es el coordinador de menor id (comparación de strings) entre este y sus peers ready
+function computeArbiter(selfId, readyPeerIds = []) {
+    let best = selfId;
+    for (const id of readyPeerIds ?? []) if (typeof id === "string" && id < best) best = id;
+    return best;
+}
+
+// (matchId, rev) de a es mayor que el de b
+const isNewer = (a, b) => Boolean(a) && (!b || a.matchId > b.matchId || (a.matchId === b.matchId && a.rev > b.rev));
+
+// Decisión 18. (a) Lo que manda el árbitro que yo calculo se adopta siempre. (b) Un handover se adopta si yo
+// soy el árbitro calculado y aún no tengo estado o el recibido es más nuevo; sigo siendo el árbitro.
+// (c) Todo lo demás se ignora (incluido lo que diga ser de mí mismo).
+function shouldAdoptGameState({ selfId, arbiterId, origin, handover = false, hasState, own, incoming }) {
+    if (typeof origin !== "string" || origin === selfId) return false;
+    if (origin === arbiterId) return true;
+    return handover === true && arbiterId === selfId && (!hasState || isNewer(incoming, own));
+}
+
+module.exports = {
+    GAME_ACTIONS,
+    GAME_ACTIONS_PER_SEC,
+    MISSION_ID_REGEX,
+    sanitizeGameAction,
+    selectEventsToDeliver,
+    routeEvents,
+    computeArbiter,
+    shouldAdoptGameState,
+};

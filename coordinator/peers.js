@@ -49,6 +49,7 @@ function createPeerNetwork({
     players,
     onMembershipChanged = () => {},
     onCloseLocal = () => {},
+    onGameMessage = () => {}, // (peerId, { type: 'game_action' | 'game_state', … })
     log = console,
 }) {
     // peerId → { ws, direction: "in" | "out", ready }
@@ -123,7 +124,10 @@ function createPeerNetwork({
             const v = validatePeerMessage(msg, cfg);
             if (!v.ok) return;
             const result = applyPeerMessage(players, selfId, peerId, v.msg, cfg);
-            for (const action of result.actions) onCloseLocal(action);
+            for (const action of result.actions) {
+                if (action.type === "close-local") onCloseLocal(action);
+                else onGameMessage(peerId, action); // game_action / game_state de la partida (Viruscity)
+            }
             if (result.membershipChanged) onMembershipChanged();
         });
     }

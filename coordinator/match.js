@@ -18,7 +18,7 @@
 "use strict";
 
 const { buildCity, zoneNear } = require("./city.js");
-const { pickMissions } = require("./missions.js");
+const { pickMissions, KINDS } = require("./missions.js");
 
 const ACTION_KINDS = new Set(["infect", "mission_start", "mission_complete", "mission_cancel"]);
 const PLAZA_RADIUS = 80; // radio del círculo de aparición al empezar la partida (decisión 3)
@@ -492,8 +492,105 @@ function buildClientView(state, userId, ctx) {
     return view;
 }
 
+// ---------- Validación del estado replicado (V3) ----------
+// validateMatchState(obj) → { ok:true, match } con una COPIA saneada (solo campos conocidos, objetos nuevos)
+// | { ok:false, reason }. Lo usa el mesh antes de adoptar un game_state de otro coordinador.
+
+const PHASES = new Set(["open_world", "countdown", "playing", "ended"]);
+const ROLES = new Set(["healthy", "infected"]);
+const MISSION_STATUSES = new Set(["available", "in_progress", "done"]);
+const WINNERS = new Set(["players", "infected"]);
+const REASONS = new Set(["cure", "all_infected", "time", "no_infected"]);
+const MAX_ROSTER = 200;
+const USER_ID_MAX = 64;
+const USERNAME_REGEX = /^[a-zA-Z0-9_]{3,32}$/;
+const SLUG_REGEX = /^[a-z0-9-]{1,40}$/; // ids de misión, estación y zona
+const TITLE_MAX = 120;
+
+const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+const isCount = (v) => Number.isSafeInteger(v) && v >= 0;
+const isTime = (v) => typeof v === "number" && Number.isFinite(v);
+const isOptTime = (v) => v === null || isTime(v);
+const isUserId = (v) => typeof v === "string" && v.length >= 1 && v.length <= USER_ID_MAX;
+const isUsername = (v) => typeof v === "string" && USERNAME_REGEX.test(v);
+
+function validateMatchState(obj) {
+    const fail = (reason) => ({ ok: false, reason });
+    if (!isPlainObject(obj)) return fail("match debe ser un objeto");
+    if (!PHASES.has(obj.phase)) return fail("phase inválida");
+    for (const key of ["matchId", "rev", "eid"]) if (!isCount(obj[key])) return fail(`${key} debe ser un entero >= 0`);
+    for (const key of ["countdownEndsAt", "startedAt", "endsAt", "resultsEndsAt"]) if (!isOptTime(obj[key])) return fail(`${key} inválido`);
+    if (obj.phase === "countdown" && !isTime(obj.countdownEndsAt)) return fail("countdown sin countdownEndsAt");
+    if ((obj.phase === "playing" || obj.phase === "ended") && !(isTime(obj.startedAt) && isTime(obj.endsAt))) return fail("partida sin startedAt/endsAt");
+    if (obj.phase === "ended" && !isTime(obj.resultsEndsAt)) return fail("ended sin resultsEndsAt");
+
+    // Roster: objeto userId → miembro, como mucho MAX_ROSTER
+    if (!isPlainObject(obj.roster)) return fail("roster debe ser un objeto");
+    const ids = Object.keys(obj.roster);
+    if (ids.length > MAX_ROSTER) return fail(`roster de más de ${MAX_ROSTER} jugadores`);
+    const roster = {};
+    for (const userId of ids) {
+        const m = obj.roster[userId];
+        if (!isUserId(userId) || !isPlainObject(m)) return fail("miembro del roster inválido");
+        if (!isUsername(m.username) || !ROLES.has(m.role) || !isOptTime(m.infectReadyAt) || typeof m.connected !== "boolean" || !isOptTime(m.disconnectedAt)) {
+            return fail("miembro del roster inválido");
+        }
+        setMember(roster, userId, { username: m.username, role: m.role, infectReadyAt: m.infectReadyAt, connected: m.connected, disconnectedAt: m.disconnectedAt });
+    }
+
+    // Misiones: como mucho 12, ids únicos, posición finita y estado coherente con quién la hace
+    if (!Array.isArray(obj.missions) || obj.missions.length > MAX_MISSIONS) return fail(`missions debe ser una lista de hasta ${MAX_MISSIONS}`);
+    const seen = new Set();
+    const missions = [];
+    for (const m of obj.missions) {
+        if (!isPlainObject(m) || !SLUG_REGEX.test(m.id ?? "") || seen.has(m.id)) return fail("misión inválida o repetida");
+        seen.add(m.id);
+        if (!SLUG_REGEX.test(m.zoneId ?? "") || !SLUG_REGEX.test(m.stationId ?? "") || !isTime(m.x) || !isTime(m.y)) return fail("misión con zona, estación o posición inválida");
+        if (typeof m.title !== "string" || m.title.length > TITLE_MAX || !KINDS.includes(m.kind) || !MISSION_STATUSES.has(m.status)) return fail("misión con título, tipo o estado inválido");
+        const busy = m.status === "in_progress";
+        if (busy ? !(isUserId(m.by) && isTime(m.startedAt)) : !(m.by === null && m.startedAt === null)) return fail("misión con by/startedAt incoherente");
+        missions.push({ id: m.id, zoneId: m.zoneId, stationId: m.stationId, x: m.x, y: m.y, title: m.title, kind: m.kind, status: m.status, by: m.by, startedAt: m.startedAt });
+    }
+
+    if (!isTime(obj.cure) || obj.cure < 0 || obj.cure > CURE_FULL) return fail("cure debe estar entre 0 y 100");
+
+    // Resultados: solo en 'ended' (y siempre en 'ended')
+    let results = null;
+    if (obj.results !== null) {
+        const r = obj.results;
+        if (!isPlainObject(r) || !WINNERS.has(r.winner) || !REASONS.has(r.reason) || !isTime(r.endedAt)) return fail("results inválido");
+        if (!Array.isArray(r.players) || r.players.length > MAX_ROSTER) return fail("results.players inválido");
+        const players = [];
+        for (const p of r.players) {
+            if (!isPlainObject(p) || !isUserId(p.userId) || !isUsername(p.username) || !ROLES.has(p.role)) return fail("results.players inválido");
+            players.push({ userId: p.userId, username: p.username, role: p.role });
+        }
+        results = { winner: r.winner, reason: r.reason, players, endedAt: r.endedAt };
+    }
+    if ((obj.phase === "ended") !== (results !== null)) return fail("results solo (y siempre) en ended");
+
+    return {
+        ok: true,
+        match: {
+            phase: obj.phase,
+            matchId: obj.matchId,
+            rev: obj.rev,
+            eid: obj.eid,
+            countdownEndsAt: obj.countdownEndsAt,
+            startedAt: obj.startedAt,
+            endsAt: obj.endsAt,
+            resultsEndsAt: obj.resultsEndsAt,
+            roster,
+            missions,
+            cure: obj.cure,
+            results,
+        },
+    };
+}
+
 module.exports = {
     PLAZA_RADIUS,
+    validateMatchState,
     createMatchState,
     advance,
     applyAction,

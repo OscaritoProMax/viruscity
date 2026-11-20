@@ -14,15 +14,27 @@
 //
 // Regla de oro: cada jugador tiene un DUEÑO (ownerId, el coordinador donde está su cliente). Solo el
 // dueño puede mandar intent, extras, posiciones y salida de ese jugador; lo demás se ignora.
+//
+// Viruscity (V3): game_action (el dueño reenvía al árbitro la acción de su jugador; misma regla de propiedad)
+// y game_state (el árbitro replica la partida, validada con validateMatchState). applyPeerMessage no los
+// aplica: los devuelve como acciones ({ type: 'game_action' | 'game_state', … }) para que index.js decida.
 
 const { sanitizeIntent, sanitizeExtras, isLocal } = require("./game.js");
+const { sanitizeGameAction } = require("./arbiter.js");
+const { validateMatchState } = require("./match.js");
 
 const ID_REGEX = /^[A-Za-z0-9_-]{1,32}$/;
 const USERNAME_REGEX = /^[a-zA-Z0-9_]{3,32}$/;
 const PROVIDERS = new Set(["local", "google"]);
 const USER_ID_MAX = 64;
 const POSITIONS_MAX = 1000;
-const TYPES = new Set(["hello", "player_joined", "player_left", "intent_replicate", "extras_replicate", "positions_sync"]);
+const TYPES = new Set(["hello", "player_joined", "player_left", "intent_replicate", "extras_replicate", "positions_sync", "game_action", "game_state"]);
+
+// Partida de Viruscity (V3): acciones reenviadas al árbitro y estado replicado por el árbitro
+const MAX_GAME_EVENTS = 100;
+// Campos que puede traer un evento de la partida y su tipo (lo demás se descarta)
+const EVENT_FIELDS = { to: "string", role: "string", ok: "boolean", reason: "string", missionId: "string", zone: "string", cure: "number", winner: "string" };
+const EVENT_TEXT_MAX = 120;
 
 // ---------- Conexiones ----------
 
@@ -83,6 +95,20 @@ function validatePeerMessage(msg, cfg) {
         return { ok: true, msg: { type: "positions_sync", origin, players: list } };
     }
 
+    if (msg.type === "game_state") {
+        if (msg.handover !== undefined && typeof msg.handover !== "boolean") return fail("handover debe ser booleano");
+        const v = validateMatchState(msg.match);
+        if (!v.ok) return fail(`match inválido: ${v.reason}`);
+        if (!Array.isArray(msg.events) || msg.events.length > MAX_GAME_EVENTS) return fail(`events debe ser una lista de hasta ${MAX_GAME_EVENTS}`);
+        const events = [];
+        for (const e of msg.events) {
+            const clean = sanitizeGameEvent(e);
+            if (!clean) return fail("evento de partida inválido");
+            events.push(clean);
+        }
+        return { ok: true, msg: { type: "game_state", origin, handover: msg.handover === true, match: v.match, events } };
+    }
+
     const userId = normUserId(msg.userId);
     if (!userId) return fail("userId inválido");
 
@@ -110,9 +136,31 @@ function validatePeerMessage(msg, cfg) {
             if (!extras) return fail("extras inválidos");
             return { ok: true, msg: { type: "extras_replicate", origin, userId, extras } };
         }
+        case "game_action": {
+            if (!isObject(msg.action)) return fail("action inválida");
+            const action = sanitizeGameAction({ type: "game_action", action: msg.action.kind, missionId: msg.action.missionId });
+            if (!action) return fail("action inválida");
+            return { ok: true, msg: { type: "game_action", origin, userId, action } };
+        }
         default:
             return fail("tipo desconocido");
     }
+}
+
+// Evento de la partida: kind y eid obligatorios; solo los campos conocidos con su tipo (to, role, ok…)
+function sanitizeGameEvent(e) {
+    if (!isObject(e) || typeof e.kind !== "string" || e.kind.length < 1 || e.kind.length > 40) return null;
+    if (!Number.isSafeInteger(e.eid) || e.eid < 1) return null;
+    const clean = { eid: e.eid, kind: e.kind };
+    for (const [key, type] of Object.entries(EVENT_FIELDS)) {
+        const value = e[key];
+        if (value === undefined) continue;
+        if (typeof value !== type) return null;
+        if (type === "string" && (value.length > EVENT_TEXT_MAX || (key === "to" && !normUserId(value)))) return null;
+        if (type === "number" && !Number.isFinite(value)) return null;
+        clean[key] = value;
+    }
+    return clean;
 }
 
 // ---------- Conflicto de sesión (decisión 16) ----------
@@ -204,6 +252,15 @@ function applyPeerMessage(players, selfId, peerId, msg, cfg = null) {
             }
             return NOTHING();
         }
+        case "game_action": {
+            // Decisión 13: solo el dueño del jugador puede actuar por él; lo decide el árbitro (index.js)
+            const p = players.get(msg.userId);
+            if (!owned(p)) return NOTHING();
+            return { membershipChanged: false, actions: [{ type: "game_action", userId: msg.userId, action: msg.action }] };
+        }
+        case "game_state":
+            // Si se adopta o no lo decide index.js con shouldAdoptGameState (decisión 18)
+            return { membershipChanged: false, actions: [{ type: "game_state", origin: msg.origin, handover: msg.handover, match: msg.match, events: msg.events }] };
         default:
             return NOTHING(); // hello se maneja en la conexión
     }
