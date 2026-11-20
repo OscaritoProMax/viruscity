@@ -11,6 +11,9 @@
 // Taller 7: las escrituras (registro y primer login con Google) pasan por replication.write, que las serializa
 // y las guarda como entradas del oplog; las lecturas (login y Google de un usuario existente) pasan por la
 // puerta replication.canServeRead(). Las rutas del directorio de coordinadores no pasan por ninguna puerta.
+// Todas las respuestas llevan X-Auth-Id y X-Auth-Role (leader | replica), expuestos por CORS (decisión 13).
+// GET /status y GET /peers describen el clúster de auth (decisión 14); el /peers de coordinadores del
+// Taller 6 pasa a GET /coordinator-peers con la misma forma.
 //
 // Reglas (CLAUDE.md, Taller 5): una sola tabla users; usernames únicos sin distinguir mayúsculas;
 // errores siempre como JSON { error }; nunca se registran contraseñas, hashes, tokens, idTokens ni emails.
@@ -108,7 +111,15 @@ function createApp({ db, jwtSecret, jwtExpiresIn = "1h", bcryptRounds = 10, veri
         next();
     });
 
-    app.use(cors());
+    // Quién respondió (decisión 13): el cliente y los coordinadores lo muestran y lo usan para el failover
+    app.use((req, res, next) => {
+        const me = repl.whoami();
+        res.set("X-Auth-Id", me.authId);
+        res.set("X-Auth-Role", me.role === "leader" ? "leader" : "replica");
+        next();
+    });
+
+    app.use(cors({ exposedHeaders: ["X-Auth-Id", "X-Auth-Role"] }));
     app.use(express.json({ limit: "4kb" }));
 
     app.get("/health", (req, res) => {
@@ -277,14 +288,25 @@ function createApp({ db, jwtSecret, jwtExpiresIn = "1h", bcryptRounds = 10, veri
         res.status(200).json({ coordinatorId: chosen.coordinatorId, publicUrl: chosen.publicUrl });
     });
 
-    // Coordinadores vivos para armar el mesh (en orden de registro)
-    app.get("/peers", noStore, (req, res) => {
+    // Coordinadores vivos para armar su mesh (en orden de registro). En el Taller 6 era GET /peers.
+    app.get("/coordinator-peers", noStore, (req, res) => {
         res.status(200).json({ peers: coordinators.peers() });
     });
 
     // Vista de depuración del directorio (cluster.html)
     app.get("/directory", noStore, (req, res) => {
         res.status(200).json({ coordinators: coordinators.list(), ttlMs: coordinators.ttlMs });
+    });
+
+    // ---------- Clúster de auth (Taller 7, decisión 14) ----------
+    // Estado de este nodo: rol, líder, posición del oplog, usuarios y checksum (para comparar réplicas)
+    app.get("/status", noStore, (req, res) => {
+        res.status(200).json(repl.status());
+    });
+
+    // Los OTROS nodos de auth (en nodo único, ninguno)
+    app.get("/peers", noStore, (req, res) => {
+        res.status(200).json({ peers: repl.peers() });
     });
 
     // ---------- Errores ----------
