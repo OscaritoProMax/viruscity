@@ -336,8 +336,10 @@ function startGame(token) {
     const keys = new Set();
     let lastIntent = { x: 0, y: 0 };
 
-    // Envía la intención solo si cambió respecto a la última enviada
+    // Envía la intención solo si cambió respecto a la última enviada.
+    // Con la pantalla de rol abierta no se envían intenciones (al abrirla ya se mandó {0, 0}).
     function pushIntent() {
+        if (hud.roleOpen()) return;
         const intent = computeIntent(keys);
         if (intent.x === lastIntent.x && intent.y === lastIntent.y) return;
         if (!isOpen()) return;
@@ -350,6 +352,12 @@ function startGame(token) {
 
     window.addEventListener("keydown", (event) => {
         audio.unlock(); // el navegador solo deja sonar audio después de una interacción
+        // Cualquier tecla cierra la pantalla de rol (y esa tecla no hace nada más)
+        if (hud.roleOpen()) {
+            if (MOVEMENT_CODES.has(event.code) || event.code === "Space") event.preventDefault();
+            hud.closeRole();
+            return;
+        }
         if (!event.repeat && !inTextField(event.target)) {
             if (event.code === "KeyE") interact(); // hablar con un vecino o mirar un cartel
             if (event.code === "KeyQ" && !dialogue.isOpen()) usePower();
@@ -502,9 +510,16 @@ function startGame(token) {
         hud.update({ game: lastGame, clock, localNow: Date.now(), pos, players, selfId: me.userId, city: matchCity, rules });
     }
 
-    // Eventos de la partida: aviso de 3 s y, según el kind, refresco inmediato del HUD
+    // Eventos de la partida: aviso de 3 s y, según el kind, pantalla de rol o refresco inmediato del HUD
     function onGameEvent(event) {
-        if (event.kind !== "match_started") hud.toast(eventText(event), eventTone(event));
+        if (event.kind === "match_started") {
+            // El jugador se detiene y ve su rol; mientras la pantalla está abierta no se envían intenciones
+            if (dialogue.isOpen()) endDialogue();
+            releaseAll();
+            hud.showRole(event.role, lastGame);
+            return;
+        }
+        hud.toast(eventText(event), eventTone(event));
         if (event.kind === "match_ended" || event.kind === "match_cancelled") refreshGameHud();
     }
 

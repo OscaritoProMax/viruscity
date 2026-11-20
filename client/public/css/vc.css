@@ -305,13 +305,161 @@
     50% { transform: scale(1.04); }
 }
 
+/* ---------- Pantallas de rol y de fin ---------- */
+.vc-screen {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: var(--space-4, 16px);
+    background: color-mix(in srgb, var(--bg, #0b1020) 72%, transparent);
+    z-index: 5;
+    animation: vc-fade-in var(--t-med, 240ms) linear;
+}
+
+/* La de fin deja ver el mapa y no bloquea los paneles: solo la tarjeta recibe clics */
+.vc-end {
+    background: color-mix(in srgb, var(--bg, #0b1020) 55%, transparent);
+    pointer-events: none;
+}
+
+.vc-screen__card {
+    width: min(520px, 100%);
+    max-height: 100%;
+    overflow-y: auto;
+    padding: var(--space-6, 32px) var(--space-5, 24px);
+    border: 2px solid var(--border, #2a3560);
+    border-radius: var(--radius-l, 20px);
+    background: var(--panel, #121a33);
+    box-shadow: var(--shadow-1, none);
+    text-align: center;
+    pointer-events: auto;
+    animation: vc-card-in var(--t-med, 240ms) var(--ease, ease);
+}
+
+.vc-screen__card:focus { outline: none; }
+
+.vc-screen__card[data-tone="healthy"] {
+    border-color: var(--accent, #4dd2ff);
+    box-shadow: 0 0 40px color-mix(in srgb, var(--accent, #4dd2ff) 30%, transparent);
+}
+
+.vc-screen__card[data-tone="infected"] {
+    border-color: var(--infected, #7cff6b);
+    box-shadow: 0 0 40px color-mix(in srgb, var(--infected, #7cff6b) 30%, transparent);
+}
+
+.vc-screen__card[data-tone="cure"] {
+    border-color: var(--cure, #ffd166);
+    box-shadow: 0 0 40px color-mix(in srgb, var(--cure, #ffd166) 30%, transparent);
+}
+
+.vc-screen__kicker {
+    margin: 0 0 var(--space-2, 8px);
+    color: var(--muted, #8f9bc4);
+    font-family: var(--font-mono, monospace);
+    font-size: var(--fs-s, .8125rem);
+    font-weight: 700;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+}
+
+.vc-screen__title {
+    margin: 0 0 var(--space-3, 12px);
+    font-family: var(--font-mono, monospace);
+    font-size: clamp(1.5rem, 6vw, 2.5rem);
+    font-weight: 800;
+    letter-spacing: .06em;
+    line-height: 1.15;
+}
+
+[data-tone="healthy"] > .vc-screen__title { color: var(--accent, #4dd2ff); }
+
+[data-tone="infected"] > .vc-screen__title { color: var(--infected, #7cff6b); }
+
+[data-tone="cure"] > .vc-screen__title { color: var(--cure, #ffd166); }
+
+.vc-screen__text {
+    margin: 0;
+    color: var(--text, #e6e9f5);
+    font-size: var(--fs-m, 1rem);
+    line-height: 1.5;
+}
+
+.vc-screen__hint {
+    margin: var(--space-4, 16px) 0 0;
+    color: var(--muted, #8f9bc4);
+    font-size: var(--fs-s, .8125rem);
+    font-variant-numeric: tabular-nums;
+}
+
+.vc-end__outcome {
+    margin: var(--space-3, 12px) 0 var(--space-4, 16px);
+    font-family: var(--font-mono, monospace);
+    font-size: var(--fs-l, 1.25rem);
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.vc-end__outcome[data-result="win"] { color: var(--cure, #ffd166); }
+
+.vc-end__outcome[data-result="lose"] { color: var(--danger, #ff4d6d); }
+
+.vc-end__outcome[data-result="none"] {
+    color: var(--muted, #8f9bc4);
+    text-transform: none;
+}
+
+.vc-end__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--fs-s, .8125rem);
+    text-align: left;
+}
+
+.vc-end__table th {
+    padding: var(--space-1, 4px) var(--space-2, 8px);
+    border-bottom: 1px solid var(--border, #2a3560);
+    color: var(--muted, #8f9bc4);
+    font-family: var(--font-mono, monospace);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+}
+
+.vc-end__table th:last-child { text-align: right; }
+
+.vc-end__table td {
+    padding: var(--space-2, 8px);
+    border-bottom: 1px solid color-mix(in srgb, var(--border, #2a3560) 50%, transparent);
+    overflow-wrap: anywhere;
+}
+
+.vc-end__table tr.is-me td { background: color-mix(in srgb, var(--accent, #4dd2ff) 8%, transparent); }
+
+.vc-end__you { color: var(--accent, #4dd2ff); }
+
+.vc-end__role {
+    font-weight: 700;
+    text-align: right;
+}
+
+.vc-end__role[data-role="healthy"] { color: var(--accent, #4dd2ff); }
+
+.vc-end__role[data-role="infected"] { color: var(--infected, #7cff6b); }
+
+@keyframes vc-card-in {
+    from { opacity: 0; transform: scale(.96); }
+}
+
 /* ---------- Movimiento reducido: sin pulsos; solo transiciones de opacidad ---------- */
 @media (prefers-reduced-motion: reduce) {
     .vc-cure__fill { transition: opacity var(--t-fast, 120ms) linear; }
 
     .vc-banner__text { animation: none; }
 
-    .vc-toast { animation: vc-fade-in var(--t-med, 240ms) linear; }
+    .vc-toast,
+    .vc-screen__card { animation: vc-fade-in var(--t-med, 240ms) linear; }
 }
 
 @keyframes vc-fade-in {
@@ -376,6 +524,10 @@
     }
 
     .vc-banner { padding: var(--space-3, 12px) var(--space-4, 16px); }
+
+    .vc-screen { padding: var(--space-2, 8px); }
+
+    .vc-screen__card { padding: var(--space-5, 24px) var(--space-4, 16px); }
 
     .vc-banner__text { font-size: 1.125rem; }
 

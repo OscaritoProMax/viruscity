@@ -155,6 +155,34 @@
     <div id="vcToasts" class="vc-toasts" role="status" aria-live="polite"></div>
     <p id="vcHint" class="vc-hint" hidden></p>
 
+    <!-- Pantalla de rol (4 s al empezar la partida; se cierra sola, con cualquier tecla o con un toque) -->
+    <div id="vcRole" class="vc-screen vc-role" hidden>
+        <div id="vcRoleCard" class="vc-screen__card" role="dialog" aria-modal="true" aria-labelledby="vcRoleTitle" aria-describedby="vcRoleText" tabindex="-1">
+            <p class="vc-screen__kicker">Tu rol en esta partida</p>
+            <h2 id="vcRoleTitle" class="vc-screen__title"></h2>
+            <p id="vcRoleText" class="vc-screen__text"></p>
+            <p class="vc-screen__hint">Pulsa cualquier tecla para continuar</p>
+        </div>
+    </div>
+
+    <!-- Pantalla de fin (fase ended): ganador, motivo, resultado y roles revelados -->
+    <div id="vcEnd" class="vc-screen vc-end" hidden>
+        <section id="vcEndCard" class="vc-screen__card" aria-labelledby="vcEndTitle">
+            <p class="vc-screen__kicker">Fin de la partida</p>
+            <h2 id="vcEndTitle" class="vc-screen__title"></h2>
+            <p id="vcEndReason" class="vc-screen__text"></p>
+            <p id="vcEndOutcome" class="vc-end__outcome"></p>
+            <table class="vc-end__table">
+                <caption class="sr-only">Roles de los jugadores de la partida</caption>
+                <thead>
+                    <tr><th scope="col">Jugador</th><th scope="col">Rol</th></tr>
+                </thead>
+                <tbody id="vcEndRows"></tbody>
+            </table>
+            <p id="vcEndBack" class="vc-screen__hint" aria-live="off"></p>
+        </section>
+    </div>
+
     <!-- Conversación con vecinos y carteles (local: no viaja por la red) -->
     <div id="dialogue" class="play-dialogue" role="dialog" aria-labelledby="dlgSpeaker" aria-describedby="dlgText" hidden>
         <p id="dlgSpeaker" class="play-dialogue__speaker"></p>

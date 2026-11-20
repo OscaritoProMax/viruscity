@@ -2,7 +2,7 @@
 // del servidor; las decisiones (textos, pistas, cercanía) salen de view.js, que es pura y está probada.
 // Todo el texto dinámico va con textContent; cada elemento solo se toca cuando su contenido cambia.
 //
-// createHud() → { update(ctx), toast(text, tone), reset() }
+// createHud() → { update(ctx), toast(text, tone), reset(), showRole(role, game), closeRole(), roleOpen() }
 //   ctx = { game, clock, localNow, pos, players, selfId, city, rules }
 //
 //   arriba-izquierda  chip de fase + temporizador (cuenta regresiva o tiempo restante de la partida)
@@ -11,12 +11,15 @@
 //   abajo-izquierda   panel "Misiones" plegable (playing y ended)
 //   abajo-centro      pista contextual y avisos (toasts de 3 s, aria-live)
 //   centro            banner "La partida empieza en N s" (countdown)
+//   pantalla de rol   4 s al empezar la partida (se cierra sola, con cualquier tecla o con un toque)
+//   pantalla de fin   mientras la fase es ended: ganador, motivo, ganaste/perdiste y roles revelados
 
 import { formatMMSS, secondsLeft } from "./clock.js";
-import { phaseLabel, contextHint, curePercent, missionStatusLabel, zoneName } from "./view.js";
+import { phaseLabel, contextHint, curePercent, missionStatusLabel, zoneName, roleScreen, endSummary } from "./view.js";
 
 const TOAST_MS = 3000;
 const MAX_TOASTS = 4;
+const ROLE_MS = 4000;
 
 const $ = (id) => document.getElementById(id);
 
@@ -48,8 +51,22 @@ export function createHud() {
         banner: $("vcBanner"),
         bannerText: $("vcBannerText"),
         toasts: $("vcToasts"),
+        role: $("vcRole"),
+        roleCard: $("vcRoleCard"),
+        roleTitle: $("vcRoleTitle"),
+        roleText: $("vcRoleText"),
+        end: $("vcEnd"),
+        endCard: $("vcEndCard"),
+        endTitle: $("vcEndTitle"),
+        endReason: $("vcEndReason"),
+        endOutcome: $("vcEndOutcome"),
+        endRows: $("vcEndRows"),
+        endBack: $("vcEndBack"),
     };
     let missionsSignature = "";
+    let endSignature = "";
+    let shownRole = null; // rol de la pantalla de rol abierta (null = cerrada)
+    let roleTimer = null;
 
     // El HUD empieza justo debajo de la barra superior del juego, que en pantallas angostas se envuelve en
     // varias filas: su altura real se publica en la variable CSS --vc-top (vc.css tiene valores de respaldo)
@@ -88,11 +105,74 @@ export function createHud() {
         el.missionList.replaceChildren(...items);
     }
 
+    // ---------- Pantalla de rol ----------
+    function renderRole(game) {
+        const screen = roleScreen(game, shownRole);
+        el.roleCard.dataset.tone = screen.tone;
+        setText(el.roleTitle, screen.title);
+        setText(el.roleText, screen.text);
+    }
+
+    function showRole(role, game) {
+        if (role !== "healthy" && role !== "infected") return;
+        shownRole = role;
+        renderRole(game);
+        el.role.hidden = false;
+        el.roleCard.focus({ preventScroll: true });
+        clearTimeout(roleTimer);
+        roleTimer = setTimeout(closeRole, ROLE_MS);
+    }
+
+    function closeRole() {
+        clearTimeout(roleTimer);
+        if (shownRole === null) return;
+        shownRole = null;
+        el.role.hidden = true;
+        if (document.activeElement === el.roleCard) el.roleCard.blur();
+    }
+    el.role.addEventListener("pointerdown", closeRole);
+
+    // ---------- Pantalla de fin ----------
+    function renderEnd(game, selfId) {
+        const summary = endSummary(game, selfId);
+        if (!summary) return false;
+        const signature = JSON.stringify(summary);
+        if (signature === endSignature) return true;
+        endSignature = signature;
+        el.endCard.dataset.tone = summary.tone;
+        setText(el.endTitle, summary.title);
+        setText(el.endReason, summary.reason);
+        setText(el.endOutcome, summary.outcome);
+        el.endOutcome.dataset.result = summary.outcome === "Ganaste" ? "win" : summary.outcome === "Perdiste" ? "lose" : "none";
+        const rows = summary.rows.map((r) => {
+            const tr = document.createElement("tr");
+            if (r.you) tr.className = "is-me";
+            const name = document.createElement("td");
+            name.textContent = r.username;
+            if (r.you) {
+                const you = document.createElement("span");
+                you.className = "vc-end__you";
+                you.textContent = " (tú)";
+                name.append(you);
+            }
+            const role = document.createElement("td");
+            role.className = "vc-end__role";
+            role.dataset.role = r.role === "Infectado" ? "infected" : "healthy";
+            role.textContent = r.role;
+            tr.append(name, role);
+            return tr;
+        });
+        el.endRows.replaceChildren(...rows);
+        return true;
+    }
+
     function update(ctx) {
         const { game, clock, localNow } = ctx;
         setHidden(el.phase, !game);
         if (!game) {
-            for (const node of [el.cure, el.players, el.missions, el.hint, el.banner]) setHidden(node, true);
+            for (const node of [el.cure, el.players, el.missions, el.hint, el.banner, el.end]) setHidden(node, true);
+            endSignature = "";
+            closeRole();
             return;
         }
         const { phase } = game;
@@ -133,6 +213,19 @@ export function createHud() {
         // Banner de cuenta regresiva
         setHidden(el.banner, phase !== "countdown");
         if (phase === "countdown") setText(el.bannerText, `La partida empieza en ${secondsLeft(clock.remaining(game.countdownEndsAt, localNow))} s`);
+
+        // Pantalla de rol: el tiempo del infectado puede llegar en el 'game' posterior al evento (mientras
+        // tanto el último 'game' aún puede ser el de la cuenta regresiva)
+        if (shownRole !== null) {
+            if (phase === "playing" || phase === "countdown") renderRole(game);
+            else closeRole();
+        }
+
+        // Pantalla de fin (desaparece al volver a open_world)
+        const showEnd = phase === "ended" && renderEnd(game, ctx.selfId);
+        setHidden(el.end, !showEnd);
+        if (showEnd) setText(el.endBack, `Volviendo al mundo abierto en ${secondsLeft(clock.remaining(game.resultsEndsAt, localNow))} s`);
+        else endSignature = "";
     }
 
     // Aviso de 3 s (los más viejos se van si hay demasiados)
@@ -154,5 +247,5 @@ export function createHud() {
     }
 
     reset();
-    return { update, toast, reset };
+    return { update, toast, reset, showRole, closeRole, roleOpen: () => shownRole !== null };
 }
