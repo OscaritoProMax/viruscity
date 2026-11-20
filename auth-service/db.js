@@ -1,7 +1,7 @@
 // Base de datos del auth-service (Taller 5): una sola tabla users para cuentas locales y de Google.
 //
 // ensureSchema(db, { dbPath }) crea la tabla con el esquema exacto de CLAUDE.md o migra la tabla del
-// Taller 4 (sin columna provider). Es idempotente.
+// Taller 4 (sin columna provider). Taller 7: también crea oplog y meta (replicación). Es idempotente.
 // createStatements(db) devuelve las consultas preparadas que usa la app.
 //
 // Invariantes (se hacen cumplir aquí): local → password_hash y sin google_sub;
@@ -13,6 +13,11 @@ const fs = require("node:fs");
 // Esquema EXACTO de la tabla (CLAUDE.md, Taller 5, decisión 1)
 const USERS_SCHEMA =
     "CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, provider TEXT NOT NULL CHECK(provider IN ('local','google')), password_hash TEXT, google_sub TEXT UNIQUE, email TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)";
+
+// Taller 7 (decisión 8): registro de operaciones replicadas y metadatos del nodo (término y voto)
+const OPLOG_SCHEMA =
+    "CREATE TABLE IF NOT EXISTS oplog (seq INTEGER PRIMARY KEY, term INTEGER NOT NULL, entry_id TEXT NOT NULL UNIQUE, op TEXT NOT NULL, data TEXT NOT NULL)";
+const META_SCHEMA = "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)";
 
 // Índice aparte (no cambia el esquema de la tabla): usernames únicos sin distinguir mayúsculas
 const NOCASE_INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS users_username_nocase ON users (username COLLATE NOCASE)";
@@ -81,6 +86,8 @@ function ensureSchema(db, { dbPath } = {}) {
     // Si ya tiene provider no hay nada que migrar
 
     ensureNocaseIndex(db);
+    db.exec(OPLOG_SCHEMA);
+    db.exec(META_SCHEMA);
     return result;
 }
 
@@ -115,4 +122,4 @@ function createStatements(db) {
     };
 }
 
-module.exports = { ensureSchema, createStatements, USERS_SCHEMA };
+module.exports = { ensureSchema, createStatements, USERS_SCHEMA, OPLOG_SCHEMA, META_SCHEMA };
