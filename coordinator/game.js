@@ -176,7 +176,11 @@ function sanitizeIntent(msg) {
     return { x: Math.sign(x) || 0, y: Math.sign(y) || 0 };
 }
 
-// { type:"extras_update", extras:{...} } → copia saneada o null si es inválido
+// Claves que los extras NUNCA pueden traer (metodología, decisión 7): los extras viajan a todos los clientes y
+// no deben parecer datos de la partida. Se comparan sin distinguir mayúsculas y solo en el primer nivel.
+const RESERVED_EXTRAS_KEYS = new Set(["role", "infected", "status", "cure"]);
+
+// { type:"extras_update", extras:{...} } → copia saneada o null si es inválido (también si trae claves de partida)
 function sanitizeExtras(msg, cfg) {
     const extras = msg?.extras;
     if (extras === null || typeof extras !== "object" || Array.isArray(extras)) return null;
@@ -190,6 +194,7 @@ function sanitizeExtras(msg, cfg) {
     if (Buffer.byteLength(json, "utf8") > cfg.MAX_EXTRAS_BYTES) return null;
 
     const copy = JSON.parse(json); // copia profunda: el original del cliente no se guarda
+    if (Object.keys(copy).some((key) => RESERVED_EXTRAS_KEYS.has(key.toLowerCase()))) return null;
     if (Object.prototype.hasOwnProperty.call(copy, "color")) {
         if (typeof copy.color !== "string" || !COLOR_REGEX.test(copy.color)) return null;
         copy.color = copy.color.toLowerCase();
@@ -306,6 +311,7 @@ module.exports = {
     resumePosition,
     sanitizeIntent,
     sanitizeExtras,
+    RESERVED_EXTRAS_KEYS,
     stepPlayers,
     clampDt,
     snapshot,

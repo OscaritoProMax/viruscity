@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { createConfig, parseMap, boxBlocked, portalAt, randomSpawn, resumePosition, isLocal, localPlayers, countLocal, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, snapshot } from "../game.js";
+import { createConfig, parseMap, boxBlocked, portalAt, randomSpawn, resumePosition, isLocal, localPlayers, countLocal, sanitizeIntent, sanitizeExtras, RESERVED_EXTRAS_KEYS, stepPlayers, clampDt, snapshot } from "../game.js";
 
 const cfg = createConfig({});
 const R = cfg.PLAYER_RADIUS;
@@ -99,6 +99,17 @@ test("sanitizeExtras: acepta objetos válidos (color en minúsculas, copia) y re
     // Justo en el límite de bytes: {"p":"…"} = 8 + n bytes
     assert.ok(sanitizeExtras({ extras: { p: "x".repeat(1016) } }, cfg));
     assert.equal(sanitizeExtras({ extras: { p: "x".repeat(1017) } }, cfg), null);
+});
+
+test("sanitizeExtras: rechaza las claves de la partida (role, infected, status, cure) en cualquier mayúscula", () => {
+    assert.deepEqual([...RESERVED_EXTRAS_KEYS].sort(), ["cure", "infected", "role", "status"]);
+    for (const key of ["role", "infected", "status", "cure", "Role", "INFECTED", "Cure"]) {
+        assert.equal(sanitizeExtras({ extras: { color: "#ff5500", [key]: "x" } }, cfg), null, key);
+        assert.equal(sanitizeExtras({ extras: { [key]: false } }, cfg), null, `${key} con valor falso`);
+    }
+    // La apariencia del cliente (personaje, colores y poder) sigue pasando, y una clave anidada no es de la partida
+    const look = { character: "explorador", color: "#3b4836", detail: "#111111", skin: "#c58c5c", power: "jetpack", powerOn: true, hat: { status: "nuevo" } };
+    assert.deepEqual(sanitizeExtras({ extras: look }, cfg), look);
 });
 
 test("snapshot: sin socket ni intent, con provider y coordenadas redondeadas a 2 decimales", () => {
