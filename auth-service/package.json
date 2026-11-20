@@ -5,8 +5,12 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
+    "start:a": "node index.js --env .env.auth-a",
+    "start:b": "node index.js --env .env.auth-b",
+    "start:c": "node index.js --env .env.auth-c",
     "dev": "node --watch index.js",
-    "test": "node --test"
+    "test": "node --test",
+    "smoke:auth-cluster": "node scripts/auth-cluster-smoke.js"
   },
   "keywords": [],
   "author": "",
