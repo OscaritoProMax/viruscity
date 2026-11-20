@@ -23,6 +23,7 @@ import { createRadio, STATION, estimateOffset } from "./radio.js";
 import { createDialogue } from "./dialogue.js";
 import { sceneAt, WORLD_SCENE } from "./map/scenes.js";
 import { parseCoordinatorResponse, buildWsUrl, isMixedContent, nextDelay, classifyClose, MAX_ATTEMPTS } from "./directory.js";
+import { parseServerMessage, parseCity } from "../vc/view.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -65,6 +66,13 @@ function writePref(key, value) {
 
 // Estado más reciente del servidor (el mensaje state completo). Es la única fuente de verdad.
 window.lastState = null;
+// Viruscity: último mensaje 'game' validado (fase, cura, misiones y tu rol). También en window para depurar.
+let lastGame = null;
+window.lastGame = null;
+function setLastGame(game) {
+    lastGame = game;
+    window.lastGame = game;
+}
 
 // Lee el payload del JWT sin verificar la firma (eso lo hace el coordinator). Solo para mostrar datos.
 function decodeTokenPayload(token) {
@@ -225,15 +233,18 @@ function startGame(token) {
     }
 
     function handleMessage(event) {
-        let msg;
-        try {
-            msg = JSON.parse(event.data);
-        } catch {
-            return; // mensaje que no es JSON: se ignora
+        // Mensajes que no son JSON, o 'game'/'event' que no cumplen el contrato, se ignoran
+        const parsed = parseServerMessage(event.data);
+        if (!parsed) return;
+        if (parsed.kind === "game") {
+            setLastGame(parsed.msg);
+            return;
         }
-        if (!msg || typeof msg !== "object") return;
+        const msg = parsed.msg;
 
         if (msg.type === "welcome") {
+            // Ciudad de la partida (zonas, estaciones y plaza): se dibuja debajo de los jugadores
+            renderer.setCity(parseCity(msg.city));
             if (typeof msg.coordinatorId === "string" && msg.coordinatorId) coordinatorId = msg.coordinatorId;
             const w = msg.world;
             if (w && [w.width, w.height, w.playerRadius].every(Number.isFinite)) {
@@ -273,6 +284,7 @@ function startGame(token) {
         const previous = coordinatorId ?? "el coordinador";
         ws = null;
         window.lastState = null;
+        setLastGame(null);
         setCoordinatorPill(null, null);
         retry((n) => `Conexión perdida con ${previous}. Buscando otro coordinador… (intento ${n})`);
     }
@@ -484,7 +496,7 @@ function startGame(token) {
     function frame(now) {
         const dt = Math.min((now - lastFrame) / 1000, MAX_FRAME_DT);
         lastFrame = now;
-        renderer.draw(window.lastState, world, me, now, dt);
+        renderer.draw(window.lastState, world, me, now, dt, lastGame);
         lookPanel.tick(now);
         dialogue.tick(dt);
         playEvents();

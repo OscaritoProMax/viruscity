@@ -2,9 +2,14 @@
 // no calcula posiciones de juego.
 //
 // createRenderer(canvas, minimap) → {
-//   resize(availW, availH), draw(lastState, world, me, nowMs, dt), setZoom(z), getZoom(), area(),
-//   scene(), target(), setTalking(npc), jukebox(nowMs, ms), surface(), meMoving(), positionOf(id), drainEvents()
+//   resize(availW, availH), draw(lastState, world, me, nowMs, dt, game), setZoom(z), getZoom(), area(),
+//   scene(), target(), setTalking(npc), jukebox(nowMs, ms), surface(), meMoving(), positionOf(id), drainEvents(),
+//   setCity(city)
 // }
+//
+// Viruscity: la ciudad de la partida (welcome.city) se dibuja debajo de los jugadores con los anillos de
+// misión según el último 'game'; los jugadores con ghost:true (espectadores) se ven translúcidos y, si el
+// rol local es infectado, los bordes de la pantalla tienen una viñeta verde (solo en este cliente).
 //
 // - Si el mundo del servidor mide lo mismo que el mapa de Virus City (3840 × 3840: ciudad + interiores),
 //   dibuja la ciudad o el local donde está el jugador (las colisiones y las puertas las calcula el
@@ -29,6 +34,7 @@ import { worldNPCs, buildWorldNPCs, updateNPC, drawNPCEntity, npcFoot, cars, bui
 import { hash2, circle } from "./map/draw-utils.js";
 import { gameMinutes, ambientAt } from "./map/clock.js";
 import { areaName } from "./map/zones.js";
+import { drawCity } from "../vc/city-render.js";
 
 const MAX_DPR = 2;
 const GRID_STEP = 100; // cuadrícula del modo sin mapa (unidades del mundo)
@@ -50,6 +56,17 @@ const REACH_BONUS = 24;
 // Marcas de entrada y salida de los locales (amarillo de las puertas del minimapa de la referencia)
 const DOOR_YELLOW = "#facc15";
 const DOOR_INK = "#0b1020";
+// Viruscity: espectadores translúcidos y relleno de las zonas de la partida sobre el mapa
+const GHOST_ALPHA = 0.35;
+const ZONE_ALPHA_MAP = 0.5;
+
+// "#7cff6b" → "124,255,107" (para degradados con transparencia)
+function hexToRgb(hex, fallback) {
+    const m = /^#([0-9a-f]{6})$/i.exec(String(hex).trim());
+    if (!m) return fallback;
+    const n = parseInt(m[1], 16);
+    return `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`;
+}
 
 // Lee una variable CSS (tokens.css) con un valor de respaldo
 function cssVar(name, fallback) {
@@ -123,9 +140,11 @@ export function createRenderer(canvas, minimap) {
         text: cssVar("--text", "#e6e9f5"),
         muted: cssVar("--muted", "#8f9bc4"),
         accent: cssVar("--accent", "#4dd2ff"),
+        infectedRgb: hexToRgb(cssVar("--infected", "#7cff6b"), "124,255,107"),
     };
     const fontMono = cssVar("--font-mono", "monospace");
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let matchCity = null; // ciudad de la partida (welcome.city)
 
     let cssW = 0;
     let cssH = 0;
@@ -302,6 +321,7 @@ export function createRenderer(canvas, minimap) {
         const anim = anims.get(p.userId);
         const feetY = pos.y + radius; // base de la caja de colisión del servidor = pies del personaje
         ctx.save();
+        if (p.ghost === true) ctx.globalAlpha = GHOST_ALPHA; // espectador: translúcido
         ctx.translate(pos.x, feetY - FEET_OFFSET);
         // Anillo en el suelo para reconocer al jugador local
         if (isMe) {
@@ -322,13 +342,22 @@ export function createRenderer(canvas, minimap) {
     function drawPlayerPower(p, pos, radius, look, powerT) {
         if (powerT === null) return;
         ctx.save();
+        if (p.ghost === true) ctx.globalAlpha = GHOST_ALPHA;
         ctx.translate(pos.x, pos.y + radius - FEET_OFFSET);
         drawPowerEffect(ctx, look.power, anims.get(p.userId)?.dir ?? "DOWN", powerT);
         ctx.restore();
     }
 
-    // Nombre en una píldora sobre la cabeza + insignia del proveedor (tamaño constante en pantalla)
+    // Nombre en una píldora sobre la cabeza + insignia del proveedor (tamaño constante en pantalla).
+    // Un espectador (ghost) lleva solo el nombre, translúcido y sin insignia: no se destaca.
     function drawLabel(p, pos, radius, world) {
+        ctx.save();
+        if (p.ghost === true) ctx.globalAlpha = GHOST_ALPHA;
+        drawLabelPill(p, pos, radius, world);
+        ctx.restore();
+    }
+
+    function drawLabelPill(p, pos, radius, world) {
         const fontSize = px(12);
         ctx.font = `600 ${fontSize}px ${fontMono}`;
         ctx.textBaseline = "middle";
@@ -337,7 +366,7 @@ export function createRenderer(canvas, minimap) {
         const padX = px(6);
         const pillH = fontSize + px(6);
         const pillW = ctx.measureText(name).width + padX * 2;
-        const hasBadge = p.provider === "google" || p.provider === "local";
+        const hasBadge = p.ghost !== true && (p.provider === "google" || p.provider === "local");
         const labelW = pillW + (hasBadge ? px(4) + pillH : 0);
 
         // La etiqueta se mantiene dentro del mundo
@@ -348,7 +377,7 @@ export function createRenderer(canvas, minimap) {
         const pillY = above >= margin ? above : pos.y + radius + px(6);
 
         ctx.save();
-        ctx.globalAlpha = 0.78;
+        ctx.globalAlpha *= 0.78;
         ctx.fillStyle = colors.bg;
         ctx.beginPath();
         ctx.roundRect(pillX, pillY, pillW, pillH, pillH / 2);
@@ -576,8 +605,28 @@ export function createRenderer(canvas, minimap) {
         }
     }
 
+    // Viñeta verde en los bordes de la pantalla para el jugador infectado (solo la ve él)
+    function drawInfectedVignette() {
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        const cw = canvas.width;
+        const ch = canvas.height;
+        const g = ctx.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.38, cw / 2, ch / 2, Math.max(cw, ch) * 0.72);
+        g.addColorStop(0, `rgba(${colors.infectedRgb},0)`);
+        g.addColorStop(1, `rgba(${colors.infectedRgb},0.32)`);
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, cw, ch);
+        ctx.restore();
+    }
+
     // nowMs: reloj del navegador (animaciones). dt: segundos desde el cuadro anterior (suavizado).
-    function draw(lastState, world, me, nowMs, dt = 0) {
+    // game: último mensaje 'game' validado (o null): estado de las misiones y rol local.
+    function draw(lastState, world, me, nowMs, dt = 0, game = null) {
+        drawScene(lastState, world, me, nowMs, dt, game);
+        if (world && game?.you?.role === "infected") drawInfectedVignette();
+    }
+
+    function drawScene(lastState, world, me, nowMs, dt, game) {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.fillStyle = colors.bg;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -640,8 +689,11 @@ export function createRenderer(canvas, minimap) {
             const f = Math.min(dt, 0.1) * 60;
             for (const n of worldNPCs) updateNPC(n, f, talkingTo);
             updateCars(f, mePos?.x ?? -9999, (mePos?.y ?? -9999) + radius - FEET_OFFSET);
+            // Ciudad de la partida sobre el suelo y debajo de edificios y personas
+            drawCity(ctx, matchCity, game, me, nowMs, reducedMotion.matches, { zoneAlpha: ZONE_ALPHA_MAP });
         } else if (!withMap) {
             drawPlainWorld(world);
+            drawCity(ctx, matchCity, game, me, nowMs, reducedMotion.matches);
         }
 
         if (!lastState) {
@@ -733,6 +785,8 @@ export function createRenderer(canvas, minimap) {
         resize,
         draw,
         setZoom: (z) => (zoom = clampZoom(z)),
+        // Ciudad de la partida (welcome.city ya validada) o null
+        setCity: (c) => (matchCity = c ?? null),
         getZoom: () => zoom,
         // Nombre de la zona donde está el jugador local (null sin mapa o sin posición)
         area: () => (city && lastMePos ? areaName(lastMePos.x, lastMePos.y) : null),
