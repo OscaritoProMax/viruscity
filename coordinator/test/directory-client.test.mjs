@@ -67,7 +67,7 @@ test("fetchPeers: filtra el propio id y entradas inválidas; null si falla", asy
     ];
     const f = fakeFetch({ status: 200, body: { peers } });
     const got = await fetchPeers({ authUrl: AUTH, selfId: "coord-a", fetchImpl: f.impl });
-    assert.equal(f.calls[0].url, "http://localhost:4000/peers");
+    assert.equal(f.calls[0].url, "http://localhost:4000/coordinator-peers");
     assert.deepEqual(got, [
         { coordinatorId: "coord-b", peerUrl: "ws://localhost:5102" },
         { coordinatorId: "coord-e", peerUrl: "wss://e.ngrok-free.app" },

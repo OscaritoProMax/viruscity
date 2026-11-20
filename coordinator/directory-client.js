@@ -3,6 +3,7 @@
 //
 // sendHeartbeat({ authUrl, secret, info, fetchImpl, timeoutMs }) → true | false
 // fetchPeers({ authUrl, selfId, fetchImpl, timeoutMs })          → [{ coordinatorId, peerUrl }] | null
+//   (Taller 7: GET {authUrl}/coordinator-peers; en el Taller 6 era /peers, que ahora lista los nodos de auth)
 // startHeartbeatLoop({ authUrl, secret, info, intervalMs, onChange, fetchImpl, timeoutMs }) → stop()
 //   info puede ser un objeto o una función que lo devuelve (para mandar los jugadores actuales).
 //   onChange(up) se llama SOLO cuando cambia el resultado (primero alcanzable/no alcanzable y luego
@@ -43,7 +44,7 @@ function isWsUrl(value) {
 
 async function fetchPeers({ authUrl, selfId, fetchImpl = fetch, timeoutMs = DEFAULT_TIMEOUT_MS }) {
     try {
-        const res = await fetchImpl(`${authUrl}/peers`, { signal: AbortSignal.timeout(timeoutMs) });
+        const res = await fetchImpl(`${authUrl}/coordinator-peers`, { signal: AbortSignal.timeout(timeoutMs) });
         if (res.status !== 200) return null;
         const json = await res.json();
         if (!Array.isArray(json?.peers)) return null;
