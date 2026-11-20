@@ -8,9 +8,10 @@
 // mata TODOS los hijos y borra los temporales.
 //
 // Recorrido: partida 1 (V1-V8: fases, inicio, contagio, misiones y victoria por cura), partida 2 (V9 victoria
-// del virus y V12 espectador), partida 3 (V11 gracia, con el espectador ya en el roster) y una segunda
-// ejecución con MATCH_DURATION_MS=8000 (V10 tiempo). V5 (información oculta) se evalúa al final sobre TODOS
-// los mensajes recibidos.
+// del virus y V12 espectador), partida 3 (V11 gracia, con el espectador ya en el roster), con 3 o más
+// coordinadores la partida 4 (X1-X7: árbitro, acciones entre coordinadores, relevo al matar coord-a,
+// handover al volver, peer falso e información oculta) y una segunda ejecución con MATCH_DURATION_MS=8000
+// (V10 tiempo). V5 (información oculta) se evalúa al final sobre TODOS los mensajes recibidos.
 
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
@@ -18,6 +19,7 @@ const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const WebSocket = require("ws");
+const { createMatchState } = require("../match.js");
 
 const ROOT = path.join(__dirname, "..", "..");
 const AUTH_DIR = path.join(ROOT, "auth-service");
@@ -115,22 +117,31 @@ function startAuth() {
     });
 }
 
-function startCoords(times) {
-    LETTERS.forEach((l, i) => {
-        launch(`coord-${l}`, COORD_DIR, ["index.js", "--env", emptyEnv], {
-            COORDINATOR_ID: `coord-${l}`,
-            PORT: String(port(i)),
-            PEER_PORT: String(peerPort(i)),
-            PUBLIC_URL: `ws://localhost:${port(i)}`,
-            PEER_URL: `ws://localhost:${peerPort(i)}`,
-            AUTH_URL: AUTH,
-            JWT_SECRET,
-            CLUSTER_SECRET,
-            MAP_FILE: "",
-            ...Object.fromEntries(Object.entries(times).map(([k, v]) => [k, String(v)])),
-        });
+function startCoord(l, i, times) {
+    launch(`coord-${l}`, COORD_DIR, ["index.js", "--env", emptyEnv], {
+        COORDINATOR_ID: `coord-${l}`,
+        PORT: String(port(i)),
+        PEER_PORT: String(peerPort(i)),
+        PUBLIC_URL: `ws://localhost:${port(i)}`,
+        PEER_URL: `ws://localhost:${peerPort(i)}`,
+        AUTH_URL: AUTH,
+        JWT_SECRET,
+        CLUSTER_SECRET,
+        MAP_FILE: "",
+        ...Object.fromEntries(Object.entries(times).map(([k, v]) => [k, String(v)])),
     });
 }
+const startCoords = (times) => LETTERS.forEach((l, i) => startCoord(l, i, times));
+
+// Mata un coordinador y espera a que el proceso termine
+async function killCoord(l) {
+    const child = children.get(`coord-${l}`);
+    if (!child || child.exitCode !== null) return;
+    const exited = new Promise((r) => child.once("exit", r));
+    child.kill();
+    await exited;
+}
+const statusOf = (i) => getJson(`http://localhost:${port(i)}/status`);
 
 async function stopCoords() {
     const waits = [];
@@ -142,7 +153,16 @@ async function stopCoords() {
     await Promise.all(waits);
 }
 
-const coordsUp = () => waitFor(async () => (await Promise.all(LETTERS.map((_, i) => getJson(`http://localhost:${port(i)}/status`)))).every((r) => r.status === 200), 8000, 100);
+// Coordinadores arriba y, con más de uno, malla completa con árbitro coord-a; después, la espera de
+// sincronización del árbitro (GAME_SYNC_WAIT_MS = 1500 por defecto) para que la partida ya avance
+async function coordsUp() {
+    const up = await waitFor(async () => {
+        const all = await Promise.all(LETTERS.map((_, i) => statusOf(i)));
+        return all.every((r) => r.status === 200 && r.json.peers.length === N - 1 && r.json.match.arbiterId === "coord-a");
+    }, 15000, 100);
+    if (up && N > 1) await sleep(1500 + 300);
+    return up;
+}
 
 let cleaned = false;
 async function cleanup() {
@@ -173,13 +193,27 @@ async function createUser(label) {
 }
 
 let rotation = 0;
-// Cliente WS: guarda el último welcome, game y state, y TODOS los game y event recibidos
-function connect(user) {
-    const index = rotation++ % N;
-    const ws = new WebSocket(`ws://localhost:${port(index)}/connect?token=${encodeURIComponent(user.token)}`);
-    const c = { user, ws, coordinator: `coord-${LETTERS[index]}`, welcome: null, game: null, state: null, games: [], states: 0, stateSamples: [], events: [], closed: false };
+// Cliente WS: guarda el último welcome, game y state, y TODOS los game y event recibidos.
+// target: sin indicar → siguiente coordinador en orden rotatorio; número → ese coordinador (0 = coord-a);
+// { url, id } → la publicUrl que dio el directorio.
+function connect(user, target) {
+    let base;
+    let coordinator;
+    if (target && typeof target === "object") {
+        base = target.url;
+        coordinator = target.id;
+    } else {
+        const index = Number.isInteger(target) ? target : rotation++ % N;
+        base = `ws://localhost:${port(index)}`;
+        coordinator = `coord-${LETTERS[index]}`;
+    }
+    const ws = new WebSocket(`${base}/connect?token=${encodeURIComponent(user.token)}`);
+    const c = { user, ws, coordinator, welcome: null, game: null, state: null, games: [], states: 0, stateSamples: [], playersUpdates: [], events: [], closed: false, closeCode: null };
     ws.on("error", () => {});
-    ws.on("close", () => (c.closed = true));
+    ws.on("close", (code) => {
+        c.closed = true;
+        c.closeCode = code;
+    });
     ws.on("message", (raw) => {
         const m = JSON.parse(raw);
         if (m.type === "welcome") c.welcome = m;
@@ -187,9 +221,10 @@ function connect(user) {
             c.game = m;
             c.games.push(m);
         } else if (m.type === "event") c.events.push(m);
+        else if (m.type === "players_update") c.playersUpdates.push(raw.toString());
         else if (m.type === "state") {
             c.state = m;
-            if (c.states++ % 20 === 0) c.stateSamples.push(raw.toString()); // muestra para V5
+            if (c.states++ % 20 === 0) c.stateSamples.push(raw.toString()); // muestra para V5/X7
         }
     });
     c.userId = () => c.welcome?.you.userId;
@@ -278,7 +313,7 @@ async function main() {
     }
     console.log(`Clúster: auth en ${AUTH_PORT} y ${N} coordinador(es) en ${LETTERS.map((_, i) => port(i)).join(", ")}`);
     const users = {};
-    for (const n of ["ana", "beto", "caro", "dani"]) users[n] = await createUser(n);
+    for (const n of ["ana", "beto", "caro", "dani", "eva", "fede"]) users[n] = await createUser(n);
 
     // ----- V1: dos jugadores, mundo abierto -----
     const A = connect(users.ana);
@@ -434,25 +469,12 @@ async function main() {
     }
     report("V11", "gracia: reconectar dentro de 6 s conserva el rol (en la plaza); quien no vuelve sale y se reevalúa la victoria", v11, v11detail);
 
+    // ----- X1-X7: partida en el clúster con relevo y handover (solo con 3 o más coordinadores) -----
+    if (N >= 3) await clusterTests(users);
+
     // ----- V5: información oculta (sobre todo lo recibido hasta ahora) -----
-    const userIds = allClients.map((c) => c.userId()).filter(Boolean);
     const names = Object.values(users).map((u) => u.username);
-    let leak = "";
-    const youKeys = "infectReadyAt,missionId,missionStartedAt,role";
-    for (const c of allClients) {
-        for (const g of c.games) {
-            const { you, results, ...rest } = g;
-            if (Object.keys(you).sort().join(",") !== youKeys) leak ||= `you con campos raros: ${Object.keys(you)}`;
-            if (/role|healthy|infected|spectator/.test(JSON.stringify(rest))) leak ||= `game de ${c.user.username} con roles fuera de you`;
-            if (results && g.phase !== "ended") leak ||= "results fuera de ended";
-            if (g.phase !== "ended" && userIds.some((id) => id !== c.userId() && JSON.stringify(g).includes(`"${id}"`))) leak ||= "game con el id de otro";
-        }
-        for (const s of c.stateSamples) if (/"role"|healthy|infected|spectator/.test(s)) leak ||= "state con roles";
-        for (const e of c.events.filter((x) => x.kind === "contagion_alert")) {
-            const json = JSON.stringify(e);
-            if (Object.keys(e).sort().join(",") !== "kind,type,zone" || userIds.some((id) => json.includes(`"${id}"`)) || names.some((n) => json.includes(n))) leak ||= `contagion_alert con datos: ${json}`;
-        }
-    }
+    let leak = findLeaks(allClients, names);
     const alerts = allClients.reduce((n, c) => n + c.events.filter((e) => e.kind === "contagion_alert").length, 0);
     const statusText = JSON.stringify(statusDuring.json);
     if (/role|healthy|infected/.test(statusText)) leak ||= "/status con roles";
@@ -474,6 +496,210 @@ async function main() {
     const r10 = q[0].game.results;
     report("V10", "tiempo agotado (MATCH_DURATION_MS=8000, sin hacer nada) → winner infected, reason time", playing10 && ended10 && r10?.winner === "infected" && r10?.reason === "time", `${r10?.winner}/${r10?.reason} a los ${((Date.now() - t10) / 1000).toFixed(1)} s`);
     for (const c of q) c.close();
+    await sleep(300);
+}
+
+// Información oculta en lo que reciben los clientes: game solo con su you.role (los roles de todos solo en
+// results, en 'ended'), state y players_update sin roles, contagion_alert sin ids ni nombres
+function findLeaks(clients, names) {
+    const userIds = allClients.map((c) => c.userId()).filter(Boolean);
+    const youKeys = "infectReadyAt,missionId,missionStartedAt,role";
+    let leak = "";
+    for (const c of clients) {
+        for (const g of c.games) {
+            const { you, results, ...rest } = g;
+            if (Object.keys(you).sort().join(",") !== youKeys) leak ||= `you con campos raros: ${Object.keys(you)}`;
+            if (/role|healthy|infected|spectator/.test(JSON.stringify(rest))) leak ||= `game de ${c.user.username} con roles fuera de you`;
+            if (results && g.phase !== "ended") leak ||= "results fuera de ended";
+            if (g.phase !== "ended" && userIds.some((id) => id !== c.userId() && JSON.stringify(g).includes(`"${id}"`))) leak ||= "game con el id de otro";
+        }
+        for (const s of [...c.stateSamples, ...c.playersUpdates]) if (/"role"|healthy|infected|spectator/.test(s)) leak ||= "state o players_update con roles";
+        for (const e of c.events.filter((x) => x.kind === "contagion_alert")) {
+            const json = JSON.stringify(e);
+            if (Object.keys(e).sort().join(",") !== "kind,type,zone" || userIds.some((id) => json.includes(`"${id}"`)) || names.some((n) => json.includes(n))) leak ||= `contagion_alert con datos: ${json}`;
+        }
+    }
+    return leak;
+}
+
+// Pide un coordinador al directorio (como el cliente real) y se conecta; si devuelve el que está caído
+// (sigue en el directorio hasta que vence su TTL) vuelve a pedir: su reserva hace que el siguiente sea otro
+async function viaDirectory(user, deadId) {
+    const end = Date.now() + 10000;
+    while (Date.now() < end) {
+        const r = await getJson(`${AUTH}/coordinator`);
+        if (r.status === 200 && r.json.coordinatorId !== deadId) return connect(user, { url: r.json.publicUrl, id: r.json.coordinatorId });
+        await sleep(100);
+    }
+    return null;
+}
+
+// Partida 4 en el clúster: 6 jugadores (2 por coordinador). X1-X7.
+async function clusterTests(users) {
+    const matchOf = async () => (await Promise.all(LETTERS.slice(0, 3).map((_, i) => statusOf(i)))).map((r) => r.json?.match ?? null);
+    const names = Object.values(users).map((u) => u.username);
+    const results = {};
+    const say = (id, desc, ok, detail) => (results[id] = { desc, ok, detail });
+
+    await waitFor(async () => (await statusOf(0)).json?.match.phase === "open_world", 8000, 200);
+    let live = ["ana", "beto", "caro", "dani", "eva", "fede"].map((n, k) => connect(users[n], k % 3));
+    const clusterClients = [...live];
+    for (const c of live) await ready(c);
+    const playing = await waitFor(() => live.every((c) => c.game.phase === "playing" && ["healthy", "infected"].includes(c.role())), 6000);
+    const tStart = Date.now();
+
+    // ----- X1 -----
+    let m = await matchOf();
+    await waitFor(async () => {
+        m = await matchOf();
+        return m.every((s) => s && s.phase === "playing" && s.matchId === m[0].matchId && s.arbiterId === "coord-a");
+    }, 2000, 100);
+    const x1 = playing && m.every((s) => s?.phase === "playing" && s.matchId === m[0].matchId && s.arbiterId === "coord-a");
+    report("X1", "/status de los tres coincide en phase, matchId y arbiterId (= coord-a) tras iniciar la partida", x1, m.map((s, i) => `coord-${LETTERS[i]}: ${s?.phase} #${s?.matchId} árbitro ${s?.arbiterId}`).join(" · "));
+    if (!playing) {
+        for (const c of live) c.close();
+        return;
+    }
+    const matchId = m[0].matchId;
+
+    // Mueve la sesión de un jugador a otro coordinador (la vieja se cierra con 4002 y conserva su rol)
+    async function moveSession(c, i) {
+        if (c.coordinator === `coord-${LETTERS[i]}`) return c;
+        const n = connect(c.user, i);
+        clusterClients.push(n);
+        await ready(n);
+        await n.waitFor((x) => x.role(), 2000);
+        await waitFor(() => c.closed, 2000);
+        live = live.map((x) => (x === c ? n : x));
+        return n;
+    }
+
+    // ----- X2: infectado en coord-b contagia a un sano en coord-c (árbitro coord-a) -----
+    let X = await moveSession(live.find((c) => c.role() === "infected"), 1);
+    let V = live.find((c) => c.role() === "healthy" && c.coordinator === "coord-c") ?? (await moveSession(live.find((c) => c.role() === "healthy"), 2));
+    await sleep(Math.max(0, tStart + TIMES.INITIAL_LOCK_MS + 300 - Date.now()));
+    await moveTo(X, X.find(V).x, X.find(V).y, 10);
+    const readyBefore = X.game.you.infectReadyAt;
+    const hit = await act(X, "infect");
+    const victimSees = await V.waitFor((c) => c.role() === "infected", 2000);
+    const attackerSees = await X.waitFor((c) => c.game.you.infectReadyAt > readyBefore, 2000);
+    report("X2", "un infectado en coord-b contagia a un sano en coord-c (árbitro coord-a); ambos ven el cambio en su game", hit?.ok === true && victimSees && attackerSees && X.coordinator === "coord-b" && V.coordinator === "coord-c", `infect_result ${hit?.ok} · víctima ${V.role()} · infectReadyAt del atacante ${attackerSees ? "actualizado" : "igual"}`);
+
+    // ----- X3: misiones desde coordinadores distintos; la cura es la misma en todos -----
+    const healthy = live.filter((c) => c.role() === "healthy");
+    const h1 = healthy[0];
+    const h2 = healthy.find((c) => c.coordinator !== h1.coordinator) ?? (await moveSession(healthy[1], (LETTERS.indexOf(h1.coordinator.slice(-1)) + 1) % 3));
+    const m1 = nearestMission(h1, available(h1));
+    const m2 = nearestMission(h2, available(h2).filter((x) => x.id !== m1.id));
+    const doMission = async (c, mission) => {
+        await moveTo(c, mission.x, mission.y);
+        const s = await startMission(c, mission.id);
+        if (s?.kind !== "mission_started") return s;
+        await sleep(TIMES.MISSION_MIN_MS + 150);
+        return act(c, "mission_complete", mission.id);
+    };
+    const [r1, r2] = await Promise.all([doMission(h1, m1), doMission(h2, m2)]);
+    const expected = (2 * 100) / h1.game.missions.length;
+    const sameCure = await waitFor(() => live.every((c) => Math.abs(c.game.cure - expected) < 1e-9), 2000);
+    m = await matchOf();
+    report("X3", "la cura es la misma en los clientes de los tres coordinadores tras misiones desde coordinadores distintos", r1?.ok === true && r2?.ok === true && sameCure && m.every((s) => Math.abs(s.cure - expected) < 1e-9), `${h1.coordinator} y ${h2.coordinator} · cura ${expected.toFixed(2)} en ${live.length} clientes y en /status`);
+
+    // ----- X4: se mata coord-a (el árbitro) en plena partida -----
+    const I = live.find((c) => c.role() === "infected" && c.coordinator === "coord-a") ?? (await moveSession(V, 0));
+    const aClients = live.filter((c) => c.coordinator === "coord-a");
+    const rolesBefore = new Map(aClients.map((c) => [c.user.username, c.role()]));
+    const before = (await statusOf(1)).json.match;
+    const tKill = Date.now();
+    await killCoord("a");
+    const relay = await waitFor(async () => (await Promise.all([statusOf(1), statusOf(2)])).every((r) => r.json?.match.arbiterId === "coord-b"), 3000, 100);
+    const relayMs = Date.now() - tKill;
+    const afterKill = (await Promise.all([statusOf(1), statusOf(2)])).map((r) => r.json?.match);
+    const conserved = afterKill.every((s) => s && s.phase === before.phase && s.matchId === before.matchId && s.cure === before.cure);
+    const reconnected = [];
+    for (const c of aClients) {
+        const n = await viaDirectory(c.user, "coord-a");
+        if (n) {
+            reconnected.push(n);
+            clusterClients.push(n);
+        }
+    }
+    for (const n of reconnected) {
+        await ready(n);
+        await n.waitFor((x) => x.role(), 2000);
+    }
+    const reconnectMs = Date.now() - tKill;
+    const rolesKept = reconnected.length === aClients.length && reconnected.every((n) => n.role() === rolesBefore.get(n.user.username));
+    live = live.filter((c) => !aClients.includes(c)).concat(reconnected);
+    const I2 = reconnected.find((n) => n.user === I.user);
+    const iAct = I2 ? await act(I2, "infect") : null;
+    const canAct = Boolean(iAct) && !["spectator", "arbiter_unavailable", "not_infected", "not_playing"].includes(iAct.reason);
+    const x4partial = relay && relayMs < 3000 && conserved && rolesKept && reconnectMs < TIMES.RECONNECT_GRACE_MS && I2?.role() === "infected" && canAct;
+    const x4detail = `árbitro coord-b en ${relayMs} ms · phase/matchId/cure ${conserved ? "iguales" : "distintos"} · ${reconnected.length}/${aClients.length} reconectados por /coordinator en ${(reconnectMs / 1000).toFixed(1)} s con su rol ${rolesKept} · infectado actúa: ${iAct?.ok ?? ""} ${iAct?.reason ?? ""}`;
+
+    // ----- X5: coord-a vuelve con la partida en curso -----
+    startCoord("a", 0, TIMES);
+    const back = await waitFor(async () => (await matchOf()).every((s) => s?.arbiterId === "coord-a"), 15000, 200);
+    m = await matchOf();
+    const handedOver = m.every((s) => s && s.phase === "playing" && s.matchId === matchId && s.cure === before.cure);
+    const noCountdown = live.every((c) => c.games.filter((g) => g.serverTime >= tKill).every((g) => g.phase === "playing" || g.phase === "ended"));
+    const actor = live.find((c) => c.role() === "infected" && c.coordinator !== "coord-a") ?? live.find((c) => c.role() === "infected");
+    const afterBack = await act(actor, "infect");
+    const actionsWork = Boolean(afterBack) && afterBack.reason !== "arbiter_unavailable";
+    say("X5", "reincorporación: coord-a vuelve a ser árbitro con el mismo matchId y cure (handover), sin cuenta nueva; las acciones siguen", back && handedOver && noCountdown && actionsWork, `${m.map((s, i) => `coord-${LETTERS[i]}: árbitro ${s?.arbiterId} #${s?.matchId} cura ${s?.cure?.toFixed(2)}`).join(" · ")} · sin countdown ${noCountdown} · acción de ${actor.coordinator}: ${afterBack?.reason ?? afterBack?.ok}`);
+
+    // ----- X6: un peer falso CON el secreto intenta alterar la partida -----
+    const beforeFake = await matchOf();
+    const fakes = [];
+    for (const [i, id] of [
+        [0, "coord-fake"],
+        [1, "coord-fake2"],
+    ]) {
+        const ws = new WebSocket(`ws://localhost:${peerPort(i)}`, { headers: { "x-cluster-secret": CLUSTER_SECRET } });
+        ws.on("error", () => {});
+        const hello = new Promise((resolve) => ws.once("message", () => resolve(true)));
+        await new Promise((resolve) => ws.once("open", resolve));
+        ws.send(JSON.stringify({ type: "hello", coordinatorId: id }));
+        await Promise.race([hello, sleep(2000)]);
+        fakes.push({ ws, id });
+    }
+    const someone = live.find((c) => c.role() === "healthy") ?? live[0];
+    const giantRoster = {};
+    for (let k = 0; k < 250; k++) giantRoster[`z${k}`] = { username: `zombi_${k}`, role: "infected", infectReadyAt: null, connected: true, disconnectedAt: null };
+    const fakeMatch = { ...createMatchState(), matchId: 999, rev: 999, eid: 9999 };
+    for (const { ws, id } of fakes) {
+        const sendJ = (o) => ws.send(JSON.stringify(o));
+        sendJ({ type: "game_state", origin: id, match: fakeMatch, events: [{ eid: 9999, kind: "match_ended", winner: "players" }] }); // (a) no es el árbitro
+        sendJ({ type: "game_action", origin: id, userId: someone.userId(), action: { kind: "infect" } }); // (b) jugador ajeno
+        sendJ({ type: "game_action", origin: id, userId: someone.userId(), action: { kind: "mission_cancel" } });
+        sendJ({ type: "game_state", origin: id, match: { ...fakeMatch, cure: 150 }, events: [] }); // (c) cure inválida
+        sendJ({ type: "game_state", origin: id, match: { ...fakeMatch, roster: giantRoster }, events: [] }); // (c) roster gigante
+        sendJ({ type: "game_state", origin: "coord-a", match: fakeMatch, events: [] }); // origin ajeno al de la conexión
+        sendJ({ type: "game_state", origin: id, match: "basura", events: [] });
+    }
+    await sleep(1500);
+    const afterFake = await Promise.all(LETTERS.slice(0, 3).map((_, i) => statusOf(i)));
+    const alive = afterFake.every((r) => r.status === 200);
+    const unchanged = afterFake.every((r, i) => {
+        const s = r.json?.match;
+        return s && s.phase === beforeFake[i].phase && s.matchId === beforeFake[i].matchId && s.cure === beforeFake[i].cure && s.arbiterId === "coord-a";
+    });
+    const fakeEnded = live.some((c) => c.events.some((e) => e.kind === "match_ended"));
+    say("X6", "peer falso con el secreto: game_state que no es del árbitro, game_action ajeno y match inválido no cambian nada ni tumban a nadie", alive && unchanged && !fakeEnded && someone.role() !== undefined, `coordinadores vivos ${alive} · partida ${unchanged ? "igual" : "cambió"} · match_ended falso ${fakeEnded}`);
+    for (const { ws } of fakes) ws.close();
+
+    // ----- X7: nada de lo que reciben los clientes ni /status expone roles -----
+    const leak = findLeaks(clusterClients, names);
+    const statusText = JSON.stringify(afterFake.map((r) => r.json));
+    say("X7", "ningún mensaje hacia los clientes (game, state, players_update, eventos) ni /status de los tres expone roles", !leak && !/role|healthy|infected/.test(statusText), leak || `${clusterClients.reduce((n, c) => n + c.games.length, 0)} game · /status de 3 coordinadores sin roles`);
+
+    // La partida sigue hasta un final válido (por tiempo, cura o contagio)
+    const endsAt = live[0].game.endsAt;
+    const ended = await waitFor(() => live.every((c) => c.closed || c.game.phase === "ended"), Math.max(0, endsAt - Date.now()) + 4000, 200);
+    const res = live.find((c) => !c.closed)?.game.results;
+    const validEnd = ended && ["players", "infected"].includes(res?.winner) && ["cure", "all_infected", "time", "no_infected"].includes(res?.reason);
+    report("X4", "relevo: matan a coord-a; coord-b asume en < 3 s conservando la partida; sus clientes reconectan con su rol y la partida termina bien", x4partial && validEnd, `${x4detail} · final ${res?.winner}/${res?.reason}`);
+    for (const id of ["X5", "X6", "X7"]) report(id, results[id].desc, results[id].ok, results[id].detail);
+    for (const c of live) c.close();
     await sleep(300);
 }
 
