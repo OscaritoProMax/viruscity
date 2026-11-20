@@ -253,3 +253,80 @@ test("buildPositionsSync: posiciones de los locales, o null si no hay", () => {
     assert.equal(buildPositionsSync(new Map([["r1", remote("coord-b")]]), "coord-a"), null);
     assert.equal(buildPositionsSync(new Map(), "coord-a"), null);
 });
+
+// ---------- Partida de Viruscity (V3): game_action y game_state ----------
+import { createMatchState } from "../match.js";
+
+const action = (changes = {}) => ({ type: "game_action", origin: "coord-b", userId: "u1", action: { kind: "mission_start", missionId: "hospital-1" }, ...changes });
+const gameState = (changes = {}) => ({ type: "game_state", origin: "coord-a", match: createMatchState(), events: [], ...changes });
+
+test("validatePeerMessage: game_action válido (userId numérico → string, missionId opcional)", () => {
+    assert.deepEqual(valid(action()), { type: "game_action", origin: "coord-b", userId: "u1", action: { kind: "mission_start", missionId: "hospital-1" } });
+    assert.deepEqual(valid(action({ userId: 7, action: { kind: "infect" } })).userId, "7");
+    assert.deepEqual(valid(action({ action: { kind: "mission_cancel", extra: 1 } })).action, { kind: "mission_cancel" });
+});
+
+test("validatePeerMessage: game_action inválido", () => {
+    for (const msg of [
+        action({ origin: undefined }),
+        action({ userId: "" }),
+        action({ action: null }),
+        action({ action: "infect" }),
+        action({ action: { kind: "volar" } }),
+        action({ action: { kind: "mission_start", missionId: "HOSPITAL" } }),
+        action({ action: { kind: "mission_start", missionId: 12 } }),
+    ]) {
+        assert.equal(validatePeerMessage(msg, cfg).ok, false, JSON.stringify(msg));
+    }
+});
+
+test("validatePeerMessage: game_state válido; eventos saneados (solo campos conocidos)", () => {
+    const m = valid(gameState({ handover: true, events: [{ eid: 3, kind: "infect_result", ok: true, to: "u1", raro: "x" }, { eid: 4, kind: "contagion_alert", zone: "Hospital" }] }));
+    assert.equal(m.handover, true);
+    assert.deepEqual(m.match, createMatchState());
+    assert.deepEqual(m.events, [
+        { eid: 3, kind: "infect_result", ok: true, to: "u1" },
+        { eid: 4, kind: "contagion_alert", zone: "Hospital" },
+    ]);
+    assert.equal(valid(gameState()).handover, false, "sin handover → false");
+});
+
+test("validatePeerMessage: game_state inválido (match, handover, events)", () => {
+    const tooMany = Array.from({ length: 101 }, (_, i) => ({ eid: i + 1, kind: "x" }));
+    for (const msg of [
+        gameState({ match: null }),
+        gameState({ match: { ...createMatchState(), cure: 150 } }),
+        gameState({ match: { ...createMatchState(), phase: "x" } }),
+        gameState({ handover: "sí" }),
+        gameState({ events: "x" }),
+        gameState({ events: tooMany }),
+        gameState({ events: [{ kind: "x" }] }),
+        gameState({ events: [{ eid: 1 }] }),
+        gameState({ events: [{ eid: 1, kind: "x", to: 5 }] }),
+        gameState({ events: [{ eid: 1, kind: "x", ok: "true" }] }),
+        gameState({ origin: "con espacios" }),
+    ]) {
+        assert.equal(validatePeerMessage(msg, cfg).ok, false, JSON.stringify(msg).slice(0, 120));
+    }
+});
+
+test("applyPeerMessage: game_action solo del DUEÑO del jugador; game_state se entrega a index.js", () => {
+    const players = new Map([
+        ["u1", remote("coord-b")],
+        ["u2", remote("coord-c")],
+        ["u3", local("coord-a")],
+    ]);
+    const mine = applyPeerMessage(players, "coord-a", "coord-b", valid(action()), cfg);
+    assert.deepEqual(mine.actions, [{ type: "game_action", userId: "u1", action: { kind: "mission_start", missionId: "hospital-1" } }]);
+    assert.deepEqual(applyPeerMessage(players, "coord-a", "coord-b", valid(action({ userId: "u2" })), cfg).actions, [], "u2 es de coord-c: se ignora");
+    assert.deepEqual(applyPeerMessage(players, "coord-a", "coord-b", valid(action({ userId: "u3" })), cfg).actions, [], "u3 es local: se ignora");
+    assert.deepEqual(applyPeerMessage(players, "coord-a", "coord-b", valid(action({ userId: "u9" })), cfg).actions, [], "desconocido: se ignora");
+    assert.deepEqual(applyPeerMessage(players, "coord-a", "coord-c", valid(action()), cfg).actions, [], "origin distinto al peer de la conexión");
+
+    const st = applyPeerMessage(players, "coord-b", "coord-a", valid(gameState()), cfg);
+    assert.equal(st.actions.length, 1);
+    assert.equal(st.actions[0].type, "game_state");
+    assert.equal(st.actions[0].origin, "coord-a");
+    assert.equal(st.membershipChanged, false);
+    assert.deepEqual(applyPeerMessage(players, "coord-a", "coord-a", valid(gameState()), cfg).actions, [], "origin propio: anti-bucle");
+});
