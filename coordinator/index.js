@@ -503,14 +503,16 @@ function deliverEvents(events) {
 // Adopta un estado nuevo (del reducer, si soy el árbitro, o replicado por el árbitro): registra los cambios de
 // fase (sin roles), coloca a todos en la plaza si empezó una partida y reparte los eventos a los locales.
 // Como árbitro, además guarda los eventos para replicarlos y, si cambió la fase, replica enseguida.
-function commitMatch(result, { fromArbiter = false } = {}) {
+// allowPlaza: false cuando el estado llega por handover o es la primera adopción de un coordinador recién
+// llegado; ahí la partida NO acaba de empezar (solo nos enteramos), así que nadie se mueve a la plaza.
+function commitMatch(result, { fromArbiter = false, allowPlaza = true } = {}) {
     const previous = match;
     match = result.state;
     if (match.phase !== previous.phase) {
         console.log(`Partida ${match.matchId}: ${previous.phase} → ${match.phase} · roster ${Object.keys(match.roster).length}`);
     }
     // Empezó una partida nueva: todo el roster aparece en su punto de la plaza, quieto
-    if (match.matchId > previous.matchId && match.phase === "playing") placeRosterAtPlaza();
+    if (allowPlaza && match.matchId > previous.matchId && match.phase === "playing") placeRosterAtPlaza();
     deliverEvents(result.events);
     if (!fromArbiter) {
         pendingEvents.push(...result.events);
@@ -542,8 +544,25 @@ function replyArbiterUnavailable(userId, action) {
     send(p.socket, { type: "event", kind, ok: false, ...(kind === "mission_result" && { missionId: action.missionId ?? null }), reason: "arbiter_unavailable" });
 }
 
+// Espera de sincronización (decisión 18): un árbitro recién elegido SIN estado, o que acaba de unirse a una malla
+// (pasó de 0 a 1 peers), espera hasta GAME_SYNC_WAIT_MS el handover del árbitro anterior antes de avanzar,
+// procesar acciones o replicar; así nunca replica un estado vacío encima de una partida en curso.
+let syncUntil = 0;
+function startSyncWait(why) {
+    syncUntil = Date.now() + cfg.GAME_SYNC_WAIT_MS;
+    console.log(`${COORDINATOR_ID} es el árbitro (${why}): espera hasta ${cfg.GAME_SYNC_WAIT_MS} ms un handover`);
+}
+
 // ¿El árbitro (yo) puede procesar acciones y avanzar la partida?
-const arbiterReady = () => isArbiter();
+function arbiterReady() {
+    if (!isArbiter()) return false;
+    if (syncUntil === 0) return true;
+    if (Date.now() < syncUntil) return false;
+    syncUntil = 0;
+    hasState = true;
+    console.log(`Sin handover: ${COORDINATOR_ID} sigue con su estado (partida ${match.matchId}, ${match.phase})`);
+    return true;
+}
 
 // Acción de un jugador local (ya validada). Si soy el árbitro la proceso; si no, la reenvío al árbitro por su
 // conexión de peer; si no hay conexión ready con él, el cliente recibe 'arbiter_unavailable'.
@@ -637,10 +656,20 @@ function onGameState(msg) {
         incoming: { matchId: msg.match.matchId, rev: msg.match.rev },
     });
     if (!adopt) return;
+    const hadState = hasState;
     hasState = true;
+    // Handover (b): soy el árbitro y recibo la partida del anterior; termina la espera y la replico enseguida
+    if (isArbiter()) {
+        syncUntil = 0;
+        console.log(`Handover recibido de ${msg.origin}: ${COORDINATOR_ID} sigue la partida ${msg.match.matchId} (${msg.match.phase})`);
+        commitMatch({ state: msg.match, events: msg.events }, { fromArbiter: true, allowPlaza: false });
+        sendViewsToLocals();
+        replicate();
+        return;
+    }
     // La réplica periódica sin novedades no cambia nada: no hace falta reenviar las vistas
     if (msg.match.matchId === match.matchId && msg.match.rev === match.rev && msg.events.length === 0) return;
-    commitMatch({ state: msg.match, events: msg.events }, { fromArbiter: true });
+    commitMatch({ state: msg.match, events: msg.events }, { fromArbiter: true, allowPlaza: hadState });
     sendViewsToLocals();
 }
 
@@ -652,8 +681,16 @@ function recomputeArbiter() {
     return before;
 }
 
-function onPeerReady() {
-    recomputeArbiter();
+function onPeerReady(peerId) {
+    const before = recomputeArbiter();
+    // Árbitro saliente: aparece un id menor → le paso la partida actual (handover)
+    if (before === COORDINATOR_ID && arbiterId === peerId) {
+        net.sendToPeer(peerId, { type: "game_state", origin: COORDINATOR_ID, handover: true, match, events: [] });
+        console.log(`Handover a ${peerId}: partida ${match.matchId} (${match.phase})`);
+    }
+    if (!isArbiter()) return;
+    if (!hasState) startSyncWait("sin estado");
+    else if (net.readyPeerIds().length === 1 && before === COORDINATOR_ID && syncUntil === 0) startSyncWait("se unió a la malla");
 }
 
 // Relevo por caída: si el que se fue era el árbitro, el siguiente de menor id asume con el último estado
@@ -661,6 +698,7 @@ function onPeerReady() {
 function onPeerClosed(peerId) {
     const before = recomputeArbiter();
     if (before === peerId && isArbiter()) {
+        if (!hasState && net.readyPeerIds().length > 0) return startSyncWait("relevo sin estado");
         console.log(`Relevo: ${COORDINATOR_ID} asume la partida ${match.matchId} (${match.phase}) tras la caída de ${peerId}`);
         replicate(); // los seguidores adoptan enseguida al nuevo árbitro
     }
