@@ -1,0 +1,386 @@
+/* HUD de la partida de Viruscity (Fase V4) sobre la página del juego en vivo (play.css).
+   Paleta: --bg #0b1020, --panel #121a33, --border #2a3560, --text #e6e9f5, --accent #4dd2ff,
+   --infected #7cff6b, --danger #ff4d6d, --cure #ffd166 (siempre con valor de respaldo).
+   Filas superiores: --vc-top es la altura donde empieza el HUD, debajo de la barra del juego. hud.js la
+   recalcula con la altura real de la barra (que crece al envolverse en pantallas angostas); estos valores
+   son el respaldo.
+   Medidas fijas de componente: barra de cura de 12px, panel de misiones de 320px, avisos de hasta 560px. */
+
+.play {
+    --vc-top: 84px;
+    --vc-row: 44px;
+}
+
+/* Superficie común (igual que los paneles de play.css) */
+.vc-phase,
+.vc-cure,
+.vc-chip,
+.vc-hint,
+.vc-banner,
+.vc-toast {
+    border: 1px solid var(--border, #2a3560);
+    background: color-mix(in srgb, var(--panel, #121a33) 88%, transparent);
+    backdrop-filter: blur(10px);
+    box-shadow: var(--shadow-1, none);
+}
+
+/* La columna derecha empieza en la fila del HUD (debajo de la barra real del juego) */
+.play-right {
+    top: var(--vc-top);
+    max-height: calc(100% - var(--vc-top) - 80px);
+}
+
+/* Los avisos del juego bajan una fila para no tapar la barra de cura */
+.play-notice { top: calc(var(--vc-top) + var(--vc-row) + 4px); }
+
+.play-notice--cluster { top: calc(var(--vc-top) + 2 * var(--vc-row) + 4px); }
+
+/* ---------- Arriba a la izquierda: fase y temporizador ---------- */
+.vc-phase {
+    position: absolute;
+    top: var(--vc-top);
+    left: var(--space-3, 12px);
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3, 12px);
+    padding: var(--space-1, 4px) var(--space-1, 4px) var(--space-1, 4px) var(--space-3, 12px);
+    border-radius: var(--radius-l, 20px);
+    font-family: var(--font-mono, monospace);
+    font-size: var(--fs-s, .8125rem);
+    font-weight: 700;
+    letter-spacing: .12em;
+}
+
+.vc-phase[data-phase="countdown"] { border-color: var(--cure, #ffd166); }
+
+.vc-phase[data-phase="playing"] { border-color: var(--accent, #4dd2ff); }
+
+.vc-phase[data-phase="ended"] { border-color: var(--muted, #8f9bc4); }
+
+.vc-phase__label { color: var(--text, #e6e9f5); }
+
+.vc-phase__timer {
+    min-width: 5ch;
+    padding: var(--space-1, 4px) var(--space-2, 8px);
+    border-radius: var(--radius-m, 12px);
+    background: var(--bg, #0b1020);
+    color: var(--cure, #ffd166);
+    letter-spacing: .04em;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Arriba al centro: barra de cura ---------- */
+.vc-cure {
+    position: absolute;
+    top: var(--vc-top);
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: var(--space-2, 8px);
+    width: clamp(200px, calc(100% - 620px), 440px);
+    padding: var(--space-2, 8px) var(--space-3, 12px);
+    border-color: color-mix(in srgb, var(--cure, #ffd166) 55%, var(--border, #2a3560));
+    border-radius: var(--radius-l, 20px);
+    font-family: var(--font-mono, monospace);
+    font-size: var(--fs-s, .8125rem);
+    font-weight: 700;
+}
+
+.vc-cure__label {
+    color: var(--cure, #ffd166);
+    letter-spacing: .16em;
+}
+
+.vc-cure__bar {
+    flex: 1;
+    height: 12px;
+    overflow: hidden;
+    border: 1px solid var(--border, #2a3560);
+    border-radius: var(--radius-s, 8px);
+    background: var(--bg, #0b1020);
+}
+
+.vc-cure__fill {
+    width: 0;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--cure, #ffd166) 70%, var(--bg, #0b1020)), var(--cure, #ffd166));
+    box-shadow: 0 0 12px color-mix(in srgb, var(--cure, #ffd166) 60%, transparent);
+    transition: width 600ms var(--ease, ease);
+}
+
+.vc-cure__value {
+    min-width: 5ch;
+    color: var(--text, #e6e9f5);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Arriba a la derecha: jugadores para empezar (primera fila de .play-right) ---------- */
+.vc-chip {
+    margin: 0;
+    padding: var(--space-1, 4px) var(--space-3, 12px);
+    border-radius: var(--radius-l, 20px);
+    font-family: var(--font-mono, monospace);
+    font-size: var(--fs-s, .8125rem);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Abajo a la izquierda: misiones encima del panel del personaje ---------- */
+.vc-left {
+    position: absolute;
+    left: var(--space-3, 12px);
+    bottom: var(--space-3, 12px);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2, 8px);
+    width: 320px;
+    max-height: calc(100% - var(--vc-top) - var(--vc-row) - 24px);
+}
+
+/* El panel del personaje deja de ser absoluto: lo ubica la columna */
+.vc-left .play-look-panel {
+    position: static;
+    width: auto;
+    max-height: none;
+    min-height: 0;
+    flex: 0 1 auto;
+}
+
+.vc-missions {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.vc-missions__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: var(--space-1, 4px);
+    max-height: min(32dvh, 280px);
+    overflow-y: auto;
+}
+
+.vc-mission {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: var(--space-2, 8px);
+    padding: var(--space-1, 4px) var(--space-2, 8px);
+    border: 1px solid var(--border, #2a3560);
+    border-left: 4px solid var(--cure, #ffd166);
+    border-radius: var(--radius-m, 12px);
+    background: color-mix(in srgb, var(--panel-2, #18223f) 90%, transparent);
+    font-size: var(--fs-s, .8125rem);
+}
+
+.vc-mission[data-status="in_progress"] { border-left-color: var(--accent, #4dd2ff); }
+
+.vc-mission[data-status="done"] {
+    border-left-color: var(--muted, #8f9bc4);
+    opacity: .7;
+}
+
+.vc-mission.is-mine { border-color: var(--accent, #4dd2ff); }
+
+.vc-mission__title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 700;
+}
+
+.vc-mission__zone {
+    grid-column: 1;
+    color: var(--muted, #8f9bc4);
+}
+
+.vc-mission__status {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-self: center;
+    padding: 0 var(--space-2, 8px);
+    border-radius: var(--radius-l, 20px);
+    background: var(--bg, #0b1020);
+    color: var(--cure, #ffd166);
+    font-family: var(--font-mono, monospace);
+    font-weight: 700;
+}
+
+.vc-mission[data-status="in_progress"] .vc-mission__status { color: var(--accent, #4dd2ff); }
+
+.vc-mission[data-status="done"] .vc-mission__status { color: var(--muted, #8f9bc4); }
+
+/* ---------- Abajo al centro: pista contextual y avisos ---------- */
+.vc-hint {
+    position: absolute;
+    left: 50%;
+    bottom: 128px;
+    transform: translateX(-50%);
+    max-width: min(560px, calc(100% - 24px));
+    margin: 0;
+    padding: var(--space-2, 8px) var(--space-4, 16px);
+    border-color: var(--accent, #4dd2ff);
+    border-radius: var(--radius-l, 20px);
+    color: var(--text, #e6e9f5);
+    font-family: var(--font-mono, monospace);
+    font-size: var(--fs-s, .8125rem);
+    font-weight: 700;
+    text-align: center;
+    z-index: 3;
+    pointer-events: none;
+}
+
+.vc-toasts {
+    position: absolute;
+    left: 50%;
+    bottom: 176px;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2, 8px);
+    width: min(560px, calc(100% - 24px));
+    z-index: 3;
+    pointer-events: none;
+}
+
+.vc-toast {
+    margin: 0;
+    padding: var(--space-2, 8px) var(--space-4, 16px);
+    border-left: 4px solid var(--border, #2a3560);
+    border-radius: var(--radius-m, 12px);
+    color: var(--text, #e6e9f5);
+    font-size: var(--fs-s, .8125rem);
+    font-weight: 600;
+    text-align: center;
+    animation: vc-toast-in var(--t-med, 240ms) var(--ease, ease);
+}
+
+.vc-toast[data-tone="accent"] { border-left-color: var(--accent, #4dd2ff); }
+
+.vc-toast[data-tone="cure"] { border-left-color: var(--cure, #ffd166); }
+
+.vc-toast[data-tone="infected"] { border-left-color: var(--infected, #7cff6b); }
+
+.vc-toast[data-tone="danger"] { border-left-color: var(--danger, #ff4d6d); }
+
+@keyframes vc-toast-in {
+    from { opacity: 0; transform: translateY(8px); }
+}
+
+/* ---------- Centro: cuenta regresiva ---------- */
+.vc-banner {
+    position: absolute;
+    top: 38%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    max-width: calc(100% - 24px);
+    padding: var(--space-4, 16px) var(--space-6, 32px);
+    border-color: var(--cure, #ffd166);
+    border-radius: var(--radius-l, 20px);
+    box-shadow: 0 0 32px color-mix(in srgb, var(--cure, #ffd166) 30%, transparent);
+    z-index: 2;
+    pointer-events: none;
+}
+
+.vc-banner__text {
+    margin: 0;
+    color: var(--cure, #ffd166);
+    font-family: var(--font-mono, monospace);
+    font-size: clamp(1.25rem, 4.5vw, 2.5rem);
+    font-weight: 800;
+    letter-spacing: .06em;
+    text-align: center;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    animation: vc-banner-pulse 1s ease-in-out infinite;
+}
+
+@keyframes vc-banner-pulse {
+    50% { transform: scale(1.04); }
+}
+
+/* ---------- Movimiento reducido: sin pulsos; solo transiciones de opacidad ---------- */
+@media (prefers-reduced-motion: reduce) {
+    .vc-cure__fill { transition: opacity var(--t-fast, 120ms) linear; }
+
+    .vc-banner__text { animation: none; }
+
+    .vc-toast { animation: vc-fade-in var(--t-med, 240ms) linear; }
+}
+
+@keyframes vc-fade-in {
+    from { opacity: 0; }
+}
+
+/* ---------- Menos de 800px: la barra de cura ocupa todo el ancho y la fase baja una fila ---------- */
+@media (max-width: 799.98px) {
+    .vc-cure {
+        left: var(--space-3, 12px);
+        right: var(--space-3, 12px);
+        width: auto;
+        transform: none;
+    }
+
+    .vc-phase { top: calc(var(--vc-top) + var(--vc-row)); }
+
+    .play-right {
+        top: calc(var(--vc-top) + var(--vc-row));
+        max-height: calc(100% - var(--vc-top) - var(--vc-row) - 80px);
+    }
+
+    .play-notice { top: calc(var(--vc-top) + 2 * var(--vc-row) + 4px); }
+
+    .play-notice--cluster { top: calc(var(--vc-top) + 3 * var(--vc-row) + 4px); }
+
+    .vc-left { max-height: calc(100% - var(--vc-top) - 2 * var(--vc-row) - 24px); }
+}
+
+/* ---------- Móvil (menos de 700px): la barra del juego es más alta; todo más compacto ---------- */
+@media (max-width: 699.98px) {
+    .play { --vc-top: 128px; }
+
+    .vc-cure {
+        left: var(--space-2, 8px);
+        right: var(--space-2, 8px);
+    }
+
+    /* Fase y columna derecha no caben en la misma fila: la fase va arriba, la cura después */
+    .vc-phase {
+        top: var(--vc-top);
+        left: var(--space-2, 8px);
+    }
+
+    .vc-cure { top: calc(var(--vc-top) + var(--vc-row)); }
+
+    .play-right {
+        top: calc(var(--vc-top) + 2 * var(--vc-row));
+        max-height: calc(100% - var(--vc-top) - 2 * var(--vc-row) - 72px);
+    }
+
+    .vc-left {
+        left: var(--space-2, 8px);
+        bottom: var(--space-2, 8px);
+        width: min(320px, calc(100% - 16px - 56px));
+        max-height: calc(100% - var(--vc-top) - 3 * var(--vc-row) - 16px);
+    }
+
+    .vc-hint {
+        bottom: 112px;
+        max-width: calc(100% - 128px);
+    }
+
+    .vc-banner { padding: var(--space-3, 12px) var(--space-4, 16px); }
+
+    .vc-banner__text { font-size: 1.125rem; }
+
+    .vc-toasts {
+        bottom: 160px;
+        width: calc(100% - 128px);
+    }
+}

@@ -23,7 +23,9 @@ import { createRadio, STATION, estimateOffset } from "./radio.js";
 import { createDialogue } from "./dialogue.js";
 import { sceneAt, WORLD_SCENE } from "./map/scenes.js";
 import { parseCoordinatorResponse, buildWsUrl, isMixedContent, nextDelay, classifyClose, MAX_ATTEMPTS } from "./directory.js";
-import { parseServerMessage, parseCity } from "../vc/view.js";
+import { parseServerMessage, parseCity, parseRules, eventText, eventTone } from "../vc/view.js";
+import { createClock } from "../vc/clock.js";
+import { createHud } from "../vc/hud.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -43,6 +45,7 @@ const TOKEN_REMOVED_MESSAGE = "Tu sesión se cerró. Inicia sesión de nuevo.";
 const UNSTABLE_AFTER_MS = 3 * 1000; // sin state durante más de 3 s → aviso
 const MAX_FRAME_DT = 0.05;
 const NARROW_QUERY = "(max-width: 699.98px)"; // en pantallas angostas los paneles empiezan plegados
+const MISSIONS_NARROW_QUERY = "(max-width: 799.98px)"; // por debajo de 800px el panel de misiones empieza plegado
 const HUD_EVERY_MS = 250; // zona, hora y lista se refrescan 4 veces por segundo (no en cada cuadro)
 const PROVIDER_LABELS = { google: "Google", local: "Local" };
 const OFFSET_SAMPLES = 40; // muestras para estimar la hora del servidor (radio sincronizada)
@@ -108,6 +111,12 @@ function startGame(token) {
     let welcomeAt = 0;
     const offsetSamples = [];
     let serverOffset = 0; // hora del servidor ≈ Date.now() + serverOffset
+
+    // Viruscity: reloj de la partida (serverTime de cada 'game'), reglas y ciudad de welcome, y el HUD
+    const clock = createClock();
+    let rules = parseRules(null);
+    let matchCity = null;
+    const hud = createHud();
 
     // Cabecera: username y proveedor (solo para mostrar; el servidor manda el suyo en welcome)
     const provider = payload?.provider;
@@ -238,13 +247,21 @@ function startGame(token) {
         if (!parsed) return;
         if (parsed.kind === "game") {
             setLastGame(parsed.msg);
+            clock.sync(parsed.msg.serverTime, Date.now());
+            refreshGameHud();
+            return;
+        }
+        if (parsed.kind === "event") {
+            onGameEvent(parsed.msg);
             return;
         }
         const msg = parsed.msg;
 
         if (msg.type === "welcome") {
             // Ciudad de la partida (zonas, estaciones y plaza): se dibuja debajo de los jugadores
-            renderer.setCity(parseCity(msg.city));
+            matchCity = parseCity(msg.city);
+            renderer.setCity(matchCity);
+            rules = parseRules(msg.game);
             if (typeof msg.coordinatorId === "string" && msg.coordinatorId) coordinatorId = msg.coordinatorId;
             const w = msg.world;
             if (w && [w.width, w.height, w.playerRadius].every(Number.isFinite)) {
@@ -285,6 +302,7 @@ function startGame(token) {
         ws = null;
         window.lastState = null;
         setLastGame(null);
+        hud.reset();
         setCoordinatorPill(null, null);
         retry((n) => `Conexión perdida con ${previous}. Buscando otro coordinador… (intento ${n})`);
     }
@@ -471,6 +489,25 @@ function startGame(token) {
         sendJson({ type: "extras_update", extras });
     }
 
+    // ---------- Partida de Viruscity: HUD y eventos ----------
+    const missionsNarrow = window.matchMedia(MISSIONS_NARROW_QUERY).matches;
+    // Preferencia distinta para pantallas angostas: allí el panel empieza plegado aunque en escritorio esté abierto
+    setupCollapsible("vcMissionsToggle", "vcMissionsBody", missionsNarrow ? "vcMissionsOpenNarrow" : "vcMissionsOpen", !missionsNarrow);
+
+    // Datos para el HUD: el último 'game', la hora y la posición del jugador local según el servidor
+    function refreshGameHud() {
+        const players = window.lastState?.players ?? [];
+        const mine = players.find((p) => p.userId === me.userId);
+        const pos = mine && Number.isFinite(mine.x) && Number.isFinite(mine.y) ? { x: mine.x, y: mine.y } : null;
+        hud.update({ game: lastGame, clock, localNow: Date.now(), pos, players, selfId: me.userId, city: matchCity, rules });
+    }
+
+    // Eventos de la partida: aviso de 3 s y, según el kind, refresco inmediato del HUD
+    function onGameEvent(event) {
+        if (event.kind !== "match_started") hud.toast(eventText(event), eventTone(event));
+        if (event.kind === "match_ended" || event.kind === "match_cancelled") refreshGameHud();
+    }
+
     // ---------- Lista de jugadores, zona y hora ----------
     const playersPanel = createPlayersPanel($("playerList"), $("playerCount"));
     const withMap = () => renderer.hasCity();
@@ -482,6 +519,7 @@ function startGame(token) {
         playersPanel.update(state?.players ?? [], me.userId, (p) => (withMap() && Number.isFinite(p.x) ? areaName(p.x, p.y) : null));
         $("hudArea").textContent = renderer.area() ?? "Virus City";
         $("radioTitle").textContent = radioText();
+        refreshGameHud();
         // Minimapa solo en la ciudad (sin mapa del servidor o dentro de un local se oculta)
         $("minimap").hidden = !withMap() || renderer.scene() !== WORLD_SCENE;
         if (state && Number.isFinite(state.t)) {

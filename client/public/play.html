@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="css/tokens.css">
 <link rel="stylesheet" href="css/base.css">
 <link rel="stylesheet" href="css/play.css">
+<link rel="stylesheet" href="css/vc.css">
 </head>
 <body class="play">
 <!-- El mapa ocupa toda la pantalla; todo lo demás va superpuesto -->
@@ -45,8 +46,25 @@
     <!-- Aviso del clúster: reconexión a otro coordinador, sin coordinadores, contenido mixto -->
     <div id="clusterNotice" class="play-notice play-notice--cluster" role="status" aria-live="polite" hidden></div>
 
+    <!-- Viruscity: HUD de la partida (el contenido lo pone js/vc/hud.js con textContent) -->
+    <div id="vcPhase" class="vc-phase" hidden>
+        <span id="vcPhaseLabel" class="vc-phase__label" aria-live="polite">MUNDO ABIERTO</span>
+        <span id="vcTimer" class="vc-phase__timer" hidden>0:00</span>
+    </div>
+    <div id="vcCure" class="vc-cure" hidden>
+        <span class="vc-cure__label" aria-hidden="true">CURA</span>
+        <div id="vcCureBar" class="vc-cure__bar" role="progressbar" aria-label="Cura" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div id="vcCureFill" class="vc-cure__fill"></div>
+        </div>
+        <span id="vcCureText" class="vc-cure__value" aria-hidden="true">0 %</span>
+    </div>
+    <div id="vcBanner" class="vc-banner" hidden>
+        <p id="vcBannerText" class="vc-banner__text"></p>
+    </div>
+
     <!-- Columna derecha: minimapa y jugadores en línea -->
     <div class="play-right">
+        <p id="vcPlayers" class="vc-chip" hidden></p>
         <canvas id="minimap" class="play-minimap" width="160" height="120" role="img" aria-label="Minimapa: tu posición y la de los demás jugadores"></canvas>
         <section class="play-float" aria-labelledby="playersToggle">
             <h2 class="play-float__head">
@@ -62,7 +80,22 @@
         </section>
     </div>
 
-    <!-- Abajo a la izquierda: personaje, colores y poder -->
+    <!-- Abajo a la izquierda: misiones de la partida (Viruscity) encima del panel del personaje -->
+    <div class="vc-left">
+    <section id="vcMissions" class="play-float vc-missions" aria-labelledby="vcMissionsToggle" hidden>
+        <h2 class="play-float__head">
+            <button id="vcMissionsToggle" type="button" class="play-float__toggle" aria-expanded="true" aria-controls="vcMissionsBody">
+                <span>Misiones</span>
+                <span class="play-count" id="vcMissionsCount">0/0</span>
+                <span class="play-float__chevron" aria-hidden="true"></span>
+            </button>
+        </h2>
+        <div id="vcMissionsBody" class="play-float__body">
+            <ul id="vcMissionList" class="vc-missions__list"></ul>
+        </div>
+    </section>
+
+    <!-- Personaje, colores y poder -->
     <section class="play-float play-look-panel" aria-labelledby="lookToggle">
         <h2 class="play-float__head">
             <button id="lookToggle" type="button" class="play-float__toggle" aria-expanded="true" aria-controls="lookBody">
@@ -116,6 +149,11 @@
             </div>
         </div>
     </section>
+    </div>
+
+    <!-- Abajo al centro: avisos de la partida (3 s) y pista contextual -->
+    <div id="vcToasts" class="vc-toasts" role="status" aria-live="polite"></div>
+    <p id="vcHint" class="vc-hint" hidden></p>
 
     <!-- Conversación con vecinos y carteles (local: no viaja por la red) -->
     <div id="dialogue" class="play-dialogue" role="dialog" aria-labelledby="dlgSpeaker" aria-describedby="dlgText" hidden>
