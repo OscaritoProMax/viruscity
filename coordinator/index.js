@@ -117,8 +117,10 @@ const net = createPeerNetwork({
     // Partida (V3): estado replicado por el árbitro y acciones reenviadas por los dueños de los jugadores
     onGameMessage: (peerId, action) => {
         if (action.type === "game_state") onGameState(action);
+        else if (action.type === "game_action") onRemoteAction(peerId, action);
     },
     onPeerReady: (peerId) => onPeerReady(peerId),
+    onPeerClosed: (peerId) => onPeerClosed(peerId),
 });
 
 // Los eventos de los jugadores LOCALES se anuncian a los peers (cada uno solo habla de los suyos)
@@ -543,10 +545,29 @@ function replyArbiterUnavailable(userId, action) {
 // ¿El árbitro (yo) puede procesar acciones y avanzar la partida?
 const arbiterReady = () => isArbiter();
 
-// Acción de un jugador local (ya validada). Si soy el árbitro la proceso; si no, no hay árbitro disponible.
+// Acción de un jugador local (ya validada). Si soy el árbitro la proceso; si no, la reenvío al árbitro por su
+// conexión de peer; si no hay conexión ready con él, el cliente recibe 'arbiter_unavailable'.
 function handleAction(userId, action) {
-    if (!isArbiter()) return replyArbiterUnavailable(userId, action);
-    if (!arbiterReady()) return replyArbiterUnavailable(userId, action);
+    if (isArbiter()) {
+        if (!arbiterReady()) return replyArbiterUnavailable(userId, action);
+        return processAction(userId, action);
+    }
+    const msg = { type: "game_action", origin: COORDINATOR_ID, userId, action: { kind: action.kind, ...(action.missionId && { missionId: action.missionId }) } };
+    if (!net.sendToPeer(arbiterId, msg)) replyArbiterUnavailable(userId, action);
+}
+
+// Acción reenviada por otro coordinador. mesh.js ya comprobó que ese peer es el DUEÑO del jugador (decisión 13).
+// Solo el árbitro la procesa; si llega a otro coordinador se ignora (se avisa una sola vez en el log).
+let warnedNotArbiter = false;
+function onRemoteAction(peerId, { userId, action }) {
+    if (!isArbiter()) {
+        if (!warnedNotArbiter) {
+            console.warn(`Acción de partida recibida de ${peerId} sin ser el árbitro (${arbiterId}): se ignora`);
+            warnedNotArbiter = true;
+        }
+        return;
+    }
+    if (!arbiterReady()) return; // esperando el handover: el estado todavía no es el bueno
     processAction(userId, action);
 }
 
@@ -633,6 +654,16 @@ function recomputeArbiter() {
 
 function onPeerReady() {
     recomputeArbiter();
+}
+
+// Relevo por caída: si el que se fue era el árbitro, el siguiente de menor id asume con el último estado
+// replicado (hasState) y sigue de inmediato, sin reiniciar nada. Sus jugadores pasan a la gracia.
+function onPeerClosed(peerId) {
+    const before = recomputeArbiter();
+    if (before === peerId && isArbiter()) {
+        console.log(`Relevo: ${COORDINATOR_ID} asume la partida ${match.matchId} (${match.phase}) tras la caída de ${peerId}`);
+        replicate(); // los seguidores adoptan enseguida al nuevo árbitro
+    }
 }
 
 // ---------- Arranque ----------
