@@ -17,6 +17,7 @@ const { makeGoogleVerifier } = require("./google.js");
 const { createApp } = require("./app.js");
 const { createDirectory } = require("./directory.js");
 const { loadConfig, envFileArg } = require("./config.js");
+const { createStandaloneReplication } = require("./replication/standalone.js");
 
 // ---------- Configuración ----------
 
@@ -59,6 +60,11 @@ const { googleClientId: GOOGLE_CLIENT_ID, clusterSecret: CLUSTER_SECRET, coordin
 const db = new DatabaseSync(DB_PATH);
 ensureSchema(db, { dbPath: DB_PATH });
 
+// Replicación (Taller 7): un nodo único es el líder de un clúster de uno. Una BD heredada sin oplog recibe
+// sus entradas "legacy" (una por usuario) para poder replicarse después.
+const replication = createStandaloneReplication({ db, cfg: { authId: conf.authId, publicUrl: conf.publicUrl, peerUrl: conf.peerUrl } });
+if (replication.legacyEntries > 0) console.log(`[db] oplog inicial: ${replication.legacyEntries} entradas legacy creadas a partir de users`);
+
 // ---------- App ----------
 // El Client ID es público; el Client Secret no se usa ni se guarda
 const verifyGoogle = makeGoogleVerifier(new OAuth2Client(GOOGLE_CLIENT_ID), GOOGLE_CLIENT_ID);
@@ -78,6 +84,7 @@ const app = createApp({
     verifyGoogle,
     directory,
     clusterSecret: CLUSTER_SECRET,
+    replication,
 });
 
 const server = app.listen(PORT, (err) => {
@@ -98,6 +105,7 @@ function shutdown(signal) {
     shuttingDown = true;
     console.log(`${signal} recibido, cerrando auth service...`);
     clearInterval(sweepTimer);
+    replication.close();
 
     server.close(() => {
         db.close();
