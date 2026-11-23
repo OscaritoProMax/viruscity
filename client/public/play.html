@@ -26,6 +26,8 @@
             </span>
             <!-- Coordinador al que está conectada esta pestaña (Taller 6) -->
             <span id="coordPill" class="play-pill play-pill--coord"><span id="coordText">Coordinador: —</span></span>
+            <!-- Taller 7: qué auth-service respondió la última petición (js/auth-node.js) -->
+            <span class="play-pill play-pill--coord"><span id="authNode" aria-live="polite">Auth: —</span></span>
             <!-- Zona y hora del juego (la hora sale del reloj del servidor: es la misma para todos) -->
             <span class="play-hud" aria-live="polite">
                 <span class="play-hud__item"><span class="play-hud__label">Zona</span> <span id="hudArea">Virus City</span></span>
@@ -147,6 +149,7 @@
 
 <script src="/config.js"></script>
 <script src="js/auth-fetch.js"></script>
+<script src="js/auth-node.js"></script>
 <script type="module" src="js/play/play.js"></script>
 </body>
 </html>

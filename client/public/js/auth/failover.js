@@ -4,6 +4,7 @@
 // normalizeUrl(u)                         → URL sin barras finales ("" si no es texto)
 // isAllowedLeaderUrl(leaderUrl, urls)     → true solo si es EXACTAMENTE (normalizada) una entrada de AUTH_URLS
 // classifyResponse(status, body, urls)    → 'return' | 'follow' | 'next' | 'retry'
+// authNodeLabel(info)                     → "Auth: auth-b (líder)" | "Auth: auth-a (réplica)" | "Auth: —" (decisión 17)
 // createAuthClient({ urls, fetchImpl, sleep, now, timeoutMs, budgetMs }) → { request(path, init), lastNode() }
 //   request → Promise<{ response, authId, authRole, retried, nodeUrl }>; si se agota el presupuesto lanza
 //   AuthUnavailableError con el último motivo (reason) y, si el último nodo respondió, su status y su cuerpo
@@ -23,6 +24,15 @@ export const RETRY_ERRORS = Object.freeze(["no_leader", "no_quorum", "replicatio
 export const PASS_PAUSE_MS = 1000;
 export const DEFAULT_TIMEOUT_MS = 4000;
 export const DEFAULT_BUDGET_MS = 12000;
+
+// Texto del indicador del auth que respondió (X-Auth-Id y X-Auth-Role de la última respuesta)
+const ROLE_LABELS = { leader: "líder", replica: "réplica" };
+export function authNodeLabel(info) {
+    const id = typeof info?.authId === "string" && info.authId ? info.authId : null;
+    if (!id) return "Auth: —";
+    const role = ROLE_LABELS[info.authRole];
+    return role ? `Auth: ${id} (${role})` : `Auth: ${id}`;
+}
 
 export class AuthUnavailableError extends Error {
     constructor(reason, last = {}) {

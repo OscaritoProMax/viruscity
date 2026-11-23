@@ -268,6 +268,14 @@
 
 .field__toggle[aria-pressed="true"] .icon-eye-off { display: block; }
 
+.auth__node {
+    margin: var(--space-3, 12px) 0 0;
+    color: var(--muted, #8f9bc4);
+    font-family: var(--font-mono, monospace);
+    font-size: var(--fs-s, .8125rem);
+    text-align: center;
+}
+
 .auth__footer {
     color: var(--muted);
     font-size: var(--fs-s);

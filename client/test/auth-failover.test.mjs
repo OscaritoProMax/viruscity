@@ -1,7 +1,7 @@
 // Pruebas de la lógica de failover entre auth-services (js/auth/failover.js) con fetch, sleep y reloj falsos.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeUrl, isAllowedLeaderUrl, classifyResponse, createAuthClient, AuthUnavailableError, PASS_PAUSE_MS } from "../public/js/auth/failover.js";
+import { normalizeUrl, isAllowedLeaderUrl, classifyResponse, createAuthClient, AuthUnavailableError, PASS_PAUSE_MS, authNodeLabel } from "../public/js/auth/failover.js";
 
 const URLS = ["http://localhost:4001", "http://localhost:4002", "http://localhost:4003"];
 
@@ -151,4 +151,12 @@ test("recuerda el último nodo bueno y empieza por él; las peticiones son secue
     assert.equal(r.nodeUrl, URLS[2]);
     assert.equal(client.lastNode(), URLS[2]);
     assert.equal(maxInFlight, 1, "nunca dos peticiones a la vez");
+});
+
+test("authNodeLabel: texto del indicador del auth (decisión 17)", () => {
+    assert.equal(authNodeLabel({ authId: "auth-b", authRole: "leader" }), "Auth: auth-b (líder)");
+    assert.equal(authNodeLabel({ authId: "auth-a", authRole: "replica" }), "Auth: auth-a (réplica)");
+    assert.equal(authNodeLabel({ authId: "auth-solo", authRole: null }), "Auth: auth-solo");
+    assert.equal(authNodeLabel(null), "Auth: —");
+    assert.equal(authNodeLabel({ authId: "" }), "Auth: —");
 });
