@@ -2,7 +2,8 @@
 //
 // 1. Si window.APP_CONFIG.GOOGLE_CLIENT_ID está vacío, #googleSlot queda oculto y no se hace nada.
 // 2. Espera a que cargue https://accounts.google.com/gsi/client (máx. 5 s) y dibuja el botón (sin One Tap).
-// 3. Con el ID token (credential) llama a POST {AUTH_URL}/auth/google { idToken } y, si hace falta,
+// 3. Con el ID token (credential) llama a POST /auth/google { idToken } (window.authFetch, con failover entre
+//    los auth-services del Taller 7) y, si hace falta,
 //    pide un username y reintenta con { idToken, username }.
 // El idToken y el token de sesión nunca se escriben en la consola. Todo el texto va con textContent.
 
@@ -10,7 +11,6 @@ import { interpretGoogleResponse } from "./google-flow.js";
 
 const CONFIG = window.APP_CONFIG ?? {};
 const CLIENT_ID = typeof CONFIG.GOOGLE_CLIENT_ID === "string" ? CONFIG.GOOGLE_CLIENT_ID.trim() : "";
-const AUTH_URL = CONFIG.AUTH_URL;
 
 const WAIT_MS = 5 * 1000;
 const POLL_MS = 100;
@@ -24,6 +24,7 @@ const MESSAGES = {
     invalid: "No se pudo verificar tu cuenta de Google. Inténtalo de nuevo.",
     notVerified: "Tu correo de Google no está verificado.",
     network: "No se pudo conectar con el servicio de autenticación",
+    unavailable: "No hay servidores de autenticación disponibles. Inténtalo de nuevo en unos segundos.",
     empty: "Escribe un username.",
 };
 
@@ -124,11 +125,11 @@ function start() {
         let result;
         try {
             const body = username === undefined ? { idToken } : { idToken, username };
-            const res = await fetch(`${AUTH_URL}/auth/google`, { method: "POST", headers: HEADERS, body: JSON.stringify(body) });
+            const res = await window.authFetch("/auth/google", { method: "POST", headers: HEADERS, body: JSON.stringify(body) });
             const data = await res.json().catch(() => null);
             result = interpretGoogleResponse(res.status, data);
-        } catch {
-            result = { kind: "network" };
+        } catch (err) {
+            result = { kind: window.isAuthUnavailable(err) ? "unavailable" : "network" };
         } finally {
             setBusy(false);
         }
@@ -163,8 +164,8 @@ function start() {
                 show(result.message);
                 if (!panel.hidden) input.focus();
                 return;
-            default: // server_error o fallo de red
-                show(MESSAGES.network);
+            default: // server_error, fallo de red o ningún auth disponible
+                show(result.kind === "unavailable" ? MESSAGES.unavailable : MESSAGES.network);
         }
     }
 
