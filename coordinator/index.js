@@ -76,15 +76,17 @@ const hooks = {
     onLocalExtras(userId, extras) {}, // eslint-disable-line no-unused-vars
 };
 
-// Estado del heartbeat al auth (null = todavía sin respuesta)
+// Estado del heartbeat al clúster de auth (null = todavía sin respuesta): alcanzable si al menos un nodo
+// respondió; authNodesUp cuenta cuántos de AUTH_URLS respondieron en el último latido (Taller 7)
 let authReachable = null;
+let authNodesUp = { up: 0, total: conf.authUrls.length };
 
 // Mesh con los otros coordinadores (Taller 6): servidor de peers en PEER_PORT
 const net = createPeerNetwork({
     selfId: COORDINATOR_ID,
     peerPort: conf.peerPort,
     clusterSecret: conf.clusterSecret,
-    authUrl: conf.authUrl,
+    authUrls: conf.authUrls,
     discoveryMs: conf.peerDiscoveryMs,
     pingMs: conf.peerPingMs,
     syncMs: conf.peerSyncMs,
@@ -139,6 +141,7 @@ app.get("/status", (req, res) => {
         totalPlayers: players.size,
         peers: net.readyPeerIds(), // ids de peers con handshake completo
         authReachable: authReachable === true,
+        authNodesUp,
     });
 });
 
@@ -406,11 +409,11 @@ server.on("error", (err) => {
     process.exit(1);
 });
 
-// ---------- Heartbeat al directorio del auth (Taller 6, decisión 8) ----------
-// Cada HEARTBEAT_AUTH_MS informa sus jugadores LOCALES. Si el auth no responde, el coordinador sigue
-// funcionando; solo se registra el cambio de estado (alcanzable / no alcanzable), no cada latido.
+// ---------- Heartbeat al directorio del auth (Taller 6, decisión 8; Taller 7, decisión 15) ----------
+// Cada HEARTBEAT_AUTH_MS informa sus jugadores LOCALES a TODOS los auth de AUTH_URLS. Si ninguno responde, el
+// coordinador sigue funcionando; solo se registra cuando cambia cuántos responden, no cada latido.
 const stopAuthHeartbeat = startHeartbeatLoop({
-    authUrl: conf.authUrl,
+    authUrls: conf.authUrls,
     secret: conf.clusterSecret,
     intervalMs: conf.heartbeatAuthMs,
     info: () => ({
@@ -420,10 +423,11 @@ const stopAuthHeartbeat = startHeartbeatLoop({
         connectedPlayers: countLocal(players),
         uptime: Math.floor(process.uptime()),
     }),
-    onChange(up) {
+    onChange(up, { ok, total }) {
         authReachable = up;
-        if (up) console.log(`Auth alcanzable (${conf.authUrl}): ${COORDINATOR_ID} registrado en el directorio`);
-        else console.warn(`Auth NO alcanzable (${conf.authUrl}): el coordinador sigue funcionando y reintentará`);
+        authNodesUp = { up: ok, total };
+        if (up) console.log(`Auth: ${ok} de ${total} nodos responden · ${COORDINATOR_ID} registrado en su directorio`);
+        else console.warn(`Auth NO alcanzable: ninguno de los ${total} nodos responde; el coordinador sigue funcionando y reintentará`);
     },
 });
 

@@ -96,7 +96,7 @@ function startCoord(l) {
         PEER_PORT: String(peerPort(l)),
         PUBLIC_URL: `ws://localhost:${port(l)}`,
         PEER_URL: `ws://localhost:${peerPort(l)}`,
-        AUTH_URL: AUTH,
+        AUTH_URLS: AUTH,
         JWT_SECRET,
         CLUSTER_SECRET,
         MAP_FILE: "",
