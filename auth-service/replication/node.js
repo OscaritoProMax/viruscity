@@ -17,19 +17,36 @@
 // mayoría (él cuenta) dentro de WRITE_TIMEOUT_MS aplica localmente y espera hasta ACK_GRACE_MS al resto de
 // conectados; si vence, write_abort y 503 replication_timeout sin aplicar nada local. Si deja de ser líder
 // mientras espera, 503 not_leader (o no_leader). Las réplicas aplican al recibir y contestan write_ack.
+//
+// Conflictos (decisión 10): misma posición y mismo entryId → ack idempotente; distinta entrada en la ÚLTIMA
+// posición → se deshace y se aplica la nueva; más atrás, o una violación de unicidad → resincronización completa
+// (wipe + sync desde 0); hueco → request_sync. Solo se acepta replicación del líder del término actual o mayor.
+//
+// Sync (decisión 11): la réplica pide request_sync { fromSeq, fromEntryId } al conectar con el líder, cuando un
+// heartbeat (o el hello) muestra que va atrás o que su log difiere, o ante un hueco. Uno solo en vuelo; si no
+// hay respuesta en 2 × WRITE_TIMEOUT_MS, se reintenta. El líder contesta por lotes de SYNC_BATCH (done en el
+// último); si fromEntryId no coincide con su entrada en fromSeq, o fromSeq es mayor que su lastSeq, contesta
+// conflict:true con todo desde 1 y la réplica borra (wipe) antes de aplicar. Al terminar, la réplica manda un
+// heartbeat_ack en el siguiente ciclo para que el líder vea su nueva posición.
+//
+// Lecturas (decisión 12): con líder conocido y leaderSeq − mySeq < READ_TOLERANCE se sirven localmente; más
+// atrasada → 503 not_leader (con leaderUrl y leaderId de AUTH_NODES); sin líder (o en elección) → 503 no_leader.
 
 const crypto = require("node:crypto");
 const { createElectionState, step, majorityOf } = require("./election.js");
 const { createMutex } = require("./mutex.js");
 const {
-    bootstrapLegacy, lastPosition, entryAt, applyEntry, undoLast, getMeta, setMeta, countUsers, usersChecksum,
-    validateEntry, ConflictError, OrderError, OPS,
+    bootstrapLegacy, lastPosition, entryAt, entriesAfter, applyEntry, undoLast, wipe, getMeta, setMeta, countUsers,
+    usersChecksum, validateEntry, ConflictError, OrderError, OPS,
 } = require("../oplog.js");
 
 const TICK_MS = 100;
+const MAX_SYNC_ENTRIES = 5000; // tope de un lote recibido (SYNC_BATCH nunca pasa de 5000)
 const SILENT = { info() {}, warn() {} };
 const isCount = (v) => Number.isSafeInteger(v) && v >= 0;
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+const ELECTION_TYPES = new Set(["heartbeat", "heartbeat_ack", "election", "vote", "new_leader"]);
+const entryOf = (e) => ({ seq: e.seq, term: e.term, entryId: e.entryId, op: e.op, data: e.data });
 
 function createReplicationNode({ id, nodes, cfg, db, transport, clock, rng = Math.random, log = SILENT }) {
     const defs = nodes.map((n) => (typeof n === "string" ? { id: n, publicUrl: null, peerUrl: null } : n));
@@ -56,6 +73,8 @@ function createReplicationNode({ id, nodes, cfg, db, transport, clock, rng = Mat
 
     const mutex = createMutex();
     let pending = null; // escritura del líder esperando acks
+    let syncFlight = null; // { to, timer }: un solo request_sync en vuelo
+    let ackAfterSync = false;
     let closed = false;
     let tickTimer = null;
 
@@ -75,8 +94,6 @@ function createReplicationNode({ id, nodes, cfg, db, transport, clock, rng = Mat
 
     // ---------- Núcleo de elección ----------
 
-    const hooks = { onRequestSync: () => {}, afterLeaderMessage: () => {} };
-
     function runElection(event) {
         if (closed) return;
         const before = election;
@@ -93,7 +110,7 @@ function createReplicationNode({ id, nodes, cfg, db, transport, clock, rng = Mat
             } else if (a.type === "broadcast") {
                 for (const to of connectedPeers()) send(to, a.msg);
             } else if (a.type === "request_sync") {
-                hooks.onRequestSync(a.to);
+                requestSync(a.to);
             }
         }
     }
@@ -105,6 +122,7 @@ function createReplicationNode({ id, nodes, cfg, db, transport, clock, rng = Mat
         else if (a.role === "candidate") log.info(`[auth] ${id} se postula (término ${a.term})`);
         // Una escritura esperando mayoría falla si este nodo deja de ser líder
         if (a.role !== "leader" && pending && pending.phase === "majority") pending.finish("lost");
+        if (a.role === "leader") cancelSync();
     }
 
     // ---------- Respuestas 503 (decisión 13) ----------
@@ -142,20 +160,24 @@ function createReplicationNode({ id, nodes, cfg, db, transport, clock, rng = Mat
             const outcome = await propose(entry, peers);
             if (outcome === "lost") return notLeaderResult();
             if (outcome === "timeout") {
-                for (const to of connectedPeers()) send(to, { type: "write_abort", term: entry.term, seq: entry.seq, entryId: entry.entryId });
+                abort(entry);
                 return { ok: false, status: 503, body: { error: "replication_timeout" } };
             }
             // Mayoría: recién ahora el líder aplica la entrada
             try {
                 applyEntry(db, entry);
             } catch (err) {
-                for (const to of connectedPeers()) send(to, { type: "write_abort", term: entry.term, seq: entry.seq, entryId: entry.entryId });
+                abort(entry);
                 if (err instanceof ConflictError) return { ok: false, status: 409, conflict: true, body: { error: "conflict" } };
                 throw err;
             }
             await grace();
             return { ok: true, entry };
         });
+    }
+
+    function abort(entry) {
+        for (const to of connectedPeers()) send(to, { type: "write_abort", term: entry.term, seq: entry.seq, entryId: entry.entryId });
     }
 
     // Propone la entrada y espera mayoría: "majority" | "timeout" | "lost"
@@ -185,23 +207,21 @@ function createReplicationNode({ id, nodes, cfg, db, transport, clock, rng = Mat
         const state = pending;
         if (!state) return Promise.resolve();
         return new Promise((resolve) => {
-            const done = () => {
-                if (state.phase === "closed") return;
+            state.phase = "grace";
+            state.done = () => {
+                if (state.phase !== "grace") return;
                 state.phase = "closed";
                 clock.clearTimeout(state.timer);
                 if (pending === state) pending = null;
                 resolve();
             };
-            state.phase = "grace";
-            state.done = done;
-            state.timer = clock.setTimeout(done, cfg.ACK_GRACE_MS);
+            state.timer = clock.setTimeout(state.done, cfg.ACK_GRACE_MS);
             checkGrace();
         });
     }
 
     function checkGrace() {
-        if (pending?.phase !== "grace") return;
-        if (connectedPeers().every((p) => pending.acks.has(p))) pending.done();
+        if (pending?.phase === "grace" && connectedPeers().every((p) => pending.acks.has(p))) pending.done();
     }
 
     function onWriteAck(from, msg) {
@@ -214,7 +234,7 @@ function createReplicationNode({ id, nodes, cfg, db, transport, clock, rng = Mat
         checkGrace();
     }
 
-    // ---------- Réplica ----------
+    // ---------- Réplica: write_propagate y write_abort ----------
 
     // Acepta mensajes de replicación solo del líder del término actual o mayor; devuelve true si se aceptan
     function acceptFromLeader(from, term) {
@@ -231,42 +251,46 @@ function createReplicationNode({ id, nodes, cfg, db, transport, clock, rng = Mat
     }
 
     function onWritePropagate(from, msg) {
-        const entry = { seq: msg.seq, term: msg.term, entryId: msg.entryId, op: msg.op, data: msg.data };
         if (!isCount(msg.term) || !isCount(msg.seq) || typeof msg.entryId !== "string") return;
+        const entry = entryOf(msg);
         if (msg.term < election.term) return ack(from, entry, false, "stale_term");
         if (!validateEntry(entry).ok) return ack(from, entry, false, "invalid_entry");
         if (!acceptFromLeader(from, msg.term)) return ack(from, entry, false, "not_leader");
-        hooks.afterLeaderMessage(from);
-        replicaApply(from, entry);
-    }
-
-    // Aplica una entrada que llega del líder (decisión 10). La etapa de conflictos/sync la amplía.
-    function replicaApply(from, entry) {
         const last = position().seq;
         if (entry.seq <= last) {
             const existing = entryAt(db, entry.seq);
             if (existing && existing.entryId === entry.entryId) return ack(from, entry, true); // idempotente
-            return conflicts.onConflict(from, entry, last);
+            if (entry.seq === last) {
+                // Conflicto en la cola (p. ej. un write_abort perdido): se deshace la última y se aplica la nueva
+                undoLast(db, existing.entryId);
+                return applyOrResync(from, entry);
+            }
+            fullResync(from); // conflicto profundo
+            return ack(from, entry, false, "resync");
         }
         if (entry.seq > last + 1) {
-            hooks.onRequestSync(from);
+            requestSync(from); // hueco
             return ack(from, entry, false, "gap");
         }
+        return applyOrResync(from, entry);
+    }
+
+    function applyOrResync(from, entry) {
         try {
             applyEntry(db, entry);
             return ack(from, entry, true);
         } catch (err) {
-            if (err instanceof ConflictError) return conflicts.onUniqueViolation(from, entry);
-            if (err instanceof OrderError) return ack(from, entry, false, "gap");
+            if (err instanceof OrderError) {
+                requestSync(from);
+                return ack(from, entry, false, "gap");
+            }
+            if (err instanceof ConflictError) {
+                fullResync(from); // violación de unicidad: esta BD no se parece a la del líder
+                return ack(from, entry, false, "resync");
+            }
             throw err;
         }
     }
-
-    // Comportamiento básico ante conflictos (la etapa de sync lo reemplaza por la resincronización)
-    const conflicts = {
-        onConflict: (from, entry) => ack(from, entry, false, "conflict"),
-        onUniqueViolation: (from, entry) => ack(from, entry, false, "conflict"),
-    };
 
     function onWriteAbort(from, msg) {
         if (!isCount(msg.term) || !isCount(msg.seq) || typeof msg.entryId !== "string") return;
@@ -275,22 +299,109 @@ function createReplicationNode({ id, nodes, cfg, db, transport, clock, rng = Mat
         if (last && last.seq === msg.seq && last.entryId === msg.entryId) undoLast(db, msg.entryId);
     }
 
-    // ---------- Mensajes ----------
+    // ---------- Sync ----------
 
-    const ELECTION_TYPES = new Set(["heartbeat", "heartbeat_ack", "election", "vote", "new_leader"]);
-    const extraHandlers = {};
+    function cancelSync() {
+        if (syncFlight) clock.clearTimeout(syncFlight.timer);
+        syncFlight = null;
+    }
+
+    function requestSync(to, force = false) {
+        if (closed || isLeader() || !to) return;
+        if (syncFlight && !force) return;
+        cancelSync();
+        const p = position();
+        const fromEntryId = p.seq > 0 ? entryAt(db, p.seq)?.entryId ?? null : null;
+        send(to, { type: "request_sync", fromSeq: p.seq, fromEntryId });
+        armSyncRetry(to);
+    }
+
+    function armSyncRetry(to) {
+        if (syncFlight) clock.clearTimeout(syncFlight.timer);
+        syncFlight = {
+            to,
+            timer: clock.setTimeout(() => {
+                syncFlight = null;
+                if (election.leaderId && !isLeader()) requestSync(election.leaderId);
+            }, 2 * cfg.WRITE_TIMEOUT_MS),
+        };
+    }
+
+    // Resincronización completa: sin usuarios ni oplog, y todo de nuevo desde el líder
+    function fullResync(from) {
+        log.warn(`[auth] ${id}: su log difiere del líder ${from}; resincronización completa`);
+        wipe(db);
+        requestSync(from, true);
+    }
+
+    // El log de la réplica no cuadra con lo que reporta el líder (va atrás, adelante o con otro término al final)
+    function checkDivergence(from, info) {
+        if (isLeader() || election.leaderId !== from || !info || !isCount(info.lastSeq)) return;
+        const p = position();
+        if (info.lastSeq > p.seq || info.lastSeq < p.seq || (info.lastSeq === p.seq && isCount(info.lastTerm) && info.lastTerm !== p.term)) requestSync(from);
+    }
+
+    // Líder: entradas con seq > fromSeq por lotes; si el punto de partida no coincide, todo desde 1 con conflict
+    function onRequestSync(from, msg) {
+        if (!isLeader() || !isCount(msg.fromSeq) || !(msg.fromEntryId === null || typeof msg.fromEntryId === "string")) return;
+        const last = position().seq;
+        const conflict = msg.fromSeq > last || (msg.fromSeq > 0 && entryAt(db, msg.fromSeq)?.entryId !== msg.fromEntryId);
+        let after = conflict ? 0 : msg.fromSeq;
+        let first = true;
+        for (;;) {
+            const batch = entriesAfter(db, after, cfg.SYNC_BATCH);
+            if (batch.length > 0) after = batch[batch.length - 1].seq;
+            const done = batch.length < cfg.SYNC_BATCH || after >= last;
+            send(from, { type: "sync_response", term: election.term, entries: batch.map(entryOf), conflict: first && conflict, done });
+            first = false;
+            if (done) break;
+        }
+    }
+
+    // Réplica: aplica un lote en orden (con conflict, primero borra)
+    function onSyncResponse(from, msg) {
+        if (!isCount(msg.term) || !Array.isArray(msg.entries) || msg.entries.length > MAX_SYNC_ENTRIES || typeof msg.conflict !== "boolean" || typeof msg.done !== "boolean") return;
+        if (msg.term < election.term || !acceptFromLeader(from, msg.term)) return;
+        if (msg.conflict) wipe(db);
+        for (const raw of msg.entries) {
+            const entry = isObject(raw) ? entryOf(raw) : null;
+            if (!entry || !validateEntry(entry).ok) return requestSync(from, true);
+            const last = position().seq;
+            if (entry.seq <= last) {
+                if (entryAt(db, entry.seq)?.entryId === entry.entryId) continue;
+                return fullResync(from);
+            }
+            if (entry.seq > last + 1) return requestSync(from, true); // faltó un lote: se pide de nuevo
+            try {
+                applyEntry(db, entry);
+            } catch (err) {
+                if (err instanceof ConflictError) return fullResync(from);
+                if (err instanceof OrderError) return requestSync(from, true);
+                throw err;
+            }
+        }
+        if (msg.done) {
+            cancelSync();
+            ackAfterSync = true; // el líder verá la nueva posición en el próximo ciclo
+        } else if (syncFlight?.to === from) {
+            armSyncRetry(from); // llegó un lote: se reinicia la espera
+        }
+    }
+
+    // ---------- Mensajes, conexiones y tick ----------
 
     function handleMessage(from, msg) {
         if (closed || !ids.includes(from) || from === id || !isObject(msg) || typeof msg.type !== "string") return;
         if (ELECTION_TYPES.has(msg.type)) {
             runElection({ kind: "message", from, msg });
-            if (msg.type === "heartbeat" && election.leaderId === from) hooks.afterLeaderMessage(from, msg);
+            if (msg.type === "heartbeat") checkDivergence(from, msg);
             return;
         }
         if (msg.type === "write_propagate") return onWritePropagate(from, msg);
         if (msg.type === "write_ack") return onWriteAck(from, msg);
         if (msg.type === "write_abort") return onWriteAbort(from, msg);
-        extraHandlers[msg.type]?.(from, msg);
+        if (msg.type === "request_sync") return onRequestSync(from, msg);
+        if (msg.type === "sync_response") return onSyncResponse(from, msg);
     }
 
     function helloInfo() {
@@ -301,22 +412,24 @@ function createReplicationNode({ id, nodes, cfg, db, transport, clock, rng = Mat
     function peerUp(from, hello) {
         if (closed || !ids.includes(from) || from === id || !isObject(hello)) return;
         runElection({ kind: "peer_hello", from, hello: { role: hello.role, term: hello.term, leaderId: hello.leaderId ?? null, lastSeq: hello.lastSeq, lastTerm: hello.lastTerm } });
-        if (election.leaderId === from && !isLeader()) hooks.afterLeaderMessage(from, { lastSeq: hello.lastSeq, lastTerm: hello.lastTerm });
+        checkDivergence(from, hello); // al conectar con el líder: sync si le falta o si su log difiere
         checkGrace();
     }
 
     function peerDown(from) {
         if (closed || !ids.includes(from)) return;
         runElection({ kind: "peer_down", from });
-        hooks.onPeerDown?.(from);
+        if (syncFlight?.to === from) cancelSync();
         checkGrace();
     }
 
-    const tickHooks = [];
     function tick() {
         if (closed) return;
         runElection({ kind: "tick" });
-        for (const fn of tickHooks) fn();
+        if (ackAfterSync && election.leaderId && !isLeader()) {
+            ackAfterSync = false;
+            send(election.leaderId, { type: "heartbeat_ack", authId: id, term: election.term, lastSeq: position().seq });
+        }
     }
     function loop() {
         if (closed) return;
@@ -326,14 +439,14 @@ function createReplicationNode({ id, nodes, cfg, db, transport, clock, rng = Mat
 
     // ---------- Lecturas, estado y pares ----------
 
-    const reads = {
-        canServeRead() {
-            if (isLeader()) return { ok: true };
-            if (!election.leaderId) return { ok: false, status: 503, body: { error: "no_leader" } };
-            return { ok: true };
-        },
-        isLagging: () => !isLeader() && election.leaderId !== null && position().seq < election.leaderSeq,
-    };
+    function canServeRead() {
+        if (isLeader()) return { ok: true };
+        if (!election.leaderId) return { ok: false, status: 503, body: { error: "no_leader" } };
+        if (election.leaderSeq - position().seq >= cfg.READ_TOLERANCE) return notLeaderResult();
+        return { ok: true };
+    }
+
+    const isLagging = () => !isLeader() && election.leaderId !== null && position().seq < election.leaderSeq;
 
     function status() {
         const p = position();
@@ -367,8 +480,8 @@ function createReplicationNode({ id, nodes, cfg, db, transport, clock, rng = Mat
         legacyEntries,
         status,
         whoami: () => ({ authId: id, role: isLeader() ? "leader" : "replica" }),
-        canServeRead: () => reads.canServeRead(),
-        isLagging: () => reads.isLagging(),
+        canServeRead,
+        isLagging,
         leader: leaderInfo,
         write,
         peers,
@@ -381,10 +494,9 @@ function createReplicationNode({ id, nodes, cfg, db, transport, clock, rng = Mat
         close() {
             closed = true;
             clock.clearTimeout(tickTimer);
+            cancelSync();
             if (pending?.phase === "majority") pending.finish("lost");
         },
-        // Para la etapa de sync y las pruebas
-        _internal: { hooks, conflicts, reads, extraHandlers, tickHooks, send, runElection, position, election: () => election, isLeader, connectedPeers, leaderInfo, ack, replicaApply },
     };
 
     loop(); // primer tick ya: un nodo único es líder desde el arranque
