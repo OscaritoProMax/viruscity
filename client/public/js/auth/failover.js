@@ -6,7 +6,8 @@
 // classifyResponse(status, body, urls)    → 'return' | 'follow' | 'next' | 'retry'
 // createAuthClient({ urls, fetchImpl, sleep, now, timeoutMs, budgetMs }) → { request(path, init), lastNode() }
 //   request → Promise<{ response, authId, authRole, retried, nodeUrl }>; si se agota el presupuesto lanza
-//   AuthUnavailableError (con el último motivo).
+//   AuthUnavailableError con el último motivo (reason) y, si el último nodo respondió, su status y su cuerpo
+//   (así GET /coordinator puede distinguir "sin coordinadores" de "sin auth").
 //
 // Reglas (decisión 16):
 // - Se empieza por el último nodo que respondió.
@@ -24,10 +25,12 @@ export const DEFAULT_TIMEOUT_MS = 4000;
 export const DEFAULT_BUDGET_MS = 12000;
 
 export class AuthUnavailableError extends Error {
-    constructor(reason) {
+    constructor(reason, last = {}) {
         super(`No hay servidores de autenticación disponibles (${reason ?? "sin respuesta"})`);
         this.name = "AuthUnavailableError";
         this.reason = reason ?? "sin respuesta";
+        this.status = last.status ?? null; // status de la última respuesta (null si fue error de red)
+        this.body = last.body ?? null;
     }
 }
 
@@ -108,28 +111,32 @@ export function createAuthClient({
         const start = now();
         let attempts = 0;
         let lastReason = null;
+        let lastSeen = {};
+        const fail = () => new AuthUnavailableError(lastReason, lastSeen);
         const outOfBudget = () => now() - start >= budgetMs;
         for (;;) {
             const first = last;
             for (let i = 0; i < list.length; i++) {
-                if (outOfBudget()) throw new AuthUnavailableError(lastReason);
+                if (outOfBudget()) throw fail();
                 const nodeUrl = list[(first + i) % list.length];
                 attempts += 1;
                 const r = await attempt(nodeUrl, path, init);
                 lastReason = r.reason;
+                lastSeen = { status: r.response?.status ?? null, body: r.body ?? null };
                 if (r.kind === "return") return done(r.response, nodeUrl, attempts);
                 if (r.kind === "follow") {
                     // Una réplica indica el líder: un solo reintento inmediato contra esa URL
                     const leaderUrl = normalizeUrl(r.body.leaderUrl);
-                    if (outOfBudget()) throw new AuthUnavailableError(lastReason);
+                    if (outOfBudget()) throw fail();
                     attempts += 1;
                     const f = await attempt(leaderUrl, path, init);
                     lastReason = f.reason;
+                    lastSeen = { status: f.response?.status ?? null, body: f.body ?? null };
                     if (f.kind === "return") return done(f.response, leaderUrl, attempts);
                 }
             }
             // Pasada completa sin éxito: 1 s y otra, mientras quede presupuesto
-            if (now() - start + PASS_PAUSE_MS >= budgetMs) throw new AuthUnavailableError(lastReason);
+            if (now() - start + PASS_PAUSE_MS >= budgetMs) throw fail();
             await sleep(PASS_PAUSE_MS);
         }
     }

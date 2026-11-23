@@ -111,6 +111,9 @@ test("presupuesto agotado → AuthUnavailableError con el último motivo", async
     await assert.rejects(c.client().request("/register", { method: "POST" }), (err) => err instanceof AuthUnavailableError && err.reason === "replication_timeout");
     assert.ok(c.sleeps() < 12000, `respeta los 12 s (${c.sleeps()} ms de pausas)`);
     assert.ok(c.sleeps() >= 10000, "hizo varias pasadas");
+    // Sin coordinadores en ningún directorio: el error conserva el último status y cuerpo
+    const none = fakeCluster({ [URLS[0]]: reply(503, { error: "no_coordinators_available" }), [URLS[1]]: reply(503, { error: "no_coordinators_available" }), [URLS[2]]: reply(503, { error: "no_coordinators_available" }) });
+    await assert.rejects(none.client().request("/coordinator"), (err) => err.reason === "no_coordinators_available" && err.status === 503 && err.body?.error === "no_coordinators_available");
     const tiny = fakeCluster({ [URLS[0]]: down(), [URLS[1]]: down(), [URLS[2]]: down() });
     await assert.rejects(tiny.client({ budgetMs: 500 }).request("/login"), (err) => err.name === "AuthUnavailableError" && err.reason === "error de red");
     assert.equal(tiny.sleeps(), 0, "sin presupuesto para otra pasada: no espera");
