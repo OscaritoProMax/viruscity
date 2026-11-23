@@ -70,13 +70,17 @@ function startNode(id) {
         },
     });
     fs.closeSync(log);
+    // Un hijo matado con kill() queda con exitCode null (y signalCode): se marca al salir, sea como sea
+    child.once("exit", () => {
+        child.exited = true;
+    });
     children.set(id, child);
     return child;
 }
 
 async function killNode(id) {
     const child = children.get(id);
-    if (!child || child.exitCode !== null) return;
+    if (!child || child.exited) return;
     const exited = new Promise((r) => child.once("exit", r));
     child.kill();
     await exited;
@@ -125,7 +129,7 @@ async function waitFor(fn, ms, every = 100) {
     return null;
 }
 
-const alive = () => IDS.filter((id) => children.get(id) && children.get(id).exitCode === null);
+const alive = () => IDS.filter((id) => children.get(id) && !children.get(id).exited);
 // Exactamente un líder entre los vivos y los demás réplicas que lo siguen; devuelve { leader, list } o null
 async function settled(ids = alive()) {
     const list = await statuses(ids);
