@@ -11,7 +11,8 @@
     "dev": "node --watch index.js",
     "test": "node --test test/*.test.mjs",
     "smoke": "node scripts/smoke-test.js",
-    "smoke:cluster": "node scripts/cluster-smoke.js"
+    "smoke:cluster": "node scripts/cluster-smoke.js",
+    "smoke:full": "node scripts/full-smoke.js"
   },
   "keywords": [],
   "author": "",
