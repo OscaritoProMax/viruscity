@@ -2,7 +2,9 @@
 // Ambas vías emiten el mismo JWT HS256 { userId, username, provider } y conviven en una sola tabla users.
 // Taller 6: además es el directory service de los coordinadores (heartbeat, /coordinator, /peers, /directory).
 // Taller 7: la configuración la valida config.js (también la de varios nodos con AUTH_NODES) y el archivo
-// de entorno se elige con --env <ruta> (por defecto auth-service/.env).
+// de entorno se elige con --env <ruta> (por defecto auth-service/.env). Cada auth es un nodo replicado
+// (replication/node.js) unido a los demás por un mesh WebSocket en PEER_PORT (replication/mesh.js); sin
+// AUTH_NODES es un clúster de uno que usa el mismo camino (líder desde el arranque, sin mesh).
 //
 // Este archivo solo arranca: valida la configuración, abre la base (node:sqlite), aplica el esquema o la
 // migración del Taller 4 y levanta la app de app.js.
@@ -17,7 +19,8 @@ const { makeGoogleVerifier } = require("./google.js");
 const { createApp } = require("./app.js");
 const { createDirectory } = require("./directory.js");
 const { loadConfig, envFileArg } = require("./config.js");
-const { createStandaloneReplication } = require("./replication/standalone.js");
+const { createReplicationNode } = require("./replication/node.js");
+const { createAuthMesh } = require("./replication/mesh.js");
 
 // ---------- Configuración ----------
 
@@ -47,12 +50,6 @@ try {
 }
 for (const warning of conf.warnings) console.warn(`Advertencia: ${warning}`);
 
-// Fase N1: la configuración de varios nodos ya se valida, pero la replicación entre ellos todavía no
-// existe. Arrancar varios nodos sueltos crearía bases distintas que aceptan escrituras a la vez.
-if (conf.multi) {
-    fatal(`la configuración de ${conf.nodes.length} nodos es válida (mayoría ${conf.majority}), pero la replicación entre auth todavía no está implementada: usa npm start (nodo único)`);
-}
-
 const { port: PORT, dbPath: DB_PATH, jwtSecret: JWT_SECRET, jwtExpiresIn: JWT_EXPIRES_IN, bcryptRounds: BCRYPT_ROUNDS } = conf;
 const { googleClientId: GOOGLE_CLIENT_ID, clusterSecret: CLUSTER_SECRET, coordinatorTtlMs: COORDINATOR_TTL_MS, reservationTtlMs: RESERVATION_TTL_MS } = conf;
 
@@ -60,9 +57,26 @@ const { googleClientId: GOOGLE_CLIENT_ID, clusterSecret: CLUSTER_SECRET, coordin
 const db = new DatabaseSync(DB_PATH);
 ensureSchema(db, { dbPath: DB_PATH });
 
-// Replicación (Taller 7): un nodo único es el líder de un clúster de uno. Una BD heredada sin oplog recibe
-// sus entradas "legacy" (una por usuario) para poder replicarse después.
-const replication = createStandaloneReplication({ db, cfg: { authId: conf.authId, publicUrl: conf.publicUrl, peerUrl: conf.peerUrl } });
+// ---------- Replicación (Taller 7) ----------
+// Con varios nodos: mesh WebSocket con los demás auth (solo si hay AUTH_NODES); el nodo de replicación decide
+// todo (elección, escrituras por mayoría, sync) y el mesh solo mueve mensajes. Una BD heredada sin oplog
+// recibe sus entradas "legacy" (una por usuario) para poder replicarse.
+const mesh = conf.multi
+    ? createAuthMesh({ selfId: conf.authId, nodes: conf.nodes, peerPort: conf.peerPort, clusterSecret: CLUSTER_SECRET, pingMs: conf.tunables.AUTH_PEER_PING_MS, syncBatch: conf.tunables.SYNC_BATCH, log: console })
+    : null;
+const realClock = { now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (h) => clearTimeout(h) };
+// Registro: solo cambios de rol, término y líder (nunca datos de usuarios ni mensajes)
+const replLog = { info: (text) => console.log(text), warn: (text) => console.warn(text) };
+const replication = createReplicationNode({
+    id: conf.authId,
+    nodes: conf.nodes,
+    cfg: conf.tunables,
+    db,
+    transport: mesh ? mesh.transport : { send() {}, connectedIds: () => [] },
+    clock: realClock,
+    log: replLog,
+});
+if (mesh) mesh.attach(replication);
 if (replication.legacyEntries > 0) console.log(`[db] oplog inicial: ${replication.legacyEntries} entradas legacy creadas a partir de users`);
 
 // ---------- App ----------
@@ -93,10 +107,20 @@ const server = app.listen(PORT, (err) => {
         console.error(`No se pudo iniciar el servidor: ${err.message}`);
         process.exit(1);
     }
-    console.log(`Auth service ${conf.authId} en puerto ${PORT} · directorio de coordinadores (TTL ${COORDINATOR_TTL_MS} ms, reservas ${RESERVATION_TTL_MS} ms)`);
+    const cluster = conf.multi ? `clúster de ${conf.nodes.length} (mayoría ${conf.majority}), mesh en ${conf.peerPort}` : "nodo único";
+    console.log(`Auth service ${conf.authId} en puerto ${PORT} · ${cluster} · directorio de coordinadores (TTL ${COORDINATOR_TTL_MS} ms, reservas ${RESERVATION_TTL_MS} ms)`);
 });
 
+if (mesh) {
+    mesh.start().catch((err) => {
+        console.error(`No se pudo abrir el mesh en el puerto ${conf.peerPort}: ${err.code || err.message}`);
+        process.exit(1);
+    });
+}
+
 // ---------- Cierre ordenado ----------
+// Sin desregistrarse ni transferir el liderazgo: los demás lo notan por el cierre de las conexiones y, si era
+// el líder, eligen otro cuando vence su LEADER_TIMEOUT_MS.
 let shuttingDown = false;
 const SHUTDOWN_TIMEOUT_MS = 5 * 1000; // espera máxima antes de forzar la salida
 
@@ -106,6 +130,8 @@ function shutdown(signal) {
     console.log(`${signal} recibido, cerrando auth service...`);
     clearInterval(sweepTimer);
     replication.close();
+    if (mesh) mesh.stop();
+    server.closeAllConnections?.();
 
     server.close(() => {
         db.close();
