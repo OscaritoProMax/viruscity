@@ -31,6 +31,8 @@
 //
 // Lecturas (decisión 12): con líder conocido y leaderSeq − mySeq < READ_TOLERANCE se sirven localmente; más
 // atrasada → 503 not_leader (con leaderUrl y leaderId de AUTH_NODES); sin líder (o en elección) → 503 no_leader.
+// Una réplica que perdió la conexión con su líder también responde no_leader (lecturas y escrituras): no sirve
+// datos que pueden estar viejos ni manda al cliente hacia un líder que quizá cayó.
 
 const crypto = require("node:crypto");
 const { createElectionState, step, majorityOf } = require("./election.js");
@@ -131,9 +133,11 @@ function createReplicationNode({ id, nodes, cfg, db, transport, clock, rng = Mat
         if (isLeader()) return { leaderId: id, leaderUrl: urlOf(id) };
         return election.leaderId ? { leaderId: election.leaderId, leaderUrl: urlOf(election.leaderId) } : null;
     }
+    // ¿Hay un líder conocido Y conectado? (para una réplica)
+    const leaderReachable = () => election.leaderId !== null && connectedPeers().includes(election.leaderId);
     function notLeaderResult() {
         const l = leaderInfo();
-        if (!l || l.leaderId === id) return { ok: false, status: 503, body: { error: "no_leader" } };
+        if (!l || l.leaderId === id || !leaderReachable()) return { ok: false, status: 503, body: { error: "no_leader" } };
         return { ok: false, status: 503, body: { error: "not_leader", leaderUrl: l.leaderUrl, leaderId: l.leaderId } };
     }
 
@@ -441,7 +445,7 @@ function createReplicationNode({ id, nodes, cfg, db, transport, clock, rng = Mat
 
     function canServeRead() {
         if (isLeader()) return { ok: true };
-        if (!election.leaderId) return { ok: false, status: 503, body: { error: "no_leader" } };
+        if (!leaderReachable()) return { ok: false, status: 503, body: { error: "no_leader" } };
         if (election.leaderSeq - position().seq >= cfg.READ_TOLERANCE) return notLeaderResult();
         return { ok: true };
     }

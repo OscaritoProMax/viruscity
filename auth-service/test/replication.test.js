@@ -399,6 +399,24 @@ test("R14 un líder aislado deja de aceptar escrituras de inmediato (no_quorum) 
     assertConverged(sim);
 });
 
+test("réplica sin conexión con su líder: no_leader en lecturas y escrituras mientras se elige otro", async () => {
+    const sim = createReplicationSim({ seed: 15 });
+    const L = await sim.elect();
+    const [R] = others(sim, L);
+    assert.deepEqual(sim.node(R).canServeRead(), { ok: true });
+    sim.kill(L);
+    assert.equal(sim.node(R).status().leaderId, L, "todavía no venció su plazo: recuerda al líder");
+    assert.deepEqual(sim.node(R).canServeRead(), { ok: false, status: 503, body: { error: "no_leader" } });
+    const w = await sim.settle(sim.register(R, "sin_lider"));
+    assert.deepEqual(w, { ok: false, status: 503, body: { error: "no_leader" } }, "no manda al cliente hacia un líder caído");
+    const t = await sim.runUntil(() => sim.leader() !== null, REPL_CFG.LEADER_TIMEOUT_MS + REPL_CFG.ELECTION_JITTER_MS + 1000);
+    assert.notEqual(t, null);
+    const N = sim.leader();
+    const follower = sim.ids.find((id) => id !== L && id !== N);
+    await sim.runUntil(() => sim.node(follower).status().leaderId === N, 2000);
+    assert.deepEqual(sim.node(follower).canServeRead(), { ok: true }, "con el nuevo líder conectado vuelve a servir");
+});
+
 test("nodo único por el camino de replicación: líder desde el arranque y escribe sin peers", async () => {
     const sim = createReplicationSim({ ids: ["auth-solo"], seed: 1 });
     assert.equal(sim.node("auth-solo").whoami().role, "leader", "líder sin esperar ticks");
