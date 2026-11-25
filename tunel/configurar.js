@@ -5,6 +5,9 @@
 //   node tunel/configurar.js --simular    muestra qué cambiaría sin escribir nada
 //   node tunel/configurar.js --local      deja los .env otra vez con localhost (para jugar sin túnel)
 //   opciones: --archivo=<ruta de tunel.env>  --raiz=<carpeta del repo>
+//             --exigir-tokens  falla sin escribir nada si falta el authtoken de alguna cuenta (iniciar-ngrok.cmd)
+// Normalmente no se ejecuta a mano: iniciar-servicios.cmd (pruebas locales) usa --local e iniciar-ngrok.cmd
+// (pruebas por ngrok) usa --exigir-tokens.
 //
 // Qué cambia (SOLO estas claves; el resto de cada .env queda igual):
 //   client/.env                       AUTH_URLS   = los 3 dominios de auth
@@ -106,6 +109,12 @@ for (const s of AUTHS) {
     changes.push({ file: s.file, key: "AUTH_NODES", value: authNodes });
 }
 for (const s of COORDS) changes.push({ file: s.file, key: "PUBLIC_URL", value: domains[s.name].replace(/^http/, "ws") });
+
+// --exigir-tokens (lo usa iniciar-ngrok.cmd): sin el authtoken de alguna cuenta no se toca nada y se sale con error
+if (!LOCAL && flag("exigir-tokens")) {
+    const missing = SERVICES.filter((s) => !String(tunnel[`${s.key}_TOKEN`] ?? "").trim() && !fs.existsSync(path.join(TUNEL, `ngrok-${s.name}.yml`)));
+    if (missing.length) fail(`faltan authtokens en ${path.relative(ROOT, SOURCE)}: ${missing.map((s) => `${s.key}_TOKEN (${s.name})`).join(", ")}`);
+}
 
 // ---------- Aplicar ----------
 console.log(LOCAL ? "Modo local: los .env vuelven a localhost" : `Dominios leídos de ${path.relative(ROOT, SOURCE)}`);
