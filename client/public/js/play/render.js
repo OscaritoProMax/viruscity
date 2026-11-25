@@ -153,6 +153,8 @@ export function createRenderer(canvas, minimap) {
     let dpr = 1;
     let zoom = 1;
     let lastView = null;
+    // Track 2.5: cámara libre del modo espectador ({ x, y } del mundo) o null para seguir al jugador "me"
+    let freeCamera = null;
     let lastMePos = null;
 
     // Posiciones SOLO para dibujar: se acercan a las del servidor (window.lastState) con un suavizado
@@ -677,7 +679,8 @@ export function createRenderer(canvas, minimap) {
 
         // Cámara: sigue al jugador local dentro de su escenario
         const rect = withMap ? sceneRect(myScene) : { x: 0, y: 0, width: world.width, height: world.height };
-        const local = computeView(mePos ? { x: mePos.x - rect.x, y: mePos.y - rect.y } : null, cssW, cssH, rect, zoom);
+        const camPos = freeCamera ?? mePos;
+        const local = computeView(camPos ? { x: camPos.x - rect.x, y: camPos.y - rect.y } : null, cssW, cssH, rect, zoom);
         const view = { x: local.x + rect.x, y: local.y + rect.y, w: local.w, h: local.h };
         lastView = view;
         const scale = zoom * dpr;
@@ -793,6 +796,8 @@ export function createRenderer(canvas, minimap) {
         setZoom: (z) => (zoom = clampZoom(z)),
         // Ciudad de la partida (welcome.city ya validada) o null
         setCity: (c) => (matchCity = c ?? null),
+        // Track 2.5: cámara libre (espectador) o null para volver a seguir al jugador
+        setFreeCamera: (pos) => (freeCamera = pos && Number.isFinite(pos.x) && Number.isFinite(pos.y) ? { x: pos.x, y: pos.y } : null),
         getZoom: () => zoom,
         // Nombre de la zona donde está el jugador local (null sin mapa o sin posición)
         area: () => (city && lastMePos ? areaName(lastMePos.x, lastMePos.y) : null),

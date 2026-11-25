@@ -276,6 +276,15 @@
     text-align: center;
 }
 
+/* Track 2.5: enlace al modo espectador */
+.auth__spectate {
+    margin: var(--space-2, 8px) 0 0;
+    color: var(--muted, #8f9bc4);
+    font-size: var(--fs-s, .8125rem);
+    text-align: center;
+}
+.auth__spectate a { color: var(--accent, #4dd2ff); font-weight: 700; }
+
 .auth__footer {
     color: var(--muted);
     font-size: var(--fs-s);

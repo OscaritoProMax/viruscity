@@ -1,0 +1,89 @@
+/* Modo espectador (track 2.5): indicador del modo y control de la cámara. El resto usa play.css y vc.css. */
+
+/* Indicador claro y siempre visible: "MODO ESPECTADOR" */
+.spec-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2, 8px);
+    padding: var(--space-1, 4px) var(--space-3, 12px);
+    border: 2px solid var(--cure, #ffd166);
+    border-radius: var(--radius-l, 20px);
+    background: color-mix(in srgb, var(--cure, #ffd166) 18%, var(--panel, #121a33));
+    color: var(--cure, #ffd166);
+    font-weight: 800;
+    font-size: var(--fs-s, .8125rem);
+    letter-spacing: .08em;
+    white-space: nowrap;
+}
+
+/* Ojo dibujado con CSS (sin imagen ni emoji) */
+.spec-badge__eye {
+    position: relative;
+    width: 16px;
+    height: 10px;
+    border: 2px solid currentColor;
+    border-radius: 50% / 50%;
+}
+.spec-badge__eye::after {
+    content: "";
+    position: absolute;
+    inset: 1px 4px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+/* Marco de color alrededor del mapa: se nota el modo aunque no se mire la barra */
+.play--spectator .play-stage::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 3px solid color-mix(in srgb, var(--cure, #ffd166) 55%, transparent);
+    pointer-events: none;
+}
+
+/* El espectador no tiene pistas de acciones (E, F…): no juega */
+.play--spectator .vc-hint { display: none !important; }
+
+/* Control de la cámara */
+.spec-camera {
+    display: grid;
+    gap: var(--space-2, 8px);
+    padding: var(--space-3, 12px);
+}
+.spec-camera__title {
+    margin: 0;
+    font-size: var(--fs-s, .8125rem);
+    color: var(--muted, #9aa6c7);
+    text-transform: uppercase;
+    letter-spacing: .08em;
+}
+.spec-camera__row {
+    display: grid;
+    grid-template-columns: 40px 1fr 40px;
+    align-items: center;
+    gap: var(--space-2, 8px);
+}
+.spec-camera__target {
+    overflow: hidden;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 700;
+}
+.spec-camera__btn {
+    height: 40px;
+    border: 1px solid var(--border, #2a3560);
+    border-radius: var(--radius-m, 12px);
+    background: var(--panel-2, #18223f);
+    color: var(--text, #e8ecff);
+    font: inherit;
+    cursor: pointer;
+}
+.spec-camera__btn:hover { border-color: var(--accent, #4dd2ff); }
+.spec-camera__btn:focus-visible,
+.spec-camera__free:focus-visible { outline: 2px solid var(--accent, #4dd2ff); outline-offset: 2px; }
+.spec-camera__free[aria-pressed="true"] { border-color: var(--cure, #ffd166); color: var(--cure, #ffd166); }
+
+@media (max-width: 699.98px) {
+    .spec-badge { font-size: .6875rem; padding: 2px var(--space-2, 8px); }
+}

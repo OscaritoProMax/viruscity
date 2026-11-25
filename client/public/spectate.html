@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<meta name="color-scheme" content="dark">
+<title>Viruscity · Modo espectador</title>
+<link rel="icon" type="image/svg+xml" href="img/favicon.svg">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/play.css">
+<link rel="stylesheet" href="css/vc.css">
+<link rel="stylesheet" href="css/spectate.css">
+</head>
+<!-- Track 2.5: la misma vista del juego, sin sesión y SIN controles. El servidor ignora cualquier mensaje. -->
+<body class="play play--spectator">
+<main id="canvasBox" class="play-stage">
+    <canvas id="gameCanvas" role="img" aria-label="Mapa de Virus City visto en modo espectador"></canvas>
+
+    <!-- Barra superior -->
+    <header class="play-top">
+        <div class="play-top__group">
+            <h1 class="play-title">VIRUS<span class="play-title__city">CITY</span></h1>
+            <span id="connection" class="play-pill" data-state="connecting">
+                <span class="play-pill__dot" aria-hidden="true"></span>
+                <span id="connectionText" aria-live="polite">Conectando…</span>
+            </span>
+            <span id="coordPill" class="play-pill play-pill--coord"><span id="coordText">Coordinador: —</span></span>
+            <span class="play-pill play-pill--coord"><span id="authNode" aria-live="polite">Auth: —</span></span>
+            <span class="play-hud" aria-live="polite">
+                <span class="play-hud__item"><span class="play-hud__label">Zona</span> <span id="hudArea">Virus City</span></span>
+                <span class="play-hud__item"><span id="hudClockIcon" class="play-hud__icon" aria-hidden="true">☀</span> <span id="hudClock">--:--</span></span>
+            </span>
+        </div>
+        <div class="play-top__group play-top__session">
+            <!-- Indicador claro del modo: sin sesión, sin controles -->
+            <span class="spec-badge" role="status"><span class="spec-badge__eye" aria-hidden="true"></span>MODO ESPECTADOR</span>
+            <a href="login.html" class="btn btn--ghost play-logout">Entrar a jugar</a>
+        </div>
+    </header>
+
+    <div id="unstableNotice" class="play-notice" role="status" hidden>Conexión inestable…</div>
+    <div id="clusterNotice" class="play-notice play-notice--cluster" role="status" aria-live="polite" hidden></div>
+
+    <!-- HUD de la partida (solo lectura; lo llena js/vc/hud.js con textContent) -->
+    <div id="vcPhase" class="vc-phase" hidden>
+        <span id="vcPhaseLabel" class="vc-phase__label" aria-live="polite">MUNDO ABIERTO</span>
+        <span id="vcTimer" class="vc-phase__timer" hidden>0:00</span>
+        <span id="vcRoleTag" class="vc-phase__role" hidden></span>
+    </div>
+    <div id="vcCure" class="vc-cure" hidden>
+        <span class="vc-cure__label" aria-hidden="true">CURA</span>
+        <div id="vcCureBar" class="vc-cure__bar" role="progressbar" aria-label="Cura" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div id="vcCureFill" class="vc-cure__fill"></div>
+        </div>
+        <span id="vcCureText" class="vc-cure__value" aria-hidden="true">0 %</span>
+    </div>
+    <div id="vcBanner" class="vc-banner" hidden>
+        <p id="vcBannerText" class="vc-banner__text"></p>
+    </div>
+
+    <!-- Columna derecha: minimapa y jugadores en línea -->
+    <div class="play-right">
+        <p id="vcPlayers" class="vc-chip" hidden></p>
+        <canvas id="minimap" class="play-minimap" width="160" height="120" role="img" aria-label="Minimapa con la posición de los jugadores"></canvas>
+        <section class="play-float" aria-labelledby="playersToggle">
+            <h2 class="play-float__head">
+                <button id="playersToggle" type="button" class="play-float__toggle" aria-expanded="true" aria-controls="playersBody">
+                    <span>Jugadores en línea</span>
+                    <span class="play-count" id="playerCount">0</span>
+                    <span class="play-float__chevron" aria-hidden="true"></span>
+                </button>
+            </h2>
+            <div id="playersBody" class="play-float__body">
+                <ul id="playerList" class="play-players"></ul>
+            </div>
+        </section>
+    </div>
+
+    <!-- Abajo a la izquierda: misiones (solo lectura) y la cámara del espectador -->
+    <div class="vc-left">
+    <section id="vcMissions" class="play-float vc-missions" aria-labelledby="vcMissionsToggle" hidden>
+        <h2 class="play-float__head">
+            <button id="vcMissionsToggle" type="button" class="play-float__toggle" aria-expanded="true" aria-controls="vcMissionsBody">
+                <span>Misiones</span>
+                <span class="play-count" id="vcMissionsCount">0/0</span>
+                <span class="play-float__chevron" aria-hidden="true"></span>
+            </button>
+        </h2>
+        <div id="vcMissionsBody" class="play-float__body">
+            <ul id="vcMissionList" class="vc-missions__list"></ul>
+        </div>
+    </section>
+
+    <section class="play-float spec-camera" aria-labelledby="specCameraTitle">
+        <h2 id="specCameraTitle" class="spec-camera__title">Cámara</h2>
+        <div class="spec-camera__row">
+            <button id="specPrev" type="button" class="spec-camera__btn" aria-label="Seguir al jugador anterior">◀</button>
+            <span id="specTarget" class="spec-camera__target" aria-live="polite">Cámara libre</span>
+            <button id="specNext" type="button" class="spec-camera__btn" aria-label="Seguir al jugador siguiente">▶</button>
+        </div>
+        <button id="specFree" type="button" class="btn btn--block spec-camera__free" aria-pressed="true">Cámara libre</button>
+    </section>
+    </div>
+
+    <div id="vcToasts" class="vc-toasts" role="status" aria-live="polite"></div>
+    <p id="vcHint" class="vc-hint" hidden></p>
+
+    <!-- El espectador nunca recibe un rol; estas pantallas existen porque el HUD es el mismo del juego -->
+    <div id="vcRole" class="vc-screen vc-role" hidden>
+        <div id="vcRoleCard" class="vc-screen__card" role="dialog" aria-modal="true" aria-labelledby="vcRoleTitle" aria-describedby="vcRoleText" tabindex="-1">
+            <p class="vc-screen__kicker">Rol</p>
+            <h2 id="vcRoleTitle" class="vc-screen__title"></h2>
+            <p id="vcRoleText" class="vc-screen__text"></p>
+            <p class="vc-screen__hint"></p>
+        </div>
+    </div>
+
+    <!-- Fin de la partida: ganador y roles revelados (lo mismo que ven todos al terminar) -->
+    <div id="vcEnd" class="vc-screen vc-end" hidden>
+        <section id="vcEndCard" class="vc-screen__card" aria-labelledby="vcEndTitle">
+            <p class="vc-screen__kicker">Fin de la partida</p>
+            <h2 id="vcEndTitle" class="vc-screen__title"></h2>
+            <p id="vcEndReason" class="vc-screen__text"></p>
+            <p id="vcEndOutcome" class="vc-end__outcome"></p>
+            <table class="vc-end__table">
+                <caption class="sr-only">Roles de los jugadores de la partida</caption>
+                <thead>
+                    <tr><th scope="col">Jugador</th><th scope="col">Rol</th></tr>
+                </thead>
+                <tbody id="vcEndRows"></tbody>
+            </table>
+            <p id="vcEndBack" class="vc-screen__hint" aria-live="off"></p>
+        </section>
+    </div>
+
+    <div class="play-zoom" role="group" aria-label="Zoom del mapa">
+        <button id="zoomOut" type="button" class="play-zoom__btn" aria-label="Alejar">−</button>
+        <button id="zoomReset" type="button" class="play-zoom__btn play-zoom__value" aria-label="Zoom normal"><span id="zoomText">1.0×</span></button>
+        <button id="zoomIn" type="button" class="play-zoom__btn" aria-label="Acercar">+</button>
+    </div>
+
+    <p class="play-help">Solo observas: no puedes moverte ni jugar · ◀ ▶ o las teclas , y . cambian a quién sigues · C: cámara libre (WASD o flechas la mueven)</p>
+</main>
+
+<script src="/config.js"></script>
+<script src="js/auth-fetch.js"></script>
+<script src="js/auth-node.js"></script>
+<script type="module" src="js/play/spectate.js"></script>
+</body>
+</html>

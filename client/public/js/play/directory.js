@@ -22,6 +22,11 @@ export function parseCoordinatorResponse(status, body) {
     return { kind: "error" };
 }
 
+// URL del WebSocket de un ESPECTADOR (track 2.5): sin token; el coordinador lo atiende en /spectate
+export function buildSpectateUrl(publicUrl) {
+    return `${String(publicUrl).replace(/\/+$/, "")}/spectate`;
+}
+
 // URL del WebSocket del juego
 export function buildWsUrl(publicUrl, token) {
     return `${String(publicUrl).replace(/\/+$/, "")}/connect?token=${encodeURIComponent(token)}`;
