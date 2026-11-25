@@ -71,12 +71,12 @@ Mientras no hay partida, la ciudad es el **mundo abierto** de siempre. Cuando ha
 |---|---|---|---|
 | hospital-1 | Hospital | Recolectar muestras de pacientes | **Gradilla de muestras** |
 | hospital-2 | Hospital | Esterilizar el quirófano | **Lámpara UV** |
-| laboratorio-1 | Laboratorio | Analizar la muestra del paciente cero | Calibración |
-| laboratorio-2 | Laboratorio | Secuenciar el genoma del virus | Código |
+| laboratorio-1 | Laboratorio | Analizar la muestra del paciente cero | **Microscopio** |
+| laboratorio-2 | Laboratorio | Secuenciar el genoma del virus | **Doble hélice** |
 | farmacia-1 | Farmacia | Preparar el suero base | **Dosificador** |
-| farmacia-2 | Farmacia | Etiquetar las dosis | Código |
+| farmacia-2 | Farmacia | Etiquetar las dosis | **Línea de etiquetado** |
 | central-1 | Central de datos | Restaurar el registro de contagios | **Panel de conexiones** |
-| central-2 | Central de datos | Descargar el historial clínico | Mantener |
+| central-2 | Central de datos | Descargar el historial clínico | **Transferencia** |
 | planta-1 | Planta de síntesis | Sintetizar el compuesto | Calibración |
 | planta-2 | Planta de síntesis | Purificar el reactor | Secuencia |
 | almacen-1 | Almacén | Cargar el suero en los camiones | Mantener |
@@ -90,8 +90,12 @@ Minijuegos (`client/public/js/vc/minigames/`). Las misiones pasan por fases a **
 | **Lámpara UV** | pasar la lámpara sobre la mesa de operaciones hasta borrar las 8 colonias de germen (se encogen y chispean bajo la luz) | flechas para moverla; Enter la lleva a la siguiente colonia |
 | **Dosificador** | mantener pulsado para verter del matraz al vaso y soltar dentro de la franja dorada; si te pasas, el vaso se vacía | mantener Espacio o Enter |
 | **Panel de conexiones** | arrastrar 4 cables hasta el enchufe de su mismo símbolo (el cable cuelga en curva y salta una chispa al conectar) | ↑/↓ elegir, Enter tomar y conectar |
+| **Microscopio** | girar la perilla hasta que la muestra deje de verse borrosa y luego tocar la única célula infectada, la que late en verde | ↑/↓ enfocar; ←/→ y Enter para la célula |
+| **Doble hélice** | completar los 6 huecos de la hebra con la base complementaria (A–T, C–G) mientras la hélice gira | teclas A, T, C o G |
+| **Línea de etiquetado** | una cinta trae 5 viales; estampar la etiqueta de su color cuando cada uno pasa por la marca (los que pasan sin etiqueta dan la vuelta) | teclas 1 a 4 |
+| **Transferencia** | iniciar la descarga entre dos equipos; cuando la antena pierde la señal, reconectar en menos de 1,5 s o la barra retrocede | Enter o Espacio |
 
-El resto de las misiones sigue, por ahora, con los minijuegos sencillos: **Secuencia** (repetir 5 símbolos ▲ ● ■ ◆), **Código** (6 caracteres mostrados 4 s), **Calibración** (detener el marcador en la zona verde 3 veces seguidas) y **Mantener** (E pulsada 10 s).
+El resto de las misiones (Planta de síntesis y Almacén) sigue, por ahora, con los minijuegos sencillos: **Secuencia** (repetir 5 símbolos ▲ ● ■ ◆), **Código** (6 caracteres mostrados 4 s), **Calibración** (detener el marcador en la zona verde 3 veces seguidas) y **Mantener** (E pulsada 10 s).
 
 Flujo: el sano llega a la estación (≤ `MISSION_RANGE` = 60 px + tolerancia) y pulsa E → `mission_start` → si el árbitro acepta, la misión queda `in_progress` reservada a él y el jugador queda **inmóvil** (el servidor ignora su movimiento) → el cliente abre el minijuego **solo** al recibir `mission_started` → al resolverlo espera a `missionStartedAt + MISSION_MIN_MS + 300 ms` ("Verificando…") y manda `mission_complete` → el árbitro la acepta si pasaron entre `MISSION_MIN_MS` (8 s) y `MISSION_MAX_MS` (45 s), el jugador sigue en rango y sigue sano. Esc o "Cancelar" mandan `mission_cancel`. La misión se libera sola si expira, si el jugador se infecta, se desconecta o se aleja.
 
