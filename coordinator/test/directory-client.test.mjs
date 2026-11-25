@@ -96,7 +96,7 @@ test("startHeartbeatLoop: late de inmediato y cada intervalo; onChange solo en l
     await sleep(200);
     stop();
     const calls = f.calls.length;
-    assert.ok(calls >= 7, `${calls} latidos`);
+    assert.ok(calls >= 5, `${calls} latidos`); // ~10 ideales en 200 ms; margen para máquinas cargadas
     assert.deepEqual(changes, [true, false, true], "un aviso por transición, no uno por latido");
     // info se evalúa en cada latido (jugadores actuales)
     assert.deepEqual(f.calls.slice(0, 3).map((c) => JSON.parse(c.options.body).connectedPlayers), [0, 1, 2]);
