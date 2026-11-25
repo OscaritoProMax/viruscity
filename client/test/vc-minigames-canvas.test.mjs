@@ -131,3 +131,115 @@ test("registro: los 4 minijuegos de canvas están en el modal con nombre en espa
         assert.equal(typeof MINIGAMES[kind].module.mount, "function");
     }
 });
+
+// ---------- Fase M3: microscopio, doble hélice, etiquetado y transferencia ----------
+import { createSample, nudgeFocus, isFocused, blurFor, cellAt, infectedIndex, FOCUS_TOLERANCE, CELL_COUNT } from "../public/js/vc/minigames/microscope.js";
+import { complement, createStrand, currentHole, placeBase, isSequenced, BASES, GAP_COUNT, STRAND_LENGTH } from "../public/js/vc/minigames/helix.js";
+import { createLine, vialX, vialAtMarker, stamp, labeledCount, isLineDone, VIAL_COUNT, SPACING, SPEED, MARKER_X, WINDOW } from "../public/js/vc/minigames/labeling.js";
+import { createTransfer, stepTransfer, pressTransfer, isTransferred, TRANSFER_MS, RECONNECT_MS, PENALTY } from "../public/js/vc/minigames/transfer.js";
+
+test("microscopio: empieza desenfocado; enfoque con tolerancia; una sola célula infectada y separadas", () => {
+    for (let s = 1; s <= 30; s++) {
+        const st = createSample(seeded(s));
+        assert.equal(st.cells.length, CELL_COUNT);
+        assert.equal(st.cells.filter((c) => c.infected).length, 1);
+        assert.ok(!isFocused(st.focus, st.target), "no empieza enfocado");
+        assert.ok(blurFor(st.focus, st.target) > 5, "empieza muy borroso");
+        for (const a of st.cells) for (const b of st.cells) if (a !== b) assert.ok(Math.hypot(a.x - b.x, a.y - b.y) > 50);
+        assert.equal(cellAt(st.cells, st.cells[infectedIndex(st.cells)].x, st.cells[infectedIndex(st.cells)].y), infectedIndex(st.cells));
+    }
+    assert.equal(nudgeFocus(0.99, 0.05), 1);
+    assert.equal(nudgeFocus(0.01, -0.05), 0);
+    assert.equal(isFocused(0.5 + FOCUS_TOLERANCE * 0.99, 0.5), true, "dentro de la tolerancia (sin depender del redondeo del borde)");
+    assert.equal(isFocused(0.5 + FOCUS_TOLERANCE + 0.01, 0.5), false);
+    assert.equal(blurFor(0.5, 0.5), 0);
+    assert.equal(cellAt([{ x: 10, y: 10, r: 10 }], 200, 200), null);
+});
+
+test("doble hélice: complementos, huecos en orden y error sin cambios", () => {
+    assert.deepEqual(BASES.map(complement), ["T", "A", "G", "C"]);
+    assert.equal(complement("X"), null);
+    for (let s = 1; s <= 30; s++) {
+        const st = createStrand(seeded(s));
+        assert.equal(st.top.length, STRAND_LENGTH);
+        assert.equal(st.holes.length, GAP_COUNT);
+        assert.deepEqual([...st.holes].sort((a, b) => a - b), st.holes, "huecos en orden");
+        assert.equal(new Set(st.holes).size, GAP_COUNT);
+    }
+    const st = { top: ["A", "C", "G", "T"], holes: [1, 3], filled: [] };
+    assert.equal(currentHole(st), 1);
+    const bad = placeBase(st, "C");
+    assert.equal(bad.ok, false);
+    assert.equal(bad.state, st);
+    const r1 = placeBase(st, "G");
+    assert.equal(r1.ok, true);
+    assert.equal(currentHole(r1.state), 3);
+    const r2 = placeBase(r1.state, "A");
+    assert.equal(isSequenced(r2.state), true);
+    assert.equal(currentHole(r2.state), null);
+    assert.equal(placeBase(r2.state, "A").ok, false, "no hay más huecos");
+    assert.deepEqual(st.filled, [], "inmutable");
+});
+
+test("etiquetado: la cinta es un bucle, un vial a la vez bajo la marca y solo su color", () => {
+    const loop = VIAL_COUNT * SPACING;
+    assert.equal(vialX(0, 0), -40);
+    assert.ok(Math.abs(vialX(0, loop / SPEED) - vialX(0, 0)) < 1e-6, "da la vuelta completa");
+    // nunca hay dos viales a la vez bajo la marca (la separación es mayor que la ventana)
+    assert.ok(SPACING > WINDOW * 2);
+    let seen = 0;
+    for (let t = 0; t < loop / SPEED; t += 20) {
+        const i = vialAtMarker(t);
+        if (i !== null) {
+            seen++;
+            assert.ok(Math.abs(vialX(i, t) - MARKER_X) <= WINDOW);
+        }
+    }
+    assert.ok(seen > 0);
+    const st = { colors: ["rojo", "verde", "rojo", "cian", "amarillo"], labeled: [false, false, false, false, false] };
+    assert.equal(stamp(st, 1, "rojo").ok, false);
+    assert.equal(stamp(st, null, "rojo").ok, false);
+    const r = stamp(st, 0, "rojo");
+    assert.equal(r.ok, true);
+    assert.equal(stamp(r.state, 0, "rojo").ok, false, "no se etiqueta dos veces");
+    assert.equal(labeledCount(r.state), 1);
+    const all = st.colors.reduce((acc, c, i) => stamp(acc, i, c).state, st);
+    assert.equal(isLineDone(all), true);
+    for (let s = 1; s <= 10; s++) assert.equal(createLine(seeded(s)).colors.length, VIAL_COUNT);
+});
+
+test("transferencia: iniciar, dos caídas, reconectar a tiempo o perder datos, y terminar", () => {
+    let s = createTransfer(seeded(3));
+    assert.equal(s.phase, "idle");
+    assert.equal(stepTransfer(s, 5000), s, "sin iniciar no avanza");
+    s = pressTransfer(s);
+    assert.equal(s.phase, "running");
+    // avanza hasta la primera caída y se detiene ahí
+    for (let i = 0; i < 400 && s.phase === "running"; i++) s = stepTransfer(s, 16);
+    assert.equal(s.phase, "dropped");
+    assert.equal(s.progress, s.drops[0]);
+    const atDrop = s.progress;
+    s = stepTransfer(s, 500);
+    assert.equal(s.progress, atDrop, "sin señal no avanza");
+    s = pressTransfer(s); // reconecta a tiempo
+    assert.equal(s.phase, "running");
+    for (let i = 0; i < 600 && s.phase === "running"; i++) s = stepTransfer(s, 16);
+    assert.equal(s.phase, "dropped", "segunda caída");
+    const second = s.progress;
+    s = stepTransfer(s, RECONNECT_MS); // no reconecta: retrocede y sigue
+    assert.equal(s.phase, "running");
+    assert.ok(Math.abs(s.progress - Math.max(0, second - PENALTY)) < 1e-9);
+    assert.equal(s.misses, 1);
+    for (let i = 0; i < 2000 && s.phase !== "done"; i++) s = stepTransfer(s, 16);
+    assert.equal(isTransferred(s), true);
+    assert.equal(pressTransfer(s), s, "terminada no hace nada");
+    // sin cortes tardaría TRANSFER_MS: entre 8 y 10 s
+    assert.ok(TRANSFER_MS >= 8000 && TRANSFER_MS <= 10000);
+});
+
+test("registro M3: los 4 minijuegos nuevos están en el modal", () => {
+    for (const [kind, name] of [["microscope", "Microscopio"], ["helix", "Doble hélice"], ["labeling", "Etiquetado"], ["transfer", "Transferencia"]]) {
+        assert.equal(MINIGAMES[kind]?.name, name);
+        assert.equal(MINIGAMES[kind].canvas, true);
+    }
+});
