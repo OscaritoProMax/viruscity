@@ -138,19 +138,21 @@ Cómo se garantiza (verificado en la auditoría de la Fase V6):
 
 ### Lugares de la partida en el mapa de Virus City
 
-La partida se juega **solo en el mapa principal** (3840 × 3840, `MAP_FILE=./map/virus-city.json`). Cada zona es un **edificio real** de la ciudad y sus dos estaciones están en la acera o el camino de su entrada:
+La partida se juega **solo en el mapa principal** (3840 × 3840, `MAP_FILE=./map/virus-city.json`). Cada zona es un **edificio real** de la ciudad con su **sala interior**: se entra por la puerta del edificio (igual que al Burger Neón) y las dos estaciones están **dentro**, delante de sus consolas. Hay que entrar para hacer una misión, y el infectado puede seguirte a un cuarto cerrado.
 
-| Zona | Edificio (casillas) | Estaciones en | Sale a |
-|---|---|---|---|
-| Hospital | Hospital Virus Care (la antigua clínica), c55–62 r37–41 | acera de la Calle Sur | Calle Sur |
-| Laboratorio | **Laboratorio Vega** (nuevo), c13–21 r5–9 | acera de la Calle Norte | Calle Norte |
-| Farmacia | Farmacia, c9–13 r21–25 | acera de la Avenida Central | Avenida Central |
-| Central de datos | **Central de datos** (nueva), c67–76 r15–18 | Callejón del Mercado | Boulevard |
-| Planta de síntesis | **Planta de síntesis** (nueva), c10–19 r47–50 | Camino Verde | Calle del Parque |
-| Almacén | **Almacén** (nuevo, junto al Granero), c64–68 r47–51 | patio de la granja | Calle Este |
+| Zona | Edificio (casillas) | Sala interior (casillas) | Consolas (misión -1 · -2) | Se entra desde |
+|---|---|---|---|---|
+| Hospital | Hospital Virus Care (la antigua clínica), c55–62 r37–41 | c44–55 r61–69 | gradilla de muestras · mesa con lámpara UV | Calle Sur |
+| Laboratorio | **Laboratorio Vega** (nuevo), c13–21 r5–9 | c56–67 r61–69 | microscopio · secuenciador | Calle Norte |
+| Farmacia | Farmacia, c9–13 r21–25 | c68–79 r61–69 | dosificador · línea de etiquetado | Avenida Central |
+| Central de datos | **Central de datos** (nueva), c67–76 r15–18 | c44–55 r70–78 | panel de conexiones · terminal de transferencia | Callejón del Mercado |
+| Planta de síntesis | **Planta de síntesis** (nueva), c10–19 r47–50 | c56–67 r70–78 | válvulas · reactor | Camino Verde |
+| Almacén | **Almacén** (nuevo, junto al Granero), c64–68 r47–51 | c68–79 r70–78 | carga del camión · escáner | patio de la granja |
+
+- **Salas** (`client/public/js/play/map/rooms.js` y `room-art.js`): 12 × 9 casillas en el bloque libre de la zona de interiores, misma estructura en todas (pared del fondo con el cartel de la sala, puerta abajo al centro, dos consolas contra el fondo y muebles en los lados y en el medio que tapan la vista). Sin vecinos decorativos: dentro solo hay jugadores. La alerta "contagio cerca de <zona>" usa la sala si la víctima está adentro (`zoneNear` con `inside`).
 
 - **Plaza de aparición:** ala este de la Plaza Mayor, junto al Ayuntamiento (casilla 45, 18). Es el lugar de la plaza donde el círculo de aparición (radio 80) no pisa nada sólido, para cualquier roster de 1 a 12.
-- **Una sola fuente:** `client/public/js/play/map/match-places.js` define zonas, estaciones y plaza; `npm run map` (en `client/`) las guarda en `virus-city.json` (campo `city`) junto con la grilla. El coordinador las valida al arrancar (`parseMap`: estaciones y plaza en casillas libres) y `buildCity` exige las 6 zonas y las 12 estaciones de las misiones; si no cuadran, no arranca. Sin `MAP_FILE`, la ciudad sale de las coordenadas normalizadas de `city.js` (la usan las pruebas y `smoke:viruscity`).
+- **Una sola fuente:** `client/public/js/play/map/match-places.js` define zonas, salas (`inside`), estaciones y plaza; `npm run map` (en `client/`) las guarda en `virus-city.json` (campo `city`) junto con la grilla. El coordinador las valida al arrancar (`parseMap`: estaciones y plaza en casillas libres) y `buildCity` exige las 6 zonas y las 12 estaciones de las misiones; si no cuadran, no arranca. Sin `MAP_FILE`, la ciudad sale de las coordenadas normalizadas de `city.js` (la usan las pruebas y `smoke:viruscity`).
 - **Recorridos:** desde la plaza hasta cada estación hay entre 26 y 67 casillas de camino (6 a 16 s caminando): hacer una misión también cuesta tiempo de viaje, y el infectado tiene dónde emboscar.
 - Las pruebas `client/test/map.test.mjs` y `coordinator/test/city.test.js` comprueban que cada estación esté libre, dentro de su zona y alcanzable caminando desde la plaza, que cada zona contenga su edificio y que nadie aparezca sobre algo sólido.
 
