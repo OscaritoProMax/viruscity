@@ -1,12 +1,12 @@
 // Ciudad de la partida de Viruscity (metodología, decisión 9): 6 zonas con 2 estaciones de misión cada una.
 // Lógica pura. El servidor envía el resultado al cliente en welcome.city.
 //   - Con el mapa de Virus City (MAP_FILE): la ciudad viene en el mapa (campo "city", generado desde
-//     client/public/js/play/map/match-places.js): cada zona es un edificio real y sus estaciones están en la
-//     acera de su entrada. Se comprueba que tenga exactamente estas 6 zonas y sus 12 estaciones.
+//     client/public/js/play/map/match-places.js): cada zona es un edificio real con su sala interior (inside),
+//     donde están sus estaciones. Se comprueba que tenga exactamente estas 6 zonas y sus 12 estaciones.
 //   - Sin mapa: las zonas están normalizadas (0-1) y se escalan al tamaño del mundo (1200 × 800 u otro).
 //
-// buildCity(world, map?) → { zones:[{id,name,x,y,w,h}], stations:[{id,zoneId,x,y}], plaza:{x,y} }
-// zoneNear(city, x, y) → nombre de la zona cuyo centro está más cerca (para la alerta de contagio)
+// buildCity(world, map?) → { zones:[{id,name,x,y,w,h,inside?}], stations:[{id,zoneId,x,y}], plaza:{x,y} }
+// zoneNear(city, x, y) → zona de la sala que contiene (x, y) o la de centro más cercano (alerta de contagio)
 "use strict";
 
 // id, nombre y rectángulo normalizado (nx, ny = esquina superior izquierda; nw, nh = ancho y alto)
@@ -38,7 +38,7 @@ function cityFromMap(city) {
     if (got.join(",") !== expected.join(",")) fail(`se esperaban las estaciones ${expected.join(", ")}`);
     for (const s of city.stations) if (!s.id.startsWith(`${s.zoneId}-`)) fail(`la estación ${s.id} no es de la zona ${s.zoneId}`);
     return {
-        zones: city.zones.map((z) => ({ ...z })),
+        zones: city.zones.map((z) => ({ ...z, ...(z.inside && { inside: { ...z.inside } }) })),
         stations: city.stations.map((s) => ({ ...s })),
         plaza: { x: city.plaza.x, y: city.plaza.y },
     };
@@ -62,8 +62,13 @@ function buildCity(world, map = null) {
     return { zones, stations, plaza: { x: round2(width / 2), y: round2(height / 2) } };
 }
 
-// Nombre de la zona cuyo centro está más cerca de (x, y); en empate gana la primera de la lista
+// Nombre de la zona en (x, y): la de la sala interior que lo contiene (mapa de Virus City) o, si no, la zona
+// cuyo centro está más cerca; en empate gana la primera de la lista
 function zoneNear(city, x, y) {
+    for (const z of city?.zones ?? []) {
+        const r = z.inside;
+        if (r && x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) return z.name;
+    }
     let best = null;
     let bestD = Infinity;
     for (const z of city?.zones ?? []) {

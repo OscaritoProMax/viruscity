@@ -107,8 +107,9 @@ function parseMap(data) {
 }
 
 // Ciudad de la partida de Viruscity sobre el mapa (campo opcional "city"):
-// { zones:[{ id, name, x, y, w, h }], stations:[{ id, zoneId, x, y }], plaza:{ x, y } } en unidades del mundo.
-// Zonas dentro del mundo; estaciones y plaza en casillas libres. Que los ids coincidan con las misiones lo
+// { zones:[{ id, name, x, y, w, h, inside? }], stations:[{ id, zoneId, x, y }], plaza:{ x, y } } en unidades del
+// mundo. inside (opcional) es el rectángulo de la sala interior de la zona. Zonas y salas dentro del mundo;
+// estaciones y plaza en casillas libres. Que los ids coincidan con las misiones lo
 // comprueba city.js (este módulo no conoce las reglas de la partida).
 const CITY_ID = /^[a-z0-9-]{1,40}$/;
 function parseMapCity(city, { tile, cols, rows, grid }, fail) {
@@ -123,9 +124,13 @@ function parseMapCity(city, { tile, cols, rows, grid }, fail) {
     const outZones = zones.map((z, i) => {
         if (!z || !CITY_ID.test(z.id ?? "") || zoneIds.has(z.id)) fail(`city.zones[${i}]: id inválido o repetido`);
         if (typeof z.name !== "string" || z.name.length < 1 || z.name.length > 40) fail(`city.zones[${i}]: name inválido`);
-        if (![z.x, z.y, z.w, z.h].every(num) || z.w <= 0 || z.h <= 0 || z.x < 0 || z.y < 0 || z.x + z.w > W || z.y + z.h > H) fail(`city.zones[${i}] fuera del mundo`);
+        const inWorld = (b) => b && [b.x, b.y, b.w, b.h].every(num) && b.w > 0 && b.h > 0 && b.x >= 0 && b.y >= 0 && b.x + b.w <= W && b.y + b.h <= H;
+        if (!inWorld(z)) fail(`city.zones[${i}] fuera del mundo`);
+        if (z.inside !== undefined && !inWorld(z.inside)) fail(`city.zones[${i}].inside fuera del mundo`);
         zoneIds.add(z.id);
-        return { id: z.id, name: z.name, x: z.x, y: z.y, w: z.w, h: z.h };
+        const out = { id: z.id, name: z.name, x: z.x, y: z.y, w: z.w, h: z.h };
+        if (z.inside !== undefined) out.inside = { x: z.inside.x, y: z.inside.y, w: z.inside.w, h: z.inside.h };
+        return out;
     });
     if (!Array.isArray(stations) || stations.length < 1 || stations.length > 40) fail("city.stations debe tener entre 1 y 40 estaciones");
     const stationIds = new Set();
