@@ -3,7 +3,7 @@
 // el servidor es la única autoridad sobre las reglas reales (longitudes, jugadores, etc.).
 
 export const UI = {
-    PREVIEW_ENABLED: true, // vista previa con ?preview=1 mientras se diseña; DEBE ser false antes de la entrega
+    PREVIEW_ENABLED: false, // vista previa de diseño (?preview=1) apagada para la entrega
     MIN_PLAYERS_TO_START: 4,
     SHOW_MIN_PLAYERS_HINT: true,
     USERNAME_MIN: 3,
