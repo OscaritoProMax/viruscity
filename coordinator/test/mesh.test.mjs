@@ -249,7 +249,7 @@ test("buildPositionsSync: posiciones de los locales, o null si no hay", () => {
         ["u1", local("coord-a", { x: 10, y: 20 })],
         ["r1", remote("coord-b")],
     ]);
-    assert.deepEqual(buildPositionsSync(players, "coord-a"), { type: "positions_sync", origin: "coord-a", players: [{ userId: "u1", x: 10, y: 20 }] });
+    assert.deepEqual(buildPositionsSync(players, "coord-a"), { type: "positions_sync", origin: "coord-a", players: [{ userId: "u1", x: 10, y: 20, v: 0 }] });
     assert.equal(buildPositionsSync(new Map([["r1", remote("coord-b")]]), "coord-a"), null);
     assert.equal(buildPositionsSync(new Map(), "coord-a"), null);
 });

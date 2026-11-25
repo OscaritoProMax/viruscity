@@ -141,6 +141,20 @@ function readMap(env, baseDir) {
     return parseMap(data);
 }
 
+// Persistencia del estado (track 2.1 del examen final): base node:sqlite PROPIA de cada coordinador.
+//   STATE_DB_PATH: ruta relativa a baseDir; vacío = state-<COORDINATOR_ID>.db; "off" la desactiva (pruebas)
+//   PERSIST_MS: cada cuánto se guarda; PERSIST_MAX_AGE_MS: lo guardado hace más que esto se descarta
+const PERSIST = { PERSIST_MS: { def: 2000, min: 100 }, PERSIST_MAX_AGE_MS: { def: 600000, min: 1000 } };
+function readPersist(env, baseDir, coordinatorId) {
+    const raw = String(env.STATE_DB_PATH ?? "").trim();
+    const off = raw.toLowerCase() === "off";
+    return {
+        dbPath: off ? null : path.resolve(baseDir, raw || `state-${coordinatorId}.db`),
+        everyMs: readInt(env, "PERSIST_MS", PERSIST.PERSIST_MS.def, PERSIST.PERSIST_MS.min),
+        maxAgeMs: readInt(env, "PERSIST_MAX_AGE_MS", PERSIST.PERSIST_MAX_AGE_MS.def, PERSIST.PERSIST_MAX_AGE_MS.min),
+    };
+}
+
 function loadConfig(env = process.env, { baseDir = __dirname } = {}) {
     const coordinatorId = String(env.COORDINATOR_ID ?? "").trim();
     if (!ID_REGEX.test(coordinatorId)) {
@@ -184,6 +198,7 @@ function loadConfig(env = process.env, { baseDir = __dirname } = {}) {
         peerSyncMs: timings.PEER_SYNC_MS,
         map,
         game,
+        persist: readPersist(env, baseDir, coordinatorId),
     };
 }
 

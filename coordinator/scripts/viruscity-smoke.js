@@ -128,6 +128,7 @@ function startCoord(l, i, times) {
         JWT_SECRET,
         CLUSTER_SECRET,
         MAP_FILE: "",
+        STATE_DB_PATH: "off", // track 2.1: esta prueba no usa persistencia (la prueba smoke:persistencia)
         ...Object.fromEntries(Object.entries(times).map(([k, v]) => [k, String(v)])),
     });
 }

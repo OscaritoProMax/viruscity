@@ -22,7 +22,9 @@ const { resumePosition, sanitizeIntent, sanitizeExtras, stepPlayers, clampDt, sn
 const { startHeartbeatLoop } = require("./directory-client.js");
 const { createPeerNetwork } = require("./peers.js");
 const { buildJoined, buildLeft, buildIntent, buildExtras } = require("./mesh.js");
-const { createMatchState, advance, applyAction, buildClientView, frozenUserIds, isGhost, plazaSpawns } = require("./match.js");
+const { createMatchState, advance, applyAction, buildClientView, frozenUserIds, isGhost, plazaSpawns, validateMatchState } = require("./match.js");
+const { openStateStore, mergeEntry, validateEntry, isFresh } = require("./persist.js");
+const { POSITIONS_MAX } = require("./mesh.js");
 const { buildCity } = require("./city.js");
 const { sanitizeGameAction, selectEventsToDeliver, routeEvents, computeArbiter, shouldAdoptGameState, GAME_ACTIONS_PER_SEC } = require("./arbiter.js");
 
@@ -126,6 +128,7 @@ const net = createPeerNetwork({
     onGameMessage: (peerId, action) => {
         if (action.type === "game_state") onGameState(action);
         else if (action.type === "game_action") onRemoteAction(peerId, action);
+        else if (action.type === "world_snapshot") onWorldSnapshot(peerId, action);
     },
     onPeerReady: (peerId) => onPeerReady(peerId),
     onPeerClosed: (peerId) => onPeerClosed(peerId),
@@ -138,10 +141,102 @@ Object.assign(hooks, {
     onLocalIntent: (userId, intent) => net.sendToPeers(buildIntent(userId, intent, COORDINATOR_ID)),
     onLocalExtras: (userId, extras) => net.sendToPeers(buildExtras(userId, extras, COORDINATOR_ID)),
 });
-// userId -> { x, y }: última posición de quien se desconectó. Al volver (recargar la página, otra pestaña,
-// reconexión) aparece donde estaba: el cliente no puede elegir dónde aparecer. Vive en memoria: se pierde
-// si el coordinator se reinicia.
+// userId -> entrada { userId, username, x, y, extras, version, savedAt, ownerId }: lo último que se sabe de cada
+// jugador. Al volver (recargar la página, otra pestaña, reconexión) aparece donde estaba: el cliente no puede
+// elegir dónde aparecer. Track 2.1: además se guarda en la base del coordinador (STATE_DB_PATH) y se recupera
+// al reiniciar, y se intercambia con los peers (world_snapshot) al entrar al mesh.
 const lastPositions = new Map();
+
+// ---------- Persistencia (track 2.1 del examen final) ----------
+// Cada PERSIST_MS se guarda en la base PROPIA de este coordinador lo que sabe de cada jugador y la partida.
+// Al arrancar se recupera lo que tenga menos de PERSIST_MAX_AGE_MS. La reconciliación está en persist.js.
+const persistCfg = conf.persist;
+let store = null;
+let restoredMatch = false; // true si al arrancar se recuperó una partida (se ofrece al árbitro al conectar)
+let lastPersistAt = null;
+let persistFailed = false;
+if (persistCfg.dbPath) {
+    try {
+        store = openStateStore(persistCfg.dbPath);
+    } catch (err) {
+        fatal(`no se pudo abrir la base de estado STATE_DB_PATH (${err.message})`);
+    }
+    const now = Date.now();
+    let recovered = 0;
+    for (const row of store.loadPlayers()) {
+        if (mergeEntry(lastPositions, validateEntry(row, cfg), { now, maxAgeMs: persistCfg.maxAgeMs })) recovered += 1;
+    }
+    const saved = store.loadMatch();
+    let matchText = "sin partida guardada";
+    if (saved && isFresh(saved, now, persistCfg.maxAgeMs)) {
+        const v = validateMatchState(saved.match);
+        if (v.ok) {
+            match = v.match;
+            restoredMatch = match.matchId > 0;
+            matchText = `partida ${match.matchId} en ${match.phase} (rev ${match.rev})`;
+        } else {
+            matchText = "partida guardada inválida (se ignora)";
+        }
+    } else if (saved) {
+        matchText = "partida guardada demasiado vieja (se ignora)";
+    }
+    console.log(`Persistencia: ${path.basename(persistCfg.dbPath)} · ${recovered} jugadores recuperados · ${matchText}`);
+}
+
+// Entrada persistible de un jugador vivo. Un jugador LOCAL que cambió (posición, extras o nombre) sube de
+// versión: la versión la incrementa solo su dueño, así el orden no depende del reloj de cada máquina.
+// Las copias REMOTAS conservan la versión que anuncia el dueño en positions_sync (nunca menos de la conocida).
+function rememberPlayer(userId, p, now = Date.now()) {
+    const prev = lastPositions.get(userId);
+    const extras = p.extras ?? {};
+    let version = Math.max(p.version ?? 0, prev?.version ?? 0);
+    if (isLocal(p)) {
+        const changed = !prev || prev.x !== p.x || prev.y !== p.y || prev.username !== p.username || JSON.stringify(prev.extras ?? {}) !== JSON.stringify(extras);
+        if (changed) version += 1;
+        p.version = version;
+    }
+    const entry = { userId, username: p.username, x: p.x, y: p.y, extras, version, savedAt: now, ownerId: p.ownerId };
+    lastPositions.set(userId, entry);
+    return entry;
+}
+
+// Guarda en la base: todos los jugadores conocidos (vivos y desconectados recientes) y la partida
+function persistNow(now = Date.now()) {
+    if (!store) return;
+    for (const [userId, p] of players) rememberPlayer(userId, p, now);
+    for (const [userId, e] of lastPositions) if (!players.has(userId) && !isFresh(e, now, persistCfg.maxAgeMs)) lastPositions.delete(userId);
+    try {
+        store.savePlayers([...lastPositions.values()], { pruneBefore: now - persistCfg.maxAgeMs });
+        store.saveMatch(match, now);
+        lastPersistAt = now;
+        if (persistFailed) console.log("Persistencia: se volvió a guardar correctamente");
+        persistFailed = false;
+    } catch (err) {
+        if (!persistFailed) console.error(`Persistencia: no se pudo guardar (${err.message}); se reintenta cada ${persistCfg.everyMs} ms`);
+        persistFailed = true;
+    }
+}
+const persistTicker = store ? setInterval(() => persistNow(), persistCfg.everyMs) : null;
+
+// world_snapshot para un peer recién conectado: lo que sé de cada jugador, en trozos que caben en un mensaje
+const SNAPSHOT_CHUNK = 200;
+function sendWorldSnapshot(peerId) {
+    const now = Date.now();
+    for (const [userId, p] of players) rememberPlayer(userId, p, now);
+    const entries = [...lastPositions.values()].filter((e) => isFresh(e, now, persistCfg.maxAgeMs)).slice(0, POSITIONS_MAX * 5);
+    for (let i = 0; i < entries.length; i += SNAPSHOT_CHUNK) {
+        net.sendToPeer(peerId, { type: "world_snapshot", origin: COORDINATOR_ID, players: entries.slice(i, i + SNAPSHOT_CHUNK) });
+    }
+}
+
+// world_snapshot de un peer: por cada jugador gana la versión más alta; los que están vivos aquí no se tocan
+function onWorldSnapshot(peerId, { players: entries }) {
+    const live = new Set(players.keys());
+    const now = Date.now();
+    let updated = 0;
+    for (const e of entries) if (mergeEntry(lastPositions, e, { live, now, maxAgeMs: persistCfg.maxAgeMs })) updated += 1;
+    if (updated > 0) console.log(`Persistencia: ${updated} jugadores actualizados con el snapshot de ${peerId}`);
+}
 
 // ---------- HTTP ----------
 const app = express();
@@ -171,6 +266,8 @@ app.get("/status", (req, res) => {
         peers: net.readyPeerIds(), // ids de peers con handshake completo
         authReachable: authReachable === true,
         authNodesUp,
+        // Track 2.1: ¿persiste?, cada cuánto, último guardado y cuántos jugadores conoce
+        persistence: { enabled: store !== null, everyMs: persistCfg.everyMs, lastSavedAt: lastPersistAt, knownPlayers: lastPositions.size },
         // Partida (sin roles): fase, número de partida, versión, cura y tamaño del roster
         match: {
             phase: match.phase,
@@ -294,7 +391,9 @@ wss.on("connection", (ws, payload) => {
         x,
         y,
         intent: { x: 0, y: 0 },
-        extras: {},
+        // Track 2.1: recupera también sus extras (color…), saneados otra vez por si vienen de la base o de un peer
+        extras: sanitizeExtras({ extras: previous?.extras ?? lastPositions.get(userId)?.extras ?? {} }, cfg) ?? {},
+        version: Math.max(previous?.version ?? 0, lastPositions.get(userId)?.version ?? 0), // track 2.1
     };
     players.set(userId, player);
     if (previous && isLocal(previous)) {
@@ -306,6 +405,7 @@ wss.on("connection", (ws, payload) => {
         console.log(`Jugador conectado: ${username} (${userId}) · jugadores: ${players.size}`);
     }
     hooks.onLocalJoin(userId, player);
+    if (Object.keys(player.extras).length > 0) hooks.onLocalExtras(userId, player.extras);
 
     // Bienvenida: quién soy, cómo es el mundo, la ciudad de la partida (zonas, estaciones y plaza) y las
     // reglas que el cliente necesita para dibujar (decisión 20). Luego, de inmediato, su vista 'game'.
@@ -344,7 +444,7 @@ wss.on("connection", (ws, payload) => {
         // no debe borrar a la conexión nueva del mismo usuario.
         if (players.get(userId)?.socket !== ws) return;
         const gone = players.get(userId);
-        lastPositions.set(userId, { x: gone.x, y: gone.y });
+        rememberPlayer(userId, gone);
         players.delete(userId);
         console.log(`Jugador desconectado: ${username} (${userId}) código ${code} · jugadores: ${players.size}`);
         hooks.onLocalLeave(userId);
@@ -691,13 +791,21 @@ function recomputeArbiter() {
 }
 
 function onPeerReady(peerId) {
+    if (store) sendWorldSnapshot(peerId); // track 2.1: reconciliar lo persistido con el peer
     const before = recomputeArbiter();
     // Árbitro saliente: aparece un id menor → le paso la partida actual (handover)
     if (before === COORDINATOR_ID && arbiterId === peerId) {
         net.sendToPeer(peerId, { type: "game_state", origin: COORDINATOR_ID, handover: true, match, events: [] });
         console.log(`Handover a ${peerId}: partida ${match.matchId} (${match.phase})`);
+    } else if (restoredMatch && peerId === arbiterId) {
+        // Track 2.1: arranqué con una partida guardada y no soy el árbitro → se la ofrezco; la adopta si es
+        // más nueva que la suya (misma regla del handover: matchId y luego rev)
+        net.sendToPeer(peerId, { type: "game_state", origin: COORDINATOR_ID, handover: true, match, events: [] });
+        console.log(`Partida recuperada ofrecida al árbitro ${peerId}: partida ${match.matchId} (${match.phase})`);
+        restoredMatch = false;
     }
     if (!isArbiter()) return;
+    restoredMatch = false; // soy el árbitro: mi partida ya es la que cuenta
     if (!hasState) startSyncWait("sin estado");
     else if (net.readyPeerIds().length === 1 && before === COORDINATOR_ID && syncUntil === 0) startSyncWait("se unió a la malla");
 }
@@ -774,6 +882,16 @@ function shutdown(signal) {
     clearInterval(replicateTicker);
     clearTimeout(replicateTimer);
     clearInterval(heartbeat);
+    // Track 2.1: último guardado antes de salir
+    clearInterval(persistTicker);
+    if (store) {
+        persistNow();
+        try {
+            store.close();
+        } catch {
+            // ya cerrada
+        }
+    }
     wss.close();
 
     server.close(() => {

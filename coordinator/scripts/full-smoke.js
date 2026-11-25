@@ -78,7 +78,7 @@ function startAuth(id) {
 function startCoord(id) {
     launch(id, COORD_DIR, ["index.js", "--env", emptyEnv], {
         COORDINATOR_ID: id, PORT: String(COORD_PORT[id]), PEER_PORT: String(COORD_PEER[id]), PUBLIC_URL: `ws://localhost:${COORD_PORT[id]}`,
-        PEER_URL: `ws://localhost:${COORD_PEER[id]}`, AUTH_URLS: AUTH_URLS.join(","), JWT_SECRET, CLUSTER_SECRET, MAP_FILE: "", HEARTBEAT_AUTH_MS: "2000",
+        PEER_URL: `ws://localhost:${COORD_PEER[id]}`, AUTH_URLS: AUTH_URLS.join(","), JWT_SECRET, CLUSTER_SECRET, MAP_FILE: "", STATE_DB_PATH: "off", HEARTBEAT_AUTH_MS: "2000",
     });
 }
 

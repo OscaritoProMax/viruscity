@@ -100,6 +100,7 @@ function startCoord(l) {
         JWT_SECRET,
         CLUSTER_SECRET,
         MAP_FILE: "",
+        STATE_DB_PATH: "off", // track 2.1: esta prueba no usa persistencia (la prueba smoke:persistencia)
         WORLD_WIDTH: String(WORLD.width),
         WORLD_HEIGHT: String(WORLD.height),
         HEARTBEAT_AUTH_MS: "2000",

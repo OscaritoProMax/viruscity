@@ -10,6 +10,11 @@
 //   dropPeerPlayers(players, peerId)                     → ids eliminados
 //   buildResync(players, selfId)                         → mensajes para un peer recién conectado
 //   buildPositionsSync(players, selfId)                  → positions_sync de los locales, o null
+//
+// Track 2.1 (persistencia): world_snapshot { origin, players:[entrada] } con lo que el coordinador sabe de cada
+// jugador (posición, extras, versión, dueño). Se manda al conectar un peer; applyPeerMessage lo devuelve como
+// acción y index.js lo fusiona con persist.mergeEntry (gana la versión más alta). positions_sync puede traer
+// v (versión del dueño) en cada entrada para que las copias remotas conozcan la versión actual.
 //   buildJoined / buildLeft / buildIntent / buildExtras  → mensajes de un jugador local
 //
 // Regla de oro: cada jugador tiene un DUEÑO (ownerId, el coordinador donde está su cliente). Solo el
@@ -22,13 +27,14 @@
 const { sanitizeIntent, sanitizeExtras, isLocal } = require("./game.js");
 const { sanitizeGameAction } = require("./arbiter.js");
 const { validateMatchState } = require("./match.js");
+const { validateEntry } = require("./persist.js");
 
 const ID_REGEX = /^[A-Za-z0-9_-]{1,32}$/;
 const USERNAME_REGEX = /^[a-zA-Z0-9_]{3,32}$/;
 const PROVIDERS = new Set(["local", "google"]);
 const USER_ID_MAX = 64;
 const POSITIONS_MAX = 1000;
-const TYPES = new Set(["hello", "player_joined", "player_left", "intent_replicate", "extras_replicate", "positions_sync", "game_action", "game_state"]);
+const TYPES = new Set(["hello", "player_joined", "player_left", "intent_replicate", "extras_replicate", "positions_sync", "game_action", "game_state", "world_snapshot"]);
 
 // Partida de Viruscity (V3): acciones reenviadas al árbitro y estado replicado por el árbitro
 const MAX_GAME_EVENTS = 100;
@@ -90,9 +96,21 @@ function validatePeerMessage(msg, cfg) {
             const userId = normUserId(entry.userId);
             const pos = normPos(entry.x, entry.y, cfg);
             if (!userId || !pos) return fail("entrada de positions_sync inválida");
-            list.push({ userId, x: pos.x, y: pos.y });
+            if (entry.v !== undefined && !(Number.isSafeInteger(entry.v) && entry.v >= 0)) return fail("entrada de positions_sync inválida");
+            list.push({ userId, x: pos.x, y: pos.y, ...(entry.v !== undefined && { v: entry.v }) });
         }
         return { ok: true, msg: { type: "positions_sync", origin, players: list } };
+    }
+
+    if (msg.type === "world_snapshot") {
+        if (!Array.isArray(msg.players) || msg.players.length > POSITIONS_MAX) return fail(`players debe ser una lista de hasta ${POSITIONS_MAX}`);
+        const list = [];
+        for (const entry of msg.players) {
+            const clean = validateEntry(entry, cfg);
+            if (!clean || !ID_REGEX.test(clean.ownerId)) return fail("entrada de world_snapshot inválida");
+            list.push(clean);
+        }
+        return { ok: true, msg: { type: "world_snapshot", origin, players: list } };
     }
 
     if (msg.type === "game_state") {
@@ -249,6 +267,7 @@ function applyPeerMessage(players, selfId, peerId, msg, cfg = null) {
                 if (!pos) continue;
                 p.x = pos.x;
                 p.y = pos.y;
+                if (entry.v !== undefined) p.version = entry.v;
             }
             return NOTHING();
         }
@@ -261,6 +280,9 @@ function applyPeerMessage(players, selfId, peerId, msg, cfg = null) {
         case "game_state":
             // Si se adopta o no lo decide index.js con shouldAdoptGameState (decisión 18)
             return { membershipChanged: false, actions: [{ type: "game_state", origin: msg.origin, handover: msg.handover, match: msg.match, events: msg.events }] };
+        case "world_snapshot":
+            // Lo fusiona index.js con lo persistido (persist.mergeEntry)
+            return { membershipChanged: false, actions: [{ type: "world_snapshot", origin: msg.origin, players: msg.players }] };
         default:
             return NOTHING(); // hello se maneja en la conexión
     }
@@ -314,11 +336,12 @@ function buildResync(players, selfId) {
 function buildPositionsSync(players, selfId) {
     const locals = localEntries(players, selfId);
     if (locals.length === 0) return null;
-    return { type: "positions_sync", origin: selfId, players: locals.map(([userId, p]) => ({ userId, x: p.x, y: p.y })) };
+    return { type: "positions_sync", origin: selfId, players: locals.map(([userId, p]) => ({ userId, x: p.x, y: p.y, v: p.version ?? 0 })) };
 }
 
 module.exports = {
     ID_REGEX,
+    POSITIONS_MAX,
     shouldInitiate,
     resolveLink,
     validatePeerMessage,

@@ -99,3 +99,15 @@ test("AUTH_URLS (Taller 7): lista normalizada; AUTH_URL suelta es una lista de u
     assert.throws(() => loadConfig(env({ AUTH_URLS: "" })), /AUTH_URLS es obligatorio/);
     assert.deepEqual(readAuthUrls({ AUTH_URL: "https://x.ngrok-free.app/" }), ["https://x.ngrok-free.app"]);
 });
+
+test("persistencia (track 2.1): base propia por id, se puede apagar y valida los tiempos", () => {
+    const c = loadConfig(valid(), { baseDir: "/base" });
+    assert.match(c.persist.dbPath.split("\\").join("/"), /\/base\/state-coord-b\.db$/);
+    assert.equal(c.persist.everyMs, 2000);
+    assert.equal(c.persist.maxAgeMs, 600000);
+    assert.equal(loadConfig(valid({ STATE_DB_PATH: "off" })).persist.dbPath, null);
+    assert.match(loadConfig(valid({ STATE_DB_PATH: "datos/b.db" }), { baseDir: "/base" }).persist.dbPath.split("\\").join("/"), /\/base\/datos\/b\.db$/);
+    assert.equal(loadConfig(valid({ PERSIST_MS: "500", PERSIST_MAX_AGE_MS: "60000" })).persist.everyMs, 500);
+    assert.throws(() => loadConfig(valid({ PERSIST_MS: "50" })), /PERSIST_MS/);
+    assert.throws(() => loadConfig(valid({ PERSIST_MAX_AGE_MS: "abc" })), /PERSIST_MAX_AGE_MS/);
+});
