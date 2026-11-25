@@ -35,6 +35,13 @@ Dependencias de producción: `express`, `ws`, `jsonwebtoken`, `bcryptjs`, `cors`
 
 **Requisitos:** Node.js ≥ 22.13 (probado en 24).
 
+Hay dos lanzadores en la raíz, uno para cada tipo de prueba. Cada uno deja primero los `.env` como corresponde, así que se puede pasar de uno a otro sin editar nada a mano. Si ya hay servicios corriendo en sus puertos, no abren nada y piden cerrarlos.
+
+| Lanzador | Para | Qué hace |
+|---|---|---|
+| `iniciar-servicios.cmd` | **pruebas locales** | deja los `.env` en `localhost` y abre los 7 servicios |
+| `iniciar-ngrok.cmd` | **pruebas por ngrok** | escribe en los `.env` las URLs de `tunel/tunel.env`, abre los 7 servicios, espera a que respondan y abre los 7 túneles |
+
 **Local (7 servicios):**
 1. Instalar: `cd auth-service && npm ci`, y lo mismo en `coordinator` y `client`.
 2. Copiar cada `.example` sin el sufijo:
@@ -43,7 +50,7 @@ Dependencias de producción: `express`, `ws`, `jsonwebtoken`, `bcryptjs`, `cors`
    - `client/.env`.
 
    Poner el **mismo** `JWT_SECRET` y `CLUSTER_SECRET` en los 6 servidores y el mismo `GOOGLE_CLIENT_ID` en los auth y el client. Para generar un secreto: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
-3. En Windows: `iniciar-servicios.cmd` abre los 7 servicios en sus ventanas (primero los auth). A mano, en 7 terminales: `npm run start:a|b|c` en `auth-service` y en `coordinator`, y `npm start` en `client`.
+3. En Windows: **`iniciar-servicios.cmd`** (doble clic) abre los 7 servicios en sus ventanas, primero los auth. A mano, en 7 terminales: `npm run start:a|b|c` en `auth-service` y en `coordinator`, y `npm start` en `client`.
 4. Abrir `http://localhost:3000`. Para ver el clúster: `http://localhost:3000/cluster.html`. Para mirar sin cuenta: `http://localhost:3000/spectate.html`.
 
 **Por túnel (7 cuentas de ngrok, una por servicio, sin proxy delante):**
@@ -51,7 +58,7 @@ Dependencias de producción: `express`, `ws`, `jsonwebtoken`, `bcryptjs`, `cors`
 Cada cuenta gratuita de ngrok tiene **un** dominio fijo. Con 7 cuentas, cada servicio tiene su propia URL pública y el sistema funciona igual que en local: el navegador habla directo con cada auth y con cada coordinador.
 
 1. Copiar `tunel/tunel.example.env` como `tunel/tunel.env` (no se versiona). Poner los 7 dominios (`https://…ngrok-free.app`) y el authtoken de la cuenta dueña de cada uno.
-2. Ejecutar `node tunel/configurar.js`. Escribe **solo** estas claves (con `--simular` muestra qué cambiaría sin escribir):
+2. Ejecutar **`iniciar-ngrok.cmd`** (doble clic). Si falta ngrok, `tunel/tunel.env` o algún authtoken, se detiene sin tocar nada. Por dentro, `tunel/configurar.js` escribe **solo** estas claves (`node tunel/configurar.js --simular` muestra qué cambiaría sin escribir):
 
    | Archivo | Clave | Valor |
    |---|---|---|
@@ -61,14 +68,14 @@ Cada cuenta gratuita de ngrok tiene **un** dominio fijo. Con 7 cuentas, cada ser
    | `coordinator/.env.coord-a` (b, c) | `PUBLIC_URL` | `wss://<coord-a>` (b, c): es la URL que el directorio entrega al navegador |
    | **sin cambios** | `PEER_URL` de todos y `AUTH_URLS` de los coordinadores | siguen en `localhost`: el mesh y los heartbeats no salen de la máquina |
 
-   Además genera `tunel/ngrok-<servicio>.yml` (authtoken y un puerto de inspector distinto para cada agente) y `tunel/abrir-tuneles.cmd`, e imprime los 7 comandos, por ejemplo `ngrok http 4001 --url https://<auth-a> --config tunel/ngrok-auth-a.yml`.
-3. Reiniciar los 7 servicios y abrir los túneles con `tunel\abrir-tuneles.cmd` (o con los 7 comandos).
+   Además genera `tunel/ngrok-<servicio>.yml` (authtoken y un puerto de inspector distinto para cada agente). Luego abre los 7 servicios, espera a que el client responda y abre los 7 túneles, cada uno en su ventana, por ejemplo `ngrok http 4001 --url https://<auth-a> --config tunel/ngrok-auth-a.yml`.
+3. Cada ventana de ngrok debe decir `Forwarding https://… -> http://localhost:<puerto>`. Se entra por la URL del client.
 4. **Google:** en Google Cloud → Credenciales → el ID de cliente OAuth → *Orígenes autorizados de JavaScript*, agregar `https://<client>`. Basta una vez: el dominio fijo no cambia.
 5. Si ngrok muestra su página de aviso:
    - en el client se acepta una vez;
    - las llamadas al auth ya mandan `ngrok-skip-browser-warning`;
    - si un WebSocket de un coordinador no abre, abrir una vez `https://<coord-x>/health` en ese navegador y aceptar el aviso.
-6. Para volver a jugar en local: `node tunel/configurar.js --local`.
+6. Para volver a las pruebas locales: cerrar todas las ventanas y ejecutar `iniciar-servicios.cmd`, que deja los `.env` otra vez en `localhost`.
 
 > El `gateway/` del Taller 7 (un solo túnel con proxy por prefijo) queda en el repositorio como alternativa documentada, pero **no se usa en la entrega**: con 7 túneles no hace falta y así se cumple "sin proxy reverso delante del sistema".
 
@@ -1995,7 +2002,10 @@ Probado con dos jugadores en Edge: los 12 intentos quedaron bloqueados, medidos 
 
 ```
 .
-├── .gitignore · CLAUDE.md · README.md · ngrok.example.yml · iniciar-servicios.cmd (abre los 7 servicios)
+├── .gitignore · CLAUDE.md · README.md · ngrok.example.yml
+├── iniciar-servicios.cmd   # pruebas LOCALES: .env en localhost y los 7 servicios
+├── iniciar-ngrok.cmd       # pruebas por NGROK: .env con los dominios, los 7 servicios y los 7 túneles
+├── scripts/abrir-servicios.cmd  # abre los 7 servicios (lo usan los dos lanzadores; revisa que los puertos estén libres)
 ├── tunel/              # despliegue con 7 túneles de ngrok: tunel.example.env y configurar.js
 ├── auth-service/
 │   ├── .env.example · .env.auth-a/b/c.example · .npmrc · package.json · package-lock.json

@@ -20,10 +20,9 @@ Como presentas solo, el docente te puede pedir **cualquier** pieza: prepara las 
 - [ ] `git pull` en `main` y `npm ci` en `auth-service`, `coordinator` y `client` (solo si cambió algo).
 - [ ] Unificar los datos, si aún no está hecho: copiar `auth-service/users.db` como `users-a.db`, `users-b.db` y `users-c.db`, **con los auth apagados**.
 - [ ] Túneles:
-  - `node tunel/configurar.js` (ya con `tunel/tunel.env` lleno);
-  - `iniciar-servicios.cmd`;
-  - `tunel\abrir-tuneles.cmd`;
-  - abrir `https://<client>` y aceptar el aviso de ngrok.
+  - con `tunel/tunel.env` lleno, doble clic en **`iniciar-ngrok.cmd`**: configura los `.env` y abre los 7 servicios y los 7 túneles;
+  - abrir `https://rebalance-spotted-appraisal.ngrok-free.dev` (el client) y aceptar el aviso de ngrok;
+  - si te piden pruebas **locales**: cierra todas las ventanas y usa **`iniciar-servicios.cmd`**.
 - [ ] Comprobar:
   - en `https://<client>/cluster.html` deben aparecer los 3 coordinadores;
   - en el login, el indicador "Auth: auth-x (líder)".
