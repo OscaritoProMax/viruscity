@@ -1,4 +1,5 @@
-// Vista de depuración del clúster (Taller 6): cada 1 s pide GET {AUTH_URL}/directory y pinta la tabla
+// Vista de depuración del clúster (Taller 6): cada 1 s pide GET /directory (window.authFetch, con failover entre
+// los auth-services del Taller 7) y pinta la tabla
 // de coordinadores vivos. No necesita sesión. Todo el texto va con textContent (sin innerHTML).
 //
 // Funciones puras exportadas (se prueban con node:test):
@@ -43,7 +44,6 @@ export const formatAge = (ms) => `${(Math.max(0, Number(ms) || 0) / 1000).toFixe
 // ---------- Página (solo en el navegador) ----------
 function startPage() {
     const $ = (id) => document.getElementById(id);
-    const url = `${window.APP_CONFIG.AUTH_URL}/directory`;
 
     function cell(text, className) {
         const td = document.createElement("td");
@@ -79,7 +79,7 @@ function startPage() {
 
     async function refresh() {
         try {
-            const res = await fetch(url, { headers: { "ngrok-skip-browser-warning": "true" }, cache: "no-store" });
+            const res = await window.authFetch("/directory", { headers: { "ngrok-skip-browser-warning": "true" }, cache: "no-store" });
             if (!res.ok) throw new Error(String(res.status));
             render(await res.json());
             $("netNotice").hidden = true;
@@ -91,7 +91,7 @@ function startPage() {
         setTimeout(refresh, REFRESH_MS);
     }
 
-    $("authUrl").textContent = window.APP_CONFIG.AUTH_URL;
+    $("authUrl").textContent = (window.APP_CONFIG.AUTH_URLS ?? [window.APP_CONFIG.AUTH_URL]).join(" · ");
     refresh();
 }
 

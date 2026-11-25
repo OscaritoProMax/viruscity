@@ -104,11 +104,16 @@
         <!-- Inicio de sesión con Google (Taller 5): js/google-login.js lo llena y lo muestra si hay GOOGLE_CLIENT_ID -->
         <div id="googleSlot" hidden></div>
 
+        <!-- Taller 7: qué auth-service respondió la última petición (js/auth-node.js) -->
+        <p class="auth__node" id="authNode" aria-live="polite">Auth: —</p>
+
         <footer class="auth__footer">Proyecto final · Sistemas Distribuidos · Universidad de Boyacá</footer>
     </section>
 </main>
 
 <script src="/config.js"></script>
+<script src="js/auth-fetch.js"></script>
+<script src="js/auth-node.js"></script>
 <script src="js/login.js"></script>
 <script type="module" src="js/login-ui.js"></script>
 <!-- Única dependencia externa permitida (Taller 5): Google Identity Services para el botón de Google -->

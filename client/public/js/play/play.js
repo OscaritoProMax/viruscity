@@ -197,7 +197,7 @@ function startGame(token) {
         setConnection("connecting");
         let result;
         try {
-            const res = await fetch(`${window.APP_CONFIG.AUTH_URL}/coordinator`, { headers: NGROK_HEADERS, cache: "no-store" });
+            const res = await window.authFetch("/coordinator", { headers: NGROK_HEADERS, cache: "no-store" });
             let body = null;
             try {
                 body = await res.json();
@@ -205,8 +205,9 @@ function startGame(token) {
                 body = null; // p. ej. una página de aviso en vez de JSON
             }
             result = parseCoordinatorResponse(res.status, body);
-        } catch {
-            result = { kind: "network" };
+        } catch (err) {
+            // Taller 7: ningún auth respondió bien; si el último dijo "sin coordinadores", se respeta ese motivo
+            result = err?.status ? parseCoordinatorResponse(err.status, err.body) : { kind: "network" };
         }
         if (loggingOut) return;
         if (result.kind !== "ok") {

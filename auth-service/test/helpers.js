@@ -34,13 +34,14 @@ function fakeGoogleVerifier(clientId = CLIENT_ID) {
     };
 }
 
-// Levanta la app en un puerto libre. Devuelve { db, post, get, close }.
-async function startApp({ db, verifyGoogle = fakeGoogleVerifier(), jwtExpiresIn = "1h", bcryptRounds = 10 } = {}) {
+// Levanta la app en un puerto libre. Devuelve { db, post, get, close }; cada respuesta trae { status, text, json, headers }.
+// replication es opcional (Taller 7): sin ella la app usa la de nodo único.
+async function startApp({ db, verifyGoogle = fakeGoogleVerifier(), jwtExpiresIn = "1h", bcryptRounds = 10, replication } = {}) {
     if (!db) {
         db = new DatabaseSync(":memory:");
         ensureSchema(db, { dbPath: ":memory:" });
     }
-    const app = createApp({ db, jwtSecret: JWT_SECRET, jwtExpiresIn, bcryptRounds, verifyGoogle });
+    const app = createApp({ db, jwtSecret: JWT_SECRET, jwtExpiresIn, bcryptRounds, verifyGoogle, replication });
     const server = await new Promise((resolve) => {
         const s = app.listen(0, "127.0.0.1", () => resolve(s));
     });
@@ -57,13 +58,13 @@ async function startApp({ db, verifyGoogle = fakeGoogleVerifier(), jwtExpiresIn 
         } catch {
             json = undefined;
         }
-        return { status: res.status, text, json };
+        return { status: res.status, text, json, headers: res.headers };
     }
 
     return {
         db,
         post: (route, body, headers) => request("POST", route, body, headers),
-        get: (route) => request("GET", route),
+        get: (route, headers) => request("GET", route, undefined, headers),
         close: () =>
             new Promise((resolve) => {
                 server.closeAllConnections();

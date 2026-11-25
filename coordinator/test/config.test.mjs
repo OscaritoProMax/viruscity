@@ -82,3 +82,20 @@ test("envFileArg: --env <ruta>, --env=<ruta>, sin ruta y sin argumento", () => {
     assert.equal(envFileArg(["node", "index.js", "--env"]), "");
     assert.equal(envFileArg(["node", "index.js"]), null);
 });
+
+test("AUTH_URLS (Taller 7): lista normalizada; AUTH_URL suelta es una lista de una; duplicados y entradas malas se rechazan", async () => {
+    const { readAuthUrls } = await import("../config.js").then((m) => m.default ?? m);
+    const env = (extra) => { const e = valid(extra); delete e.AUTH_URL; return { ...e, ...extra }; };
+    let c = loadConfig(env({ AUTH_URLS: "http://localhost:4001/, http://localhost:4002 ,https://auth-c.example.com//" }));
+    assert.deepEqual(c.authUrls, ["http://localhost:4001", "http://localhost:4002", "https://auth-c.example.com"]);
+    assert.equal(c.authUrl, "http://localhost:4001", "authUrl = la primera (compatibilidad)");
+    c = loadConfig(valid({ AUTH_URL: "http://localhost:4000/" }));
+    assert.deepEqual(c.authUrls, ["http://localhost:4000"], "solo AUTH_URL → lista de una");
+    c = loadConfig(valid({ AUTH_URLS: "http://localhost:4001" }));
+    assert.deepEqual(c.authUrls, ["http://localhost:4001"], "AUTH_URLS manda sobre AUTH_URL");
+    assert.throws(() => loadConfig(env({ AUTH_URLS: "http://localhost:4001,http://localhost:4001/" })), /AUTH_URLS tiene una URL repetida/);
+    assert.throws(() => loadConfig(env({ AUTH_URLS: "http://localhost:4001,,http://localhost:4002" })), /AUTH_URLS: la entrada 2 está vacía/);
+    assert.throws(() => loadConfig(env({ AUTH_URLS: "http://localhost:4001,ws://localhost:4002" })), /AUTH_URLS/);
+    assert.throws(() => loadConfig(env({ AUTH_URLS: "" })), /AUTH_URLS es obligatorio/);
+    assert.deepEqual(readAuthUrls({ AUTH_URL: "https://x.ngrok-free.app/" }), ["https://x.ngrok-free.app"]);
+});

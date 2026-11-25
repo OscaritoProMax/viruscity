@@ -2,7 +2,7 @@
 // TODA decisión (quién inicia, conexiones duplicadas, validación, propiedad, resync) la toma mesh.js;
 // aquí solo se conectan los cables.
 //
-// createPeerNetwork({ selfId, peerPort, clusterSecret, authUrl, discoveryMs, pingMs, syncMs, cfg, players,
+// createPeerNetwork({ selfId, peerPort, clusterSecret, authUrls, discoveryMs, pingMs, syncMs, cfg, players,
 //                     onMembershipChanged, onCloseLocal, log }) → {
 //   start()            levanta el servidor de peers en PEER_PORT y empieza el descubrimiento
 //   stop()             detiene temporizadores y cierra conexiones y servidor
@@ -17,7 +17,8 @@
 // posiciones de los locales (corrige la deriva); cada pingMs, ping (terminate si no hubo pong en el ciclo
 // anterior). Si se cierra la conexión con un peer, sus jugadores remotos se eliminan.
 //
-// Descubrimiento: al arrancar y cada discoveryMs se pide GET {authUrl}/peers y se abre conexión SOLO
+// Descubrimiento: al arrancar y cada discoveryMs se pide GET /coordinator-peers al primer auth de AUTH_URLS que
+// responda (Taller 7; en el Taller 6 era GET {authUrl}/peers) y se abre conexión SOLO
 // hacia los peers de id mayor (shouldInitiate) que aún no tengan conexión ni intento en curso. Los de id
 // menor esperan a que ellos conecten. Si el auth no responde, se conservan las conexiones existentes.
 //
@@ -29,7 +30,7 @@ const http = require("node:http");
 const crypto = require("node:crypto");
 const { WebSocketServer, WebSocket } = require("ws");
 const { shouldInitiate, resolveLink, validatePeerMessage, applyPeerMessage, dropPeerPlayers, buildResync, buildPositionsSync } = require("./mesh.js");
-const { fetchPeers } = require("./directory-client.js");
+const { fetchCoordinatorPeers } = require("./directory-client.js");
 
 const PEER_MAX_PAYLOAD = 262144;
 const HELLO_TIMEOUT_MS = 3000;
@@ -41,7 +42,7 @@ function createPeerNetwork({
     selfId,
     peerPort,
     clusterSecret,
-    authUrl,
+    authUrls,
     discoveryMs,
     pingMs,
     syncMs,
@@ -239,7 +240,7 @@ function createPeerNetwork({
 
     async function discover() {
         if (stopped) return;
-        const list = await fetchPeers({ authUrl, selfId });
+        const list = await fetchCoordinatorPeers({ authUrls, selfId });
         if (!list || stopped) return; // auth caído: las conexiones existentes se conservan
         for (const { coordinatorId, peerUrl } of list) {
             if (!shouldInitiate(selfId, coordinatorId)) continue; // los de id menor nos conectan a nosotros

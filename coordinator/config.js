@@ -77,6 +77,22 @@ function readUrl(env, key, protocols) {
     return clean;
 }
 
+// AUTH_URLS (Taller 7, decisión 16): lista de URLs http/https del clúster de auth separadas por comas, sin barra
+// final y sin repetidas. Si solo existe AUTH_URL (Talleres 5 y 6), es una lista de una.
+function readAuthUrls(env) {
+    const listRaw = String(env.AUTH_URLS ?? "").trim();
+    const key = listRaw ? "AUTH_URLS" : "AUTH_URL";
+    const raw = listRaw || String(env.AUTH_URL ?? "").trim();
+    if (!raw) throw new Error("AUTH_URLS es obligatorio: una o más URLs http:// o https:// del auth-service separadas por comas");
+    const urls = raw.split(",").map((part, i) => {
+        const value = part.trim();
+        if (!value) throw new Error(`${key}: la entrada ${i + 1} está vacía`);
+        return readUrl({ [key]: value }, key, ["http:", "https:"]);
+    });
+    if (new Set(urls).size !== urls.length) throw new Error(`${key} tiene una URL repetida`);
+    return urls;
+}
+
 function readSecret(env, key) {
     const value = env[key];
     if (!value) throw new Error(`${key} es obligatorio`);
@@ -137,7 +153,7 @@ function loadConfig(env = process.env, { baseDir = __dirname } = {}) {
 
     const publicUrl = readUrl(env, "PUBLIC_URL", ["ws:", "wss:"]);
     const peerUrl = readUrl(env, "PEER_URL", ["ws:", "wss:"]);
-    const authUrl = readUrl(env, "AUTH_URL", ["http:", "https:"]);
+    const authUrls = readAuthUrls(env);
 
     const jwtSecret = readSecret(env, "JWT_SECRET");
     const clusterSecret = readSecret(env, "CLUSTER_SECRET");
@@ -157,7 +173,8 @@ function loadConfig(env = process.env, { baseDir = __dirname } = {}) {
         peerPort,
         publicUrl,
         peerUrl,
-        authUrl,
+        authUrls,
+        authUrl: authUrls[0], // compatibilidad (Talleres 5 y 6)
         jwtSecret,
         clusterSecret,
         clientHeartbeatMs,
@@ -179,4 +196,4 @@ function envFileArg(argv = process.argv) {
     return null;
 }
 
-module.exports = { loadConfig, envFileArg, readMatchConfig, MATCH_DEFAULTS, ID_REGEX };
+module.exports = { loadConfig, envFileArg, readAuthUrls, readMatchConfig, MATCH_DEFAULTS, ID_REGEX };

@@ -1,10 +1,19 @@
 // App Express del auth-service (sin listen, para poder probarla con una base en memoria).
 //
-// createApp({ db, jwtSecret, jwtExpiresIn, bcryptRounds, verifyGoogle, directory, clusterSecret }) → app
+// createApp({ db, jwtSecret, jwtExpiresIn, bcryptRounds, verifyGoogle, directory, clusterSecret, replication }) → app
 //   db            DatabaseSync ya preparado con ensureSchema
 //   verifyGoogle  async (idToken) => payload (en producción, makeGoogleVerifier; en pruebas, uno falso)
 //   directory     directorio de coordinadores (directory.js); si falta, se crea uno con los valores por defecto
 //   clusterSecret secreto compartido con los coordinadores; si falta, POST /heartbeat responde siempre 401
+//   replication   interfaz de replicación (replication/standalone.js documenta la interfaz); si falta, se crea
+//                 la de nodo único sobre db (así las pruebas de los Talleres 5 y 6 no cambian)
+//
+// Taller 7: las escrituras (registro y primer login con Google) pasan por replication.write, que las serializa
+// y las guarda como entradas del oplog; las lecturas (login y Google de un usuario existente) pasan por la
+// puerta replication.canServeRead(). Las rutas del directorio de coordinadores no pasan por ninguna puerta.
+// Todas las respuestas llevan X-Auth-Id y X-Auth-Role (leader | replica), expuestos por CORS (decisión 13).
+// GET /status y GET /peers describen el clúster de auth (decisión 14); el /peers de coordinadores del
+// Taller 6 pasa a GET /coordinator-peers con la misma forma.
 //
 // Reglas (CLAUDE.md, Taller 5): una sola tabla users; usernames únicos sin distinguir mayúsculas;
 // errores siempre como JSON { error }; nunca se registran contraseñas, hashes, tokens, idTokens ni emails.
@@ -16,6 +25,8 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { createStatements } = require("./db.js");
 const { createDirectory } = require("./directory.js");
+const { nextUserId } = require("./oplog.js");
+const { createStandaloneReplication } = require("./replication/standalone.js");
 
 // Valores por defecto del directorio si createApp no recibe uno (CLAUDE.md, Taller 6)
 const DEFAULT_TTL_MS = 6000;
@@ -48,11 +59,19 @@ function validateUsername(username) {
     return null;
 }
 
-// Violación de UNIQUE en node:sqlite (SQLITE_CONSTRAINT_UNIQUE = 2067)
-const isUniqueViolation = (err) => err?.errcode === 2067 || /UNIQUE constraint failed/i.test(err?.message ?? "");
+// created_at de una cuenta nueva: 'YYYY-MM-DD HH:MM:SS' en UTC (el mismo formato que CURRENT_TIMESTAMP).
+// Lo calcula el líder y viaja dentro de la entrada: todas las réplicas guardan el mismo valor.
+const sqlTimestamp = (ms) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
 
-function createApp({ db, jwtSecret, jwtExpiresIn = "1h", bcryptRounds = 10, verifyGoogle, directory, clusterSecret }) {
+function createApp({ db, jwtSecret, jwtExpiresIn = "1h", bcryptRounds = 10, verifyGoogle, directory, clusterSecret, replication }) {
     const users = createStatements(db);
+    const repl = replication ?? createStandaloneReplication({ db });
+
+    // 503 not_leader con la URL del líder cuando se conoce (decisiones 12 y 13)
+    function notLeaderBody() {
+        const leader = repl.leader();
+        return leader?.leaderUrl ? { error: "not_leader", leaderUrl: leader.leaderUrl, leaderId: leader.leaderId } : { error: "not_leader" };
+    }
 
     // Directory service (Taller 6)
     const coordinators = directory ?? createDirectory({ ttlMs: DEFAULT_TTL_MS, reservationTtlMs: DEFAULT_RESERVATION_TTL_MS });
@@ -92,7 +111,15 @@ function createApp({ db, jwtSecret, jwtExpiresIn = "1h", bcryptRounds = 10, veri
         next();
     });
 
-    app.use(cors());
+    // Quién respondió (decisión 13): el cliente y los coordinadores lo muestran y lo usan para el failover
+    app.use((req, res, next) => {
+        const me = repl.whoami();
+        res.set("X-Auth-Id", me.authId);
+        res.set("X-Auth-Role", me.role === "leader" ? "leader" : "replica");
+        next();
+    });
+
+    app.use(cors({ exposedHeaders: ["X-Auth-Id", "X-Auth-Role"] }));
     app.use(express.json({ limit: "4kb" }));
 
     app.get("/health", (req, res) => {
@@ -118,19 +145,20 @@ function createApp({ db, jwtSecret, jwtExpiresIn = "1h", bcryptRounds = 10, veri
         // Sin distinguir mayúsculas y entre providers: también choca con usernames de cuentas de Google
         if (users.findByUsername(username)) return res.status(409).json(USERNAME_TAKEN);
 
+        // bcrypt va ANTES del mutex: es lo lento y no necesita la BD
         const passwordHash = await bcrypt.hash(password, bcryptRounds);
 
-        let info;
-        try {
-            info = users.insertLocal(username, passwordHash);
-        } catch (err) {
-            // Condición de carrera: otro registro con el mismo nombre entró entre el SELECT y el INSERT
-            if (isUniqueViolation(err)) return res.status(409).json(USERNAME_TAKEN);
-            throw err;
-        }
+        // Dentro del mutex se vuelve a mirar la BD: dos registros simultáneos del mismo nombre → uno solo entra
+        const result = await repl.write("register", (txDb) => {
+            if (users.findByUsername(username)) return { error: { status: 409, body: USERNAME_TAKEN } };
+            return {
+                data: { userId: nextUserId(txDb), username, provider: "local", password_hash: passwordHash, created_at: sqlTimestamp(repl.now()) },
+            };
+        });
+        if (!result.ok) return res.status(result.status).json(result.conflict ? USERNAME_TAKEN : result.body);
 
         // Nunca se devuelve el hash
-        res.status(201).json({ userId: String(info.lastInsertRowid), username });
+        res.status(201).json({ userId: String(result.entry.data.userId), username });
     });
 
     // ---------- Login local ----------
@@ -142,15 +170,22 @@ function createApp({ db, jwtSecret, jwtExpiresIn = "1h", bcryptRounds = 10, veri
             return res.status(400).json({ error: "username y password son obligatorios" });
         }
 
+        // Puerta de lectura (decisión 12): en una réplica muy atrasada o sin líder no se emite token
+        const gate = repl.canServeRead();
+        if (!gate.ok) return res.status(gate.status).json(gate.body);
+
+        // Si la lectura falla y esta BD va detrás del líder, el usuario podría existir allá: 503, no 401
+        const reject = () => (repl.isLagging() ? res.status(503).json(notLeaderBody()) : res.status(401).json(INVALID_CREDENTIALS));
+
         // Usuario inexistente o de Google: mismo 401 y mismo costo que una contraseña incorrecta
         const row = users.findByUsername(username);
         if (!row || row.provider !== "local") {
             await bcrypt.compare(password, DUMMY_HASH);
-            return res.status(401).json(INVALID_CREDENTIALS);
+            return reject();
         }
 
         const ok = await bcrypt.compare(password, row.password_hash);
-        if (!ok) return res.status(401).json(INVALID_CREDENTIALS);
+        if (!ok) return reject();
 
         res.status(200).json({ token: emitToken(row), username: row.username });
     });
@@ -184,9 +219,14 @@ function createApp({ db, jwtSecret, jwtExpiresIn = "1h", bcryptRounds = 10, veri
         }
 
         try {
-            // (4) Cuenta ya vinculada: entra con su username (se ignora el que venga en el body)
+            // (4) Cuenta ya vinculada: entra con su username (se ignora el que venga en el body).
+            // Es una lectura: pasa por la misma puerta que /login.
             const existing = users.findByGoogle(sub);
-            if (existing) return res.status(200).json({ token: emitToken(existing), username: existing.username });
+            if (existing) {
+                const gate = repl.canServeRead();
+                if (!gate.ok) return res.status(gate.status).json(gate.body);
+                return res.status(200).json({ token: emitToken(existing), username: existing.username });
+            }
 
             // (5) Primer login: hace falta elegir username
             if (rawUsername === undefined || rawUsername === null || rawUsername === "") {
@@ -201,21 +241,20 @@ function createApp({ db, jwtSecret, jwtExpiresIn = "1h", bcryptRounds = 10, veri
             // Sin distinguir mayúsculas y entre providers ("Alice" local bloquea "alice" de Google)
             if (users.findByUsername(username)) return res.status(409).json({ error: "username_taken" });
 
-            // (7) Alta de la cuenta de Google
-            let info;
-            try {
-                info = users.insertGoogle(username, sub, email);
-            } catch (err) {
-                if (!isUniqueViolation(err)) throw err;
+            // (7) Alta de la cuenta de Google: es una escritura (entrada register_google del oplog)
+            const result = await repl.write("register_google", (txDb) => {
                 // Dos primeros logins simultáneos del mismo sub: el otro ya la creó → se entra con esa cuenta
-                if (/users\.google_sub/i.test(err.message ?? "")) {
-                    const created = users.findByGoogle(sub);
-                    if (created) return res.status(200).json({ token: emitToken(created), username: created.username });
-                }
-                return res.status(409).json({ error: "username_taken" });
-            }
+                const created = users.findByGoogle(sub);
+                if (created) return { noop: created };
+                if (users.findByUsername(username)) return { error: { status: 409, body: { error: "username_taken" } } };
+                return {
+                    data: { userId: nextUserId(txDb), username, provider: "google", google_sub: sub, email, created_at: sqlTimestamp(repl.now()) },
+                };
+            });
+            if (!result.ok) return res.status(result.status).json(result.conflict ? { error: "username_taken" } : result.body);
+            if (result.noop) return res.status(200).json({ token: emitToken(result.noop), username: result.noop.username });
 
-            const user = { id: info.lastInsertRowid, username, provider: "google" };
+            const user = { id: result.entry.data.userId, username, provider: "google" };
             return res.status(200).json({ token: emitToken(user), username });
         } catch {
             console.error("error interno en /auth/google"); // texto fijo, sin detalles
@@ -249,14 +288,25 @@ function createApp({ db, jwtSecret, jwtExpiresIn = "1h", bcryptRounds = 10, veri
         res.status(200).json({ coordinatorId: chosen.coordinatorId, publicUrl: chosen.publicUrl });
     });
 
-    // Coordinadores vivos para armar el mesh (en orden de registro)
-    app.get("/peers", noStore, (req, res) => {
+    // Coordinadores vivos para armar su mesh (en orden de registro). En el Taller 6 era GET /peers.
+    app.get("/coordinator-peers", noStore, (req, res) => {
         res.status(200).json({ peers: coordinators.peers() });
     });
 
     // Vista de depuración del directorio (cluster.html)
     app.get("/directory", noStore, (req, res) => {
         res.status(200).json({ coordinators: coordinators.list(), ttlMs: coordinators.ttlMs });
+    });
+
+    // ---------- Clúster de auth (Taller 7, decisión 14) ----------
+    // Estado de este nodo: rol, líder, posición del oplog, usuarios y checksum (para comparar réplicas)
+    app.get("/status", noStore, (req, res) => {
+        res.status(200).json(repl.status());
+    });
+
+    // Los OTROS nodos de auth (en nodo único, ninguno)
+    app.get("/peers", noStore, (req, res) => {
+        res.status(200).json({ peers: repl.peers() });
     });
 
     // ---------- Errores ----------

@@ -1,4 +1,5 @@
-// Pruebas HTTP del directory service: POST /heartbeat, GET /coordinator, /peers y /directory.
+// Pruebas HTTP del directory service: POST /heartbeat, GET /coordinator, /coordinator-peers (el /peers del
+// Taller 6) y /directory.
 // La app recibe un directorio con reloj falso y escucha en un puerto libre (listen(0)).
 const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
@@ -116,13 +117,13 @@ test("sin clusterSecret configurado, /heartbeat responde siempre 401", async () 
     }
 });
 
-test("GET /peers: solo vivos y en orden de registro; sin header y con Cache-Control: no-store", async () => {
+test("GET /coordinator-peers: solo vivos y en orden de registro; sin header y con Cache-Control: no-store", async () => {
     const c = await startCluster();
     try {
         await c.beat("coord-a");
         await c.beat("coord-b");
         await c.beat("coord-c");
-        let r = await c.get("/peers");
+        let r = await c.get("/coordinator-peers");
         assert.equal(r.status, 200);
         assert.equal(r.headers.get("cache-control"), "no-store");
         assert.deepEqual(r.json.peers.map((p) => p.coordinatorId), ["coord-a", "coord-b", "coord-c"]);
@@ -132,7 +133,7 @@ test("GET /peers: solo vivos y en orden de registro; sin header y con Cache-Cont
         await c.beat("coord-a");
         await c.beat("coord-c");
         c.clock.advance(2001);
-        r = await c.get("/peers");
+        r = await c.get("/coordinator-peers");
         assert.deepEqual(r.json.peers.map((p) => p.coordinatorId), ["coord-a", "coord-c"]);
     } finally {
         await c.close();
@@ -197,7 +198,7 @@ test("GET /directory: solo vivos, con ageMs y ttlMs; los tres GET funcionan sin 
             coordinators: [{ coordinatorId: "coord-a", publicUrl: "ws://localhost:5001", peerUrl: "ws://localhost:5101", connectedPlayers: 2, uptime: 100, ageMs: 1200 }],
             ttlMs: 6000,
         });
-        for (const route of ["/coordinator", "/peers", "/directory"]) assert.equal((await c.get(route)).status, 200, route);
+        for (const route of ["/coordinator", "/coordinator-peers", "/directory"]) assert.equal((await c.get(route)).status, 200, route);
     } finally {
         await c.close();
     }

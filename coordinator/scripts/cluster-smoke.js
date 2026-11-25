@@ -96,7 +96,7 @@ function startCoord(l) {
         PEER_PORT: String(peerPort(l)),
         PUBLIC_URL: `ws://localhost:${port(l)}`,
         PEER_URL: `ws://localhost:${peerPort(l)}`,
-        AUTH_URL: AUTH,
+        AUTH_URLS: AUTH,
         JWT_SECRET,
         CLUSTER_SECRET,
         MAP_FILE: "",
@@ -200,14 +200,14 @@ async function main() {
     const t1 = Date.now();
     let statuses = [];
     const meshOk = await waitFor(async () => {
-        const peers = await getJson(`${AUTH}/peers`);
+        const peers = await getJson(`${AUTH}/coordinator-peers`);
         statuses = await Promise.all(["a", "b", "c"].map((l) => getJson(`http://localhost:${port(l)}/status`).then((r) => r.json)));
         return (
             peers.json?.peers?.length === 3 &&
             statuses.every((s) => s && s.peers.length === 2 && new Set(s.peers).size === 2 && !s.peers.includes(s.coordinatorId))
         );
     }, 10000, 200);
-    report("C1", "en < 10 s /peers lista 3 coordinadores y cada uno tiene 2 peers distintos", meshOk,
+    report("C1", "en < 10 s /coordinator-peers lista 3 coordinadores y cada uno tiene 2 peers distintos", meshOk,
         `${((Date.now() - t1) / 1000).toFixed(1)} s · ${statuses.map((s) => s && `${s.coordinatorId}→[${s.peers.join(",")}]`).join(" ")}`);
 
     // C2: 4 pedidos seguidos a /coordinator se reparten
@@ -319,16 +319,16 @@ async function main() {
     const at3 = (await getJson(`${AUTH}/directory`)).json?.coordinators?.some((c) => c.coordinatorId === "coord-a");
     let goneAt = null;
     await waitFor(async () => {
-        const has = (await getJson(`${AUTH}/peers`)).json?.peers?.some((p) => p.coordinatorId === "coord-a");
+        const has = (await getJson(`${AUTH}/coordinator-peers`)).json?.peers?.some((p) => p.coordinatorId === "coord-a");
         if (!has && goneAt === null) goneAt = Date.now() - tDeath;
         return goneAt !== null;
     }, 5000, 100);
     await sleep(Math.max(0, 7000 - (Date.now() - tDeath)));
-    const inPeers = (await getJson(`${AUTH}/peers`)).json?.peers?.some((p) => p.coordinatorId === "coord-a");
+    const inPeers = (await getJson(`${AUTH}/coordinator-peers`)).json?.peers?.some((p) => p.coordinatorId === "coord-a");
     const inDir = (await getJson(`${AUTH}/directory`)).json?.coordinators?.some((c) => c.coordinatorId === "coord-a");
     const assigned = [];
     for (let i = 0; i < 6; i++) assigned.push((await getJson(`${AUTH}/coordinator`)).json?.coordinatorId);
-    report("C10c", "coord-a sigue en /directory a los 3 s, desaparece entre 4 y 6,5 s y a los 7 s no está en /peers, /directory ni /coordinator",
+    report("C10c", "coord-a sigue en /directory a los 3 s, desaparece entre 4 y 6,5 s y a los 7 s no está en /coordinator-peers, /directory ni /coordinator",
         at3 && goneAt !== null && goneAt >= 4000 && goneAt <= 6500 && !inPeers && !inDir && !assigned.includes("coord-a"),
         `a los 3 s: ${at3 ? "presente" : "ausente"} · desapareció a los ${goneAt !== null ? (goneAt / 1000).toFixed(2) : "?"} s · /coordinator → ${[...new Set(assigned)].join(", ")}`);
     const E = await createUser("eve");
@@ -347,7 +347,7 @@ async function main() {
     const t11 = Date.now();
     startCoord("a");
     const back = await waitFor(async () => {
-        const inP = (await getJson(`${AUTH}/peers`)).json?.peers?.some((p) => p.coordinatorId === "coord-a");
+        const inP = (await getJson(`${AUTH}/coordinator-peers`)).json?.peers?.some((p) => p.coordinatorId === "coord-a");
         const st = (await getJson(`http://localhost:${port("a")}/status`)).json;
         return inP && st?.peers?.length === 3;
     }, 10000, 200);
@@ -355,7 +355,7 @@ async function main() {
     const A2 = await createUser("again");
     const again = connect(`ws://localhost:${port("a")}`, A2.token);
     const seesOld = await waitFor(() => again.find(B.username) && again.find(C.username), 3000);
-    report("C11", "coord-a vuelve: en < 10 s está en /peers con 3 peers y ve a los jugadores existentes", back && backMs < 10000 && seesOld,
+    report("C11", "coord-a vuelve: en < 10 s está en /coordinator-peers con 3 peers y ve a los jugadores existentes", back && backMs < 10000 && seesOld,
         `${(backMs / 1000).toFixed(1)} s · ve a Bob: ${Boolean(again.find(B.username))} · ve a Carol: ${Boolean(again.find(C.username))}`);
 
     // C12: seguridad

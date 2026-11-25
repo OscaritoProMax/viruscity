@@ -1,16 +1,17 @@
-# Viruscity · Sistemas Distribuidos · Proyecto final (Partes I, II y III + el juego)
+# Viruscity · Sistemas Distribuidos · Proyecto final (Partes I, II, III y IV + el juego)
 
 Universidad de Boyacá. Tres procesos independientes que se comunican por red:
 
-- **auth-service** (puerto 4000): registro e inicio de sesión con usuario/contraseña **y con Google**. Una sola tabla `users` en SQLite (`node:sqlite`) y JWT HS256.
+- **auth-service** (Taller 7: tres réplicas auth-a/b/c en 4001-4003 con mesh en 4101-4103; un nodo único sigue usando 4000): registro e inicio de sesión con usuario/contraseña **y con Google**. Una sola tabla `users` en SQLite (`node:sqlite`) y JWT HS256.
 - **auth-service** además es **directory service** (Taller 6): los coordinadores le avisan que están vivos y el cliente le pregunta a cuál conectarse.
 - **coordinator** (tres instancias: coord-a 5001, coord-b 5002 y coord-c 5003, más los puertos del mesh 5101–5103): **servidores autoritativos** del juego en vivo. Reciben a los jugadores por WebSocket, aplican sus *intenciones* en un game loop a 20 Hz (con choques contra el mapa de Virus City) y se replican entre sí por un mesh WebSocket para que todos tengan el mismo mundo.
 - **client** (puerto 3000): páginas HTML + JS plano servidas con Express. `login.html` (con botón de Google) y `play.html` (el juego sobre el mapa de la ciudad, con selector de personaje).
 
-**Parte I (Taller 4)** fue la identidad: login con JWT y lobby en vivo. **Parte II (Taller 5)** agrega el juego en vivo con el servidor como autoridad y el login con Google. **Parte III (Taller 6)** reparte el juego entre varios coordinadores intercambiables con el mismo estado. Sobre ese clúster corre **el juego de Viruscity** (rama `viruscity`): sanos que fabrican la cura con misiones contra un infectado oculto, con un árbitro único replicado entre los coordinadores. Este README empieza por Viruscity y sigue con el Taller 6 (la base del clúster); el Taller 5 sigue siendo válido para el juego, la base de datos y Google, y al final hay un resumen del Taller 4.
+**Parte I (Taller 4)** fue la identidad: login con JWT y lobby en vivo. **Parte II (Taller 5)** agrega el juego en vivo con el servidor como autoridad y el login con Google. **Parte III (Taller 6)** reparte el juego entre varios coordinadores intercambiables con el mismo estado. **Parte IV (Taller 7)** replica el auth-service en tres nodos con un líder elegido y failover en coordinadores y cliente. Sobre ese sistema corre **el juego de Viruscity**: sanos que fabrican la cura con misiones contra un infectado oculto, con un árbitro único replicado entre los coordinadores. Este README empieza por Viruscity, sigue con el Taller 7 (auth replicados) y el Taller 6 (el clúster de coordinadores); el Taller 5 sigue siendo válido para el juego, la base de datos y Google, y al final hay un resumen del Taller 4.
 
 **Contenido**
 - [Viruscity](#viruscity): 1. Concepto y ciclo · 2. Reglas · 3. Información oculta · 4. Arquitectura · 5. Fallas y limitaciones · 6. Protocolo · 7. Configuración · 8. Controles y archivos · 9. Pruebas · 10. Balance · 11. Demostración
+- [Taller 7: auth-services replicados](#taller-7-auth-services-replicados): 1. Arquitectura · 2. Mesh · 3. Elección · 4. Consistencia · 5. Directorio · 6. Failover · 7. Variables · 8. Correr todo · 9. ngrok con gateway · 10. Limitaciones · 11. Sustentación
 - [Parte III · Taller 6](#parte-iii--taller-6): 1. Arquitectura · 2. Directorio · 3. Mesh · 4. Los cuatro problemas · 5. Seguridad · 6. Cliente · 7. Variables · 8. Correr el clúster · 9. ngrok · 10. Limitaciones · 11. Decisiones · 12. Sustentación
 - [Parte II · Taller 5](#parte-ii--taller-5): 1. Arquitectura · 2. Base de datos · 3. Google · 4. API del auth · 5. Coordinador · 6. Extra: personaje · 7. Cliente · 8. Variables · 9. Correr todo · 10. Google Cloud · 11. ngrok · 12. Decisiones · 13. Errores típicos · 14. Sustentación
 - [Estructura del repositorio](#estructura-del-repositorio)
@@ -322,7 +323,295 @@ Con la receta de partida rápida, los tres coordinadores y `cluster.html` abiert
 
 ---
 
+# Taller 7: auth-services replicados
+
+El auth-service deja de ser un punto único de falla: **tres auth replicados** con *single-writer replication*. Un líder a la vez acepta escrituras; las réplicas leen y mantienen una copia local de la BD; si el líder cae, se elige otro. Coordinadores y cliente conocen los tres (`AUTH_URLS`) y hacen *failover*. Los jugadores conectados **no se desconectan** cuando caen auths: el coordinador valida el JWT localmente, sin consultar al auth. Las reglas fijas están en CLAUDE.md, sección "TALLER 7".
+
+**Contenido:** 1. Arquitectura y flujos · 2. Roles y protocolo del mesh · 3. Elección · 4. Consistencia · 5. Directorio de coordinadores · 6. Cliente y coordinadores · 7. Variables · 8. Correr todo en local · 9. ngrok con el gateway · 10. Limitaciones · 11. Guía de sustentación
+
+## 1. Arquitectura y flujos
+
+```
+                     navegador (login.html · play.html · cluster.html)
+                        │ HTTP con failover (AUTH_URLS)          │ WebSocket del juego
+                        ▼                                        ▼
+   ┌────────────────────────────────────────────┐      ┌──────────────────────────────────────┐
+   │ auth-a 4001 ◄──mesh WS 4101──► auth-b 4002 │      │ coord-a 5001 ◄─mesh─► coord-b 5002   │
+   │  (réplica)        ▲      ▲      (LÍDER)    │◄─────│      ▲    5101-5103    ▲             │
+   │                   │      └──────┐   │      │  heartbeat a TODOS los auth  │             │
+   │                   └── mesh ──► auth-c 4003 │      │      └──── coord-c 5003┘             │
+   │                                 (réplica)  │      │ (validan el JWT sin preguntar al auth)│
+   └────────────────────────────────────────────┘      └──────────────────────────────────────┘
+          cada auth: users + oplog + meta (users-a.db, users-b.db, users-c.db)
+
+   Opcional para ngrok: gateway 8080 ─ /auth-a /auth-b /auth-c → 4001-4003 · /coord-a … → 5001-5003 · resto → client 3000
+```
+
+| Proceso | Puertos | Qué hace |
+|---|---|---|
+| `auth-service` × 3 (auth-a/b/c) | HTTP 4001-4003 · mesh 4101-4103 | Registro, login y Google; elección de líder, replicación del oplog, sync; directorio de coordinadores (estado blando en cada uno) |
+| `coordinator` × 3 (coord-a/b/c) | 5001-5003 · mesh 5101-5103 | Igual que en el Taller 6, con `AUTH_URLS`: heartbeat a los tres auth y descubrimiento con el primero que responda |
+| `client` | 3000 | Páginas; `js/auth/failover.js` decide a qué auth preguntar |
+| `gateway` (opcional) | 8080 | Proxy HTTP y WebSocket por prefijo de ruta para exponer todo con **un solo** túnel de ngrok |
+
+**Registro** (`POST /register` en una réplica):
+
+```
+navegador ──POST /register──► auth-a (réplica) ──503 { error:"not_leader", leaderUrl:"http://localhost:4002", leaderId:"auth-b" }
+navegador ──POST /register──► auth-b (líder: leaderUrl está en AUTH_URLS → reintento inmediato)
+   auth-b: bcrypt (fuera del mutex) → mutex → ¿username libre? → userId = MAX(id)+1 → entrada { seq, term, entryId }
+   auth-b ──write_propagate──► auth-a, auth-c   (aplican AL RECIBIR y contestan write_ack ok:true)
+   auth-b: con mayoría (él + 1 ack) aplica en su BD, espera ≤ 150 ms los acks que falten → 201 { userId, username }
+```
+
+**Login:** cualquier nodo con líder conocido y conectado responde con su BD local si no va atrasado (§4). **Elección:** §3. **Sync:** una réplica que vuelve o va atrás pide `request_sync` y el líder le manda lo que le falta por lotes (§4). **Directorio:** cada coordinador manda su heartbeat a los **tres** auth cada 2 s (§5).
+
+Código: `auth-service/replication/` → `election.js` (núcleo puro de elección), `node.js` (nodo: escrituras por mayoría, sync, conflictos, lecturas), `mesh.js` (sockets) y `mesh-messages.js` (validación); `auth-service/oplog.js` (almacenamiento replicable); `client/public/js/auth/failover.js`; `gateway/`.
+
+## 2. Roles y protocolo del mesh
+
+Roles: **leader** (acepta escrituras) y **replica**. Internamente existe **candidate** (en elección); `/status` lo muestra como `replica` con `election:true`. Hay un solo líder por término.
+
+**Una conexión por par:** la abre el `authId` **menor** (comparación de strings: auth-a → auth-b y auth-c; auth-b → auth-c). Si llega una entrante de un id **mayor** cuando ya hay una activa, se cierra la nueva (4010 `duplicate peer`); si llega de un id **menor**, reemplaza a la anterior. Los salientes se reintentan cada 2 s mientras no estén conectados.
+
+**Seguridad del mesh** (como el de coordinadores): header `x-cluster-secret` en el upgrade (comparado con sha256 + `timingSafeEqual`; si no, 401 y se destruye el socket), `hello` en 3 s (si no, 4011), id fuera de `AUTH_NODES` o igual al propio → 4011, el remitente de cada mensaje es **siempre** el id de la conexión (un `authId`/`candidate`/`voter`/`leader` que lo contradiga hace descartar el mensaje), ping/pong cada `AUTH_PEER_PING_MS`, máximo 500 mensajes por segundo y conexión, `maxPayload` 2 MB y validación estricta de cada tipo.
+
+Mensajes (JSON). Los campos marcados con **(+)** son adicionales al enunciado:
+
+| Tipo | Campos | Ejemplo |
+|---|---|---|
+| `hello` | authId, role, term, leaderId (+), lastSeq (+), lastTerm (+) | `{"type":"hello","authId":"auth-a","role":"replica","term":2,"leaderId":"auth-b","lastSeq":14,"lastTerm":2}` |
+| `heartbeat` | authId, term, lastSeq, lastTerm (+) | `{"type":"heartbeat","authId":"auth-b","term":2,"lastSeq":14,"lastTerm":2}` |
+| `heartbeat_ack` (+) | authId, term, lastSeq | `{"type":"heartbeat_ack","authId":"auth-a","term":2,"lastSeq":14}` |
+| `write_propagate` | term, seq, entryId (+), op, data | `{"type":"write_propagate","term":2,"seq":15,"entryId":"9b2…","op":"register","data":{"userId":15,"username":"alice","provider":"local","password_hash":"$2a$10$…","created_at":"2026-11-23 10:00:00"}}` |
+| `write_ack` (+) | authId, term, seq, entryId, ok, reason? | `{"type":"write_ack","authId":"auth-a","term":2,"seq":15,"entryId":"9b2…","ok":true}` |
+| `write_abort` (+) | term, seq, entryId | `{"type":"write_abort","term":2,"seq":15,"entryId":"9b2…"}` |
+| `request_sync` | fromSeq, fromEntryId (+) | `{"type":"request_sync","fromSeq":12,"fromEntryId":"41c…"}` |
+| `sync_response` | term (+), entries:[{seq, term (+), entryId (+), op, data}], conflict (+), done (+) | `{"type":"sync_response","term":2,"entries":[…],"conflict":false,"done":true}` |
+| `election` | candidate, term, lastSeq, lastTerm (+) | `{"type":"election","candidate":"auth-c","term":3,"lastSeq":15,"lastTerm":2}` |
+| `vote` | voter, term, voteGranted | `{"type":"vote","voter":"auth-a","term":3,"voteGranted":true}` |
+| `new_leader` | leader, term | `{"type":"new_leader","leader":"auth-c","term":3}` |
+
+El receptor de una conexión contesta el `hello` con el suyo. Los mensajes del mesh nunca se escriben en los logs.
+
+## 3. Elección (estilo Raft simplificado)
+
+- **Término:** un número que solo crece y se guarda en `meta` (`current_term`, `voted_for`) **antes** de contestar un voto o de anunciar una candidatura. Cualquier mensaje con un término mayor baja a líderes y candidatos a réplica.
+- **Disparo:** una réplica sin contacto del líder durante `LEADER_TIMEOUT_MS` (6000) + un **jitter** aleatorio de 0 a `ELECTION_JITTER_MS` (1500) se vuelve candidata: término+1, vota por sí misma y envía `election`. El jitter evita que dos réplicas se postulen a la vez. Solo se postula si tiene mayoría conectada (él cuenta): un nodo aislado no infla su término.
+- **Voto:** se concede si el término del candidato es ≥ al propio, no votó por otro en ese término y el **log del candidato está al día** (`lastTerm` mayor, o igual y `lastSeq` ≥ propio). Así nunca gana alguien al que le falten escrituras confirmadas.
+- **Estabilidad:** quien escuchó a un líder en los últimos `LEADER_TIMEOUT_MS − 1000` ms (o es el líder) no concede votos ni adopta el término de un candidato: un nodo que vuelve no derriba a un líder sano. Un candidato que oye a un líder vigente abandona su candidatura y lo sigue.
+- **Victoria:** con mayoría (`floor(N/2)+1`, 2 de 3) anuncia `new_leader` y manda un heartbeat de inmediato; luego un heartbeat cada `AUTH_HEARTBEAT_MS` (2000).
+- **Elección de arranque:** en un arranque en frío, un nodo sin líder conocido, con mayoría conectada y sin que ningún peer reporte líder en su `hello`, se postula a los 500..1500 ms (no espera 6 s). Un nodo que vuelve se incorpora como réplica y sincroniza; **nunca** recupera el liderazgo por tener el id más bajo.
+- **Lease:** las réplicas contestan cada heartbeat con `heartbeat_ack`. Un líder sin acks de una mayoría (él cuenta) durante `LEADER_TIMEOUT_MS` se baja a réplica sin líder.
+
+| Falla | Qué pasa |
+|---|---|
+| Cae el líder | Las réplicas pierden la conexión y desde ese momento responden 503 `no_leader` (lecturas y escrituras). A los 6–7,5 s una se postula con término+1, la otra le vota y hay líder nuevo (5,7–7,3 s en los smokes). Los jugadores siguen jugando. |
+| Cae una réplica | Nada visible: el líder y la otra réplica son mayoría (2 de 3). Al volver, la réplica sincroniza lo que se perdió. |
+| Caen dos | El que queda no tiene mayoría: las escrituras dan 503 `no_quorum` de inmediato; si era el líder, al vencer el lease (≤ 6 s) se baja y todo da 503 `no_leader`. **No hay logins ni registros**, pero el juego sigue y el directorio de coordinadores responde. |
+| Vuelve un nodo | Hace el `hello`, adopta al líder (por su `hello` o su heartbeat), pide `request_sync` y queda como réplica al día. |
+| Partición (líder aislado) | El líder aislado da `no_quorum` y a los 6 s se baja; el lado con mayoría elige otro con término mayor. Al sanar, el viejo ve el término mayor y lo sigue; como nunca tuvo mayoría, nunca aplicó escrituras propias que haya que deshacer. |
+
+## 4. Modelo de consistencia
+
+**Opción B con mayoría.** El líder serializa las escrituras con un mutex y **no aplica nada hasta tener mayoría**:
+
+1. Dentro del mutex valida contra su BD (username libre, sub de Google nuevo), calcula `userId = MAX(id)+1` y arma la entrada (`seq = lastSeq+1`, término actual, `entryId` uuid).
+2. Si no tiene mayoría de nodos **conectados**, responde 503 `no_quorum` sin proponer nada.
+3. Envía `write_propagate` a las réplicas conectadas, que la aplican al recibir y contestan `write_ack`.
+4. Con acks de una mayoría (él cuenta) dentro de `WRITE_TIMEOUT_MS` (3000) aplica en su BD y responde, esperando además hasta `ACK_GRACE_MS` (150) a las réplicas que falten (así `/status` coincide en los tres).
+5. Si vence el tiempo: `write_abort` y 503 `replication_timeout`; quien la había aplicado la deshace (solo si es su última entrada y coincide el `entryId`).
+
+**Por qué B y no A.** En la opción A el líder aplica y responde de inmediato y replica después: es más rápido, pero si el líder cae justo después de confirmar, la escritura se pierde (el usuario recibió 201 y su cuenta no existe en el nuevo líder). Con B, toda escritura confirmada está en una mayoría, y la restricción de voto (§3) garantiza que el próximo líder la tiene. **Costo:** un viaje de ida y vuelta más por escritura y ninguna escritura sin mayoría (el sistema es CP).
+
+**Resultado ambiguo:** si el líder cae después de proponer y antes de responder, el cliente ve un error, pero la escritura pudo quedar en una mayoría y sobrevivir al relevo. Un reintento del registro da 409 (el cliente lo explica, §6).
+
+**Conflictos** (una réplica con entradas que el líder no tiene):
+
+- Misma posición y mismo `entryId` → ack idempotente.
+- Otra entrada en la **última** posición (por ejemplo, un `write_abort` perdido) → se deshace y se aplica la nueva.
+- Diferencias más atrás, o una violación de unicidad al aplicar → **resincronización completa**: se borran `users` y `oplog` y se pide todo desde 0.
+- Hueco (`seq` > `lastSeq`+1) → `request_sync`.
+- Solo se acepta replicación del líder del término actual o mayor; un líder viejo recibe `ok:false, reason:"stale_term"`.
+
+**Sync:** la réplica pide `request_sync { fromSeq, fromEntryId }` al conectar con el líder, cuando un heartbeat (o el `hello`) muestra que va atrás o que su log difiere, o ante un hueco. Hay un solo pedido en vuelo, que se reintenta si no hay respuesta en 6 s. El líder contesta por lotes de `SYNC_BATCH` (500). Si la entrada de la réplica en `fromSeq` no coincide con la suya, o la réplica tiene más entradas que él, contesta `conflict:true` con todo desde 1 y la réplica borra antes de aplicar.
+
+**Lecturas** (`/login` y `/auth/google` de un usuario existente):
+
+- Una réplica responde con su BD solo si conoce al líder, sigue conectada con él y va atrasada menos de `READ_TOLERANCE` (10) entradas.
+- Con más atraso → 503 `not_leader` con `leaderUrl`.
+- Si la lectura fallaría (usuario inexistente o contraseña incorrecta) y la réplica va atrasada aunque sea una entrada → 503 `not_leader`, **nunca 401**: el usuario puede existir en el líder.
+- Sin líder (en elección o desconectada de él) → 503 `no_leader`. Nunca se emite un token desde una BD atrasada.
+
+**Durante una elección las escrituras fallan** (`no_leader`): no hay quién las ordene, así que el cliente reintenta según el failover (§6), con hasta 12 s de presupuesto, más que una elección normal.
+
+Todas las respuestas llevan `X-Auth-Id` y `X-Auth-Role` (`leader`/`replica`), expuestas por CORS. `GET /status` describe el nodo (`authId, role, publicUrl, peerUrl, leaderUrl, knownPeers, lastAppliedSeq, users, term, leaderId, election, lastTerm, checksum`); `GET /peers` lista los otros dos nodos con su rol y si están conectados. `checksum` es el sha256 de las líneas `id:username` ordenadas: dos nodos sincronizados lo muestran igual.
+
+**Almacenamiento:** cada nodo tiene `users` (esquema exacto del Taller 5), `oplog(seq, term, entry_id, op, data)` y `meta(key, value)`. Una BD heredada (con usuarios y sin oplog) genera al arrancar entradas deterministas `legacy-<id>`, así que la migración del Taller 4/5 sigue funcionando. **Ojo:** si un nodo arranca con usuarios heredados y los otros dos con la BD vacía, los dos vacíos pueden elegirse entre sí (sus logs empatan) y el nodo con datos se resincroniza borrándolos. Hay que arrancar primero el nodo con datos y un solo nodo vacío, o copiar la BD a los tres.
+
+## 5. Directorio de coordinadores: estado blando en cada auth
+
+El directorio del Taller 6 (`/heartbeat`, `/coordinator`, `/directory`) **no pasa por la replicación**: cada coordinador manda su heartbeat a los **tres** auth de `AUTH_URLS` (en paralelo, cada uno con su timeout), así que cualquier nodo responde `/coordinator`, `/coordinator-peers` y `/directory` aunque esté en una elección o sin líder. Si un auth reinicia, el directorio se reconstruye con el siguiente heartbeat (≤ 2 s). `/status` del coordinador muestra `authReachable` (al menos uno responde) y `authNodesUp` (`{ up, total }`); el log solo avisa cuando cambia cuántos responden.
+
+**`/peers` → `/coordinator-peers`.** En el Taller 6, `GET /peers` del auth listaba coordinadores. En el Taller 7, `GET /peers` lista los **nodos de auth** (decisión 14), así que la lista de coordinadores pasó a `GET /coordinator-peers`, con la misma forma `{ peers:[{ coordinatorId, peerUrl }] }`. El coordinador la pide al primer auth que responda.
+
+## 6. Cliente y coordinadores: AUTH_URLS y failover
+
+`AUTH_URLS` (lista separada por comas) reemplaza a `AUTH_URL` en el coordinator y en el client; si solo existe `AUTH_URL`, es una lista de una. Las URLs se normalizan (sin barra final) y una repetida es un error de configuración.
+
+**Failover** (`client/public/js/auth/failover.js`, el mismo que usa el smoke completo):
+
+1. Se empieza por el último nodo que respondió.
+2. Error de red, timeout (4 s) o un 5xx distinto de los 503 de abajo → siguiente nodo.
+3. 503 `not_leader` con un `leaderUrl` **exactamente igual** (normalizado) a una entrada de `AUTH_URLS` → reintento inmediato contra esa URL, una sola vez.
+4. 503 `no_leader` / `no_quorum` / `replication_timeout`, o `not_leader` sin URL permitida → siguiente nodo; tras una pasada completa sin éxito, 1 s de espera y otra pasada, hasta un presupuesto de 12 s. Al agotarse, `AuthUnavailableError` → "No hay servidores de autenticación disponibles. Inténtalo de nuevo en unos segundos."
+5. Cualquier otra respuesta (2xx, 4xx) se devuelve tal cual. Las peticiones son secuenciales: un POST nunca se manda a dos nodos a la vez.
+
+**Por qué solo se sigue un `leaderUrl` permitido:** la respuesta la escribe un servidor; si el cliente siguiera cualquier URL, un nodo comprometido (o un proxy en el medio) podría redirigir el `POST /login` con la contraseña a un servidor ajeno. Solo se sigue una URL que el propio cliente ya tiene en su configuración.
+
+**`/register` reintentado:** si hubo reintentos y la respuesta final es 409, el primer intento pudo haber registrado al usuario (resultado ambiguo, §4); el mensaje dice "El usuario ya existe. Si acabas de registrarte, inicia sesión."
+
+**Integración:** `js/auth-fetch.js` (script clásico) define `window.authFetch(path, init)`. Importa `failover.js` la primera vez, agrega `ngrok-skip-browser-warning`, devuelve la `Response` con `authInfo = { authId, authRole, retried, nodeUrl }` y emite el evento `viruscity:auth-node`. Lo usan `login.js` (`/login`, `/register`), `google-login.js` (`/auth/google`), `play/play.js` (`/coordinator`) y `cluster.js` (`/directory`).
+
+**Indicador:** `login.html` (pie del card) y `play.html` (barra superior, junto al coordinador) muestran "Auth: auth-b (líder)" o "Auth: auth-a (réplica)", según `X-Auth-Id` y `X-Auth-Role` de la última respuesta (`js/auth-node.js`); antes de la primera, "Auth: —".
+
+## 7. Variables de entorno
+
+**auth-service** (`.env` para un nodo único con `npm start`; `.env.auth-a/b/c` para el clúster con `npm run start:a/b/c`; los `.example` traen todas las claves):
+
+| Variable | Qué es | Ejemplo (auth-a) / defecto |
+|---|---|---|
+| `AUTH_ID` | Id del nodo (`^[A-Za-z0-9_-]{1,32}$`) | `auth-a` (sin `AUTH_NODES`: `auth-solo`) |
+| `PORT` · `PEER_PORT` | HTTP público · mesh WebSocket (obligatorio con más de un nodo) | `4001` · `4101` |
+| `PUBLIC_URL` | URL que usan clientes y coordinadores; debe ser **igual** a su entrada en `AUTH_NODES` y en las `AUTH_URLS` del client | `http://localhost:4001` |
+| `PEER_URL` | URL del mesh para los otros auth | `ws://localhost:4101` |
+| `AUTH_NODES` | Todos los nodos, incluido él: `id\|publicUrl\|peerUrl` separados por comas (2 a 9) | `auth-a\|http://localhost:4001\|ws://localhost:4101,auth-b\|…,auth-c\|…` |
+| `DB_PATH` | Una BD por nodo | `./users-a.db` |
+| `JWT_SECRET` · `CLUSTER_SECRET` · `GOOGLE_CLIENT_ID` | **Iguales** en los tres auth y en los coordinadores (los dos secretos) | — |
+| `JWT_EXPIRES_IN` · `BCRYPT_ROUNDS` · `COORDINATOR_TTL_MS` · `RESERVATION_TTL_MS` | Como en los Talleres 5 y 6 | `1h` · `10` · `6000` · `3000` |
+| `AUTH_HEARTBEAT_MS` | Heartbeat del líder | `2000` |
+| `LEADER_TIMEOUT_MS` | Sin contacto del líder → elección; también el lease (≥ 3 heartbeats) | `6000` |
+| `ELECTION_JITTER_MS` | Jitter aleatorio de la elección | `1500` |
+| `READ_TOLERANCE` | Atraso máximo (entradas) para leer en una réplica | `10` |
+| `WRITE_TIMEOUT_MS` · `ACK_GRACE_MS` | Espera de la mayoría · espera extra al resto | `3000` · `150` |
+| `SYNC_BATCH` · `AUTH_PEER_PING_MS` | Entradas por lote de sync · ping del mesh | `500` · `3000` |
+
+**coordinator** (`.env.coord-a/b/c`): todo lo del Taller 6 (Parte III §7) más `AUTH_URLS=http://localhost:4001,http://localhost:4002,http://localhost:4003` en lugar de `AUTH_URL`.
+
+**client** (`.env`): `PORT=3000`, `AUTH_URLS=http://localhost:4001,http://localhost:4002,http://localhost:4003`, `GOOGLE_CLIENT_ID` y `COORDINATOR_WS_URL` (opcional, vacío). `/config.js` entrega `AUTH_URLS` (lista) y `AUTH_URL` (la primera, por compatibilidad).
+
+**gateway** (`gateway/.env`, opcional; sin él se usan los mismos valores): `PORT=8080`, `GATEWAY_ROUTES=/auth-a=http://localhost:4001,…,/coord-c=http://localhost:5003` y `GATEWAY_DEFAULT=http://localhost:3000`.
+
+Solo existen en tu equipo (ignorados por git): `auth-service/.env.auth-a`/`-b`/`-c`, `users-a.db`/`-b`/`-c`, `coordinator/.env.coord-*`, `client/.env` y `gateway/.env`.
+
+## 8. Cómo correr todo en local
+
+Requisitos: Node.js ≥ 22.13 (con `node:sqlite` sin flags; en 22.5–22.12 los smokes agregan `--experimental-sqlite`) y Git Bash. Desde la raíz del repositorio:
+
+1. **Dependencias:** `(cd auth-service && npm install) && (cd coordinator && npm install) && (cd client && npm install) && (cd gateway && npm install)`
+2. **Archivos de entorno:** copiar cada `.example` sin el sufijo: `auth-service/.env.auth-a/b/c`, `coordinator/.env.coord-a/b/c`, `client/.env` (y `gateway/.env` si se usa). Poner el **mismo** `JWT_SECRET`, `CLUSTER_SECRET` y `GOOGLE_CLIENT_ID` en los tres auth y los dos secretos en los tres coordinadores (`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` genera uno).
+3. **Siete terminales** (los auth primero):
+   ```bash
+   cd auth-service && npm run start:a     # 1 · Auth service auth-a en puerto 4001 · clúster de 3 (mayoría 2), mesh en 4101
+   cd auth-service && npm run start:b     # 2
+   cd auth-service && npm run start:c     # 3 · en ~2 s uno dice "[auth] auth-x es el líder (término 1)"
+   cd coordinator && npm run start:a      # 4 · "Auth: 3 de 3 nodos responden · coord-a registrado en su directorio"
+   cd coordinator && npm run start:b      # 5
+   cd coordinator && npm run start:c      # 6
+   cd client && npm start                 # 7 · http://localhost:3000
+   ```
+4. **Comprobar:**
+   ```bash
+   for p in 4001 4002 4003; do curl -s http://localhost:$p/status; echo; done   # un leader, dos replica, mismos users y checksum
+   curl -s http://localhost:4001/peers
+   curl -s http://localhost:4002/coordinator-peers
+   ```
+
+**Pruebas:**
+
+| Comando | Qué prueba |
+|---|---|
+| `cd auth-service && npm test` | 111 pruebas: configuración multi-nodo, oplog, interfaz de replicación, rutas, núcleo de elección (E1-E12 con un simulador de reloj falso, incluida la propiedad "nunca dos líderes en el mismo término" en 200 semillas), nodo de replicación (R1-R14) y validación del mesh |
+| `cd coordinator && npm test` | 49 pruebas: las del Taller 6 más `AUTH_URLS` y el failover del cliente de directorio |
+| `cd client && npm test` | 83 pruebas: las anteriores más el failover del cliente y el indicador |
+| `cd gateway && npm test` | 9 pruebas: enrutamiento y proxy HTTP/WebSocket con servidores falsos |
+| `cd coordinator && AUTH_URL=http://localhost:<puerto del líder> npm run smoke` | Taller 5 contra coord-a con el clúster de §8 levantado (`AUTH_URL` debe ser el **líder**: en una réplica los registros del smoke reciben 503) |
+| `cd coordinator && npm run smoke:cluster` | Taller 6 (C1-C13), con un auth de prueba |
+| `cd auth-service && npm run smoke:auth-cluster` | A1-A13: 3 auth reales en 4801-4803, relevo, sync, mayoría, reinicio, seguridad, headers y logs |
+| `cd coordinator && npm run smoke:full` | F1-F8: 3 auth + 3 coordinadores + un jugador moviéndose mientras caen el líder de auth, un coordinador y la mayoría |
+
+Los smokes levantan sus propios procesos en puertos de prueba, con secretos aleatorios y BD temporales, y al terminar los cierran y borran todo.
+
+## 9. ngrok con el gateway (un solo túnel)
+
+El sistema necesita 7 URLs públicas (client, 3 auth, 3 coordinadores) y el plan gratuito de ngrok permite pocos endpoints simultáneos (verifícalo en tu cuenta: los límites de endpoints y de peticiones cambian). El **gateway** expone todo por un solo puerto:
+
+```bash
+cd gateway && npm start     # Gateway en puerto 8080 · /auth-a → http://localhost:4001 … · (resto) → http://localhost:3000
+ngrok http 8080             # sintaxis comprobada con ngrok 3.39 (`ngrok http --help`: ngrok http [address:port | port])
+```
+
+Con el dominio que da ngrok (`https://<dominio>`):
+
+| Dónde | Variable | Valor |
+|---|---|---|
+| `client/.env` | `AUTH_URLS` | `https://<dominio>/auth-a,https://<dominio>/auth-b,https://<dominio>/auth-c` |
+| `auth-service/.env.auth-a` (y b, c) | `PUBLIC_URL` | `https://<dominio>/auth-a` (`/auth-b`, `/auth-c`): **igual** a su entrada en `AUTH_URLS` del client |
+| los tres `.env.auth-*` | `AUTH_NODES` | `auth-a\|https://<dominio>/auth-a\|ws://localhost:4101,auth-b\|https://<dominio>/auth-b\|ws://localhost:4102,auth-c\|https://<dominio>/auth-c\|ws://localhost:4103` |
+| los tres `.env.auth-*` | `PEER_URL` | **sin cambios**: `ws://localhost:4101` (4102, 4103) |
+| `coordinator/.env.coord-a` (y b, c) | `PUBLIC_URL` | `wss://<dominio>/coord-a` (`/coord-b`, `/coord-c`) |
+| los tres `.env.coord-*` | `AUTH_URLS` y `PEER_URL` | **sin cambios** (localhost): los heartbeats y el mesh no salen de la máquina |
+
+Por qué así: el `leaderUrl` que devuelve una réplica es el `PUBLIC_URL` del líder, y el cliente solo lo sigue si está en sus `AUTH_URLS` (§6). El gateway quita el prefijo (`/auth-b/login` → `http://localhost:4002/login`; `wss://<dominio>/coord-a/connect?token=…` → `ws://localhost:5001/connect?token=…`) y no registra queries ni headers (el token del WebSocket viaja en la query).
+
+**Google:** el origen autorizado es `https://<dominio>` (el client está en la raíz). Se registra **una vez** en la consola de Google, porque el dominio de desarrollo del plan gratuito no cambia entre sesiones. Si tu cuenta te da otro dominio, hay que registrarlo de nuevo (Parte II §10).
+
+## 10. Limitaciones conocidas
+
+- **Membresía estática:** `AUTH_NODES` es fijo; agregar o quitar un nodo requiere reiniciar todos con la lista nueva.
+- **Sin snapshots ni compactación del oplog:** el oplog crece con cada usuario y una réplica nueva lo recibe completo (por lotes).
+- **Sin pre-vote:** un nodo que estuvo aislado y vuelve con un término alto no consigue votos mientras el líder vive (estabilidad), pero en algunos casos puede provocar una elección extra.
+- **CP:** sin mayoría no hay logins ni registros (503); el juego y el directorio siguen.
+- **Directorio no replicado:** es estado blando en cada auth; se reconstruye con los heartbeats (≤ 2 s) tras un reinicio.
+- **Resultado ambiguo** de una escritura cuando el líder cae entre proponer y responder (un reintento da 409).
+- **Lecturas no disponibles durante una elección** ni en una réplica desconectada de su líder (503 `no_leader`).
+- **BD heredadas:** ver la nota del final de §4 sobre el orden de arranque.
+
+## 11. Guía de sustentación (Taller 7)
+
+Durante **todo** el recorrido hay un cliente jugando en pantalla (`http://localhost:3000`, moviéndose con WASD): el coordinador valida el JWT con `JWT_SECRET` sin preguntarle al auth, así que caídas y elecciones del auth no lo afectan. El chip "Auth: …" muestra qué nodo respondió.
+
+1. **Arranque (3 min):** las 7 terminales de §8 y `for p in 4001 4002 4003; do curl -s http://localhost:$p/status; echo; done`: un `leader`, dos `replica`, el mismo `term`, `users` y `checksum`.
+2. **Registro (3 min):** primero contra una réplica, para ver el 503:
+   ```bash
+   curl -s -w "  HTTP %{http_code}\n" -X POST http://localhost:4002/register -H "Content-Type: application/json" -d '{"username":"alice","password":"secret123"}'
+   # (si 4002 es réplica) {"error":"not_leader","leaderUrl":"http://localhost:4001","leaderId":"auth-a"}  HTTP 503
+   curl -s -w "  HTTP %{http_code}\n" -X POST http://localhost:4001/register -H "Content-Type: application/json" -d '{"username":"alice","password":"secret123"}'
+   # {"userId":"1","username":"alice"}  HTTP 201
+   ```
+   y otra vez los tres `/status`: `users+1`, mismo `lastAppliedSeq` y `checksum`. (También desde la página: el chip pasa a "Auth: auth-a (líder)").
+3. **Caída del líder (2 min):** Ctrl+C en la terminal del líder; el jugador sigue moviéndose; a los ~10 s, `/status` de las otras dos muestra un `leader` nuevo con `term+1` (los logs dicen "[auth] auth-x es el líder (término 2)").
+4. **Registro con el nuevo líder (4 min):** registrar `bob` desde la página (el failover salta el nodo caído y llega al líder) o con curl al nuevo líder; mostrar `users+1` en los dos vivos.
+5. **Vuelve el muerto (3 min):** `npm run start:x` en su terminal: log "[auth] auth-x sigue al líder …", y su `/status` dice `replica`, con `users`, `lastAppliedSeq` y `checksum` iguales a los demás (sync); no recupera el liderazgo aunque tenga el id más bajo.
+
+### Preguntas probables
+
+1. **¿Por qué mayoría?** Porque dos mayorías siempre se cruzan: toda escritura confirmada está en al menos un nodo de cualquier mayoría futura, y la regla de voto hace que el nuevo líder la tenga.
+2. **¿Qué pasa con dos auths caídos?** El que queda no puede formar mayoría: no hay logins ni registros (503) hasta que vuelva uno. El juego sigue (el JWT se valida sin auth) y el directorio responde.
+3. **¿Por qué el líder no aplica antes de tener mayoría?** Para no confirmar una escritura que puede perderse: si cae antes de replicarla, el usuario tendría un 201 de una cuenta que no existe.
+4. **¿Qué es un término?** Un número de "época" que crece con cada elección; hay como mucho un líder por término y todo mensaje con un término viejo se rechaza.
+5. **¿Por qué la restricción de log al día?** Para que nunca gane un nodo al que le falten escrituras confirmadas (que están en una mayoría, y esa mayoría no le vota).
+6. **¿Por qué la estabilidad del voto?** Para que un nodo que vuelve (o que quedó aislado) no derribe a un líder sano: quien oyó al líder hace menos de 5 s no vota por otro.
+7. **¿Qué es el lease?** El líder solo sigue siéndolo mientras una mayoría le contesta los heartbeats; si queda aislado se baja solo en 6 s, y así no hay dos líderes atendiendo a la vez.
+8. **¿Por qué el directorio va a todos los auth?** Porque es estado blando que no necesita consenso: así cualquier auth asigna coordinadores aunque esté en una elección o sin líder, y un auth reiniciado lo recupera en 2 s.
+9. **¿Por qué se ignora un `leaderUrl` no permitido?** Para que nadie pueda redirigir el login (con la contraseña) a un servidor ajeno: el cliente solo sigue URLs que ya están en su `AUTH_URLS`.
+10. **¿Qué pasa con un `/register` cuya respuesta se pierde?** El usuario puede haber quedado registrado (en una mayoría). El cliente reintenta; si recibe 409 tras reintentos, le dice que inicie sesión.
+
+---
+
 # Parte III · Taller 6
+
+> **Desde el Taller 7:** la lista de coordinadores del auth es `GET /coordinator-peers` (lo que aquí se describe como `GET /peers`, que ahora lista los nodos de auth) y los coordinadores usan `AUTH_URLS` con los tres auth. Ver [Taller 7 §5 y §6](#taller-7-auth-services-replicados).
 
 Varios coordinadores corren en paralelo, son intercambiables y tienen **el mismo estado del juego**. El auth-service además es **directory service**: sabe qué coordinadores están vivos y a cuál conectar a cada cliente. Los coordinadores forman un **mesh** por WebSocket: cada uno se conecta con todos los demás.
 
@@ -380,7 +669,7 @@ Código nuevo del Taller 6:
 | `auth-service/directory.js` | Directorio puro: validación del heartbeat, TTL, reservas, selección |
 | `auth-service/app.js` | Rutas `/heartbeat`, `/coordinator`, `/peers`, `/directory` |
 | `coordinator/config.js` | Configuración por instancia (`--env <archivo>`) |
-| `coordinator/directory-client.js` | Heartbeat al auth y `GET /peers` (nunca lanza errores) |
+| `coordinator/directory-client.js` | Heartbeat al auth y `GET /peers` (nunca lanza errores; desde el Taller 7, a todos los auth y `GET /coordinator-peers`) |
 | `coordinator/mesh.js` | Lógica pura del mesh: quién inicia, duplicados, validación, propiedad, conflictos, resync |
 | `coordinator/peers.js` | Red del mesh: servidor de peers, conexiones salientes, hello, ping/pong, positions_sync |
 | `coordinator/scripts/cluster-smoke.js` | Smoke multi-proceso C1–C13 (`npm run smoke:cluster`) |
@@ -1461,35 +1750,41 @@ Probado con dos jugadores en Edge: los 12 intentos quedaron bloqueados, medidos 
 .
 ├── .gitignore · CLAUDE.md · README.md · ngrok.example.yml
 ├── auth-service/
-│   ├── .env.example · .npmrc · package.json · package-lock.json
-│   ├── index.js        # arranque: valida la configuración, abre la base, cierre ordenado
-│   ├── app.js          # createApp(): /health, /register, /login, /auth/google y el directorio (/heartbeat, /coordinator, /peers, /directory)
+│   ├── .env.example · .env.auth-a/b/c.example · .npmrc · package.json · package-lock.json
+│   ├── index.js        # arranque: configuración, base, nodo de replicación + mesh, cierre ordenado
+│   ├── config.js       # configuración (también multi-nodo con AUTH_NODES y --env)
+│   ├── app.js          # createApp(): /health, /register, /login, /auth/google, /status, /peers y el directorio (/heartbeat, /coordinator, /coordinator-peers, /directory)
+│   ├── oplog.js        # oplog, meta y utilidades de almacenamiento replicable (Taller 7)
+│   ├── replication/    # election.js (núcleo puro), node.js (nodo), mesh.js + mesh-messages.js (WebSocket), standalone.js, mutex.js
+│   ├── scripts/auth-cluster-smoke.js   # npm run smoke:auth-cluster (A1-A13)
 │   ├── directory.js    # directorio de coordinadores: TTL, reservas, selección (Taller 6)
 │   ├── db.js           # esquema de la tabla única, migración desde el Taller 4, consultas
 │   ├── google.js       # makeGoogleVerifier(): verifica el ID token con audience
-│   └── test/           # node:test (auth, Google, migración)
+│   └── test/           # node:test (auth, Google, migración, configuración, oplog, elección con simulador, replicación, mesh)
 ├── coordinator/
 │   ├── .env.example · .env.coord-a.example · .env.coord-b.example · .env.coord-c.example
 │   ├── package.json · package-lock.json
 │   ├── index.js        # upgrade con JWT, sesiones, mensajes, game loop, heartbeat, /status
 │   ├── config.js       # configuración por instancia (--env <archivo>)
-│   ├── directory-client.js  # heartbeat al auth y GET /peers
+│   ├── directory-client.js  # heartbeat a todos los auth (AUTH_URLS) y GET /coordinator-peers
 │   ├── mesh.js         # lógica pura del mesh (propiedad, conflictos, resync)
 │   ├── peers.js        # red del mesh: servidor de peers, conexiones salientes, ping, positions_sync
 │   ├── game.js         # lógica pura: config, mapa y choques, spawn, sanitizeIntent/Extras, stepPlayers, snapshot
 │   ├── city.js · missions.js · match.js · arbiter.js   # Viruscity: ciudad, misiones, reducer de la partida y árbitro
 │   ├── map/virus-city.json     # grilla de casillas sólidas y de aparición (npm run map en client/)
 │   ├── test/           # node:test de game.js, config, directory-client, mesh y la partida (ciudad, misiones, reducer, árbitro)
-│   └── scripts/smoke-test.js · cluster-smoke.js · viruscity-smoke.js   # npm run smoke · smoke:cluster · smoke:viruscity
+│   └── scripts/smoke-test.js · cluster-smoke.js · full-smoke.js · viruscity-smoke.js   # npm run smoke · smoke:cluster (C1-C13) · smoke:full (F1-F8) · smoke:viruscity
 └── client/
     ├── .env.example · package.json · package-lock.json
-    ├── server.js       # Express estático + /config.js (AUTH_URL, COORDINATOR_WS_URL opcional, GOOGLE_CLIENT_ID)
+    ├── server.js       # Express estático + /config.js (AUTH_URLS, AUTH_URL, COORDINATOR_WS_URL opcional, GOOGLE_CLIENT_ID)
     ├── scripts/export-map.mjs  # exporta la grilla del mapa para el coordinator (npm run map)
     ├── public/
     │   ├── login.html · play.html · cluster.html · lobby.html (legado) · game.html (vista previa de diseño)
     │   ├── css/        # tokens, base, components, login, google-login, play, lobby, game, vc (partida de Viruscity)
     │   ├── img/        # logo.svg, favicon.svg
     │   └── js/
+    │       ├── auth-fetch.js · auth-node.js   # window.authFetch con failover e indicador "Auth: …" (Taller 7)
+    │       ├── auth/failover.js                # lógica pura del failover entre auth-services
     │       ├── login.js · login-ui.js · google-login.js · google-flow.js
     │       ├── lobby.js · game-shell.js
     │       ├── cluster.js      # tabla del directorio (cluster.html)
@@ -1501,7 +1796,9 @@ Probado con dos jugadores en Edge: los 12 intentos quedaron bloqueados, medidos 
     └── test/           # node:test (Google, juego, personajes, mapa, interfaz)
 ```
 
-Solo existen en tu equipo (ignorados por git): `*/.env`, `coordinator/.env.coord-a`/`-b`/`-c`, `ngrok.yml`, `*/node_modules/`, `auth-service/users.db` y sus copias `*.bak`.
+Y `gateway/` (Taller 7): `index.js` (proxy HTTP y WebSocket), `match.js` (enrutamiento puro), `.env.example` y `test/`.
+
+Solo existen en tu equipo (ignorados por git): `*/.env`, `auth-service/.env.auth-*`, `auth-service/users-*.db`, `coordinator/.env.coord-a`/`-b`/`-c`, `ngrok.yml`, `*/node_modules/`, `auth-service/users.db` y sus copias `*.bak`.
 
 ---
 

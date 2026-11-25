@@ -3,7 +3,9 @@
 // para que ningún archivo del cliente tenga URLs escritas a mano.
 //
 // Configuración: variables de entorno cargadas desde .env (ver .env.example).
-// PORT y AUTH_URL son obligatorios; GOOGLE_CLIENT_ID y COORDINATOR_WS_URL son opcionales.
+// PORT y AUTH_URLS (o AUTH_URL) son obligatorios; GOOGLE_CLIENT_ID y COORDINATOR_WS_URL son opcionales.
+// Taller 7: AUTH_URLS es la lista de auth-services del clúster (separadas por comas); el navegador hace failover
+// entre ellas (js/auth/failover.js). Si solo existe AUTH_URL, es una lista de una.
 // Taller 6: el juego ya no se conecta a un coordinador fijo: pide uno a GET {AUTH_URL}/coordinator.
 // COORDINATOR_WS_URL queda solo por compatibilidad (vacío por defecto; /config.js lo sigue entregando).
 
@@ -35,15 +37,23 @@ function checkUrl(name, value, protocols) {
 }
 
 const PORT = Number(process.env.PORT);
-const AUTH_URL = trimSlash(process.env.AUTH_URL || "");
+const AUTH_URLS_RAW = String(process.env.AUTH_URLS || process.env.AUTH_URL || "").trim();
+const AUTH_URLS_KEY = process.env.AUTH_URLS ? "AUTH_URLS" : "AUTH_URL";
 const COORDINATOR_WS_URL = trimSlash(process.env.COORDINATOR_WS_URL || "");
 // Client ID público de Google (Taller 5). Opcional: si falta, el login no muestra el botón de Google.
 const GOOGLE_CLIENT_ID = trimSlash((process.env.GOOGLE_CLIENT_ID || "").trim());
 
 if (!process.env.PORT) fatal("PORT es obligatorio");
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) fatal("PORT debe ser un número de puerto válido");
-if (!AUTH_URL) fatal("AUTH_URL es obligatorio");
-checkUrl("AUTH_URL", AUTH_URL, ["http:", "https:"]);
+if (!AUTH_URLS_RAW) fatal("AUTH_URLS es obligatorio (URLs http:// o https:// del auth-service separadas por comas)");
+const AUTH_URLS = AUTH_URLS_RAW.split(",").map((part, i) => {
+    const value = trimSlash(part.trim());
+    if (!value) fatal(`${AUTH_URLS_KEY}: la entrada ${i + 1} está vacía`);
+    checkUrl(AUTH_URLS_KEY, value, ["http:", "https:"]);
+    return value;
+});
+if (new Set(AUTH_URLS).size !== AUTH_URLS.length) fatal(`${AUTH_URLS_KEY} tiene una URL repetida`);
+const AUTH_URL = AUTH_URLS[0]; // compatibilidad: el primero
 if (COORDINATOR_WS_URL) checkUrl("COORDINATOR_WS_URL", COORDINATOR_WS_URL, ["ws:", "wss:"]); // opcional (Taller 6)
 
 // ---------- HTTP ----------
@@ -58,7 +68,7 @@ app.get("/", (req, res) => {
 app.get("/config.js", (req, res) => {
     res.set("Content-Type", "application/javascript; charset=utf-8");
     res.set("Cache-Control", "no-store");
-    res.send("window.APP_CONFIG = " + JSON.stringify({ AUTH_URL, COORDINATOR_WS_URL, GOOGLE_CLIENT_ID }) + ";");
+    res.send("window.APP_CONFIG = " + JSON.stringify({ AUTH_URLS, AUTH_URL, COORDINATOR_WS_URL, GOOGLE_CLIENT_ID }) + ";");
 });
 
 app.use(express.static(path.join(__dirname, "public")));
