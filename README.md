@@ -23,9 +23,9 @@ Universidad de Boyacá. Tres procesos independientes que se comunican por red:
 
 # Viruscity
 
-El juego sobre el clúster del Taller 6: una ciudad con jugadores **sanos** que fabrican la cura con misiones y un **infectado** oculto que contagia a los demás. Todo lo decide el servidor; el cliente solo muestra su vista y manda acciones. Rama `viruscity`; las reglas fijas están en CLAUDE.md, sección "VIRUSCITY – METODOLOGÍA".
+El juego sobre el sistema de los Talleres 6 y 7 (coordinadores replicados y auth replicados): **la ciudad de Virus City**, con jugadores **sanos** que fabrican la cura con misiones en sus edificios y un **infectado** oculto que contagia a los demás. La partida se juega en el **mapa principal** (el mismo mundo abierto de siempre) y empieza sola cuando hay 3 jugadores conectados. Todo lo decide el servidor; el cliente solo muestra su vista y manda acciones. Rama `viruscity`; las reglas fijas están en CLAUDE.md, sección "VIRUSCITY – METODOLOGÍA".
 
-**Contenido:** 1. Concepto y ciclo · 2. Reglas · 3. Información oculta · 4. Arquitectura · 5. Fallas y limitaciones · 6. Protocolo · 7. Configuración y partida rápida · 8. Controles y archivos · 9. Pruebas · 10. Balance · 11. Demostración y preguntas
+**Contenido:** 1. Concepto y ciclo · 2. Reglas · 3. Información oculta · 4. Arquitectura y lugares en el mapa · 5. Fallas y limitaciones · 6. Protocolo · 7. Configuración y partida rápida · 8. Controles y archivos · 9. Pruebas · 10. Balance · 11. Demostración y preguntas
 
 ## 1. Concepto y ciclo de la partida
 
@@ -136,6 +136,24 @@ Cómo se garantiza (verificado en la auditoría de la Fase V6):
 - **Handover al reingresar:** cuando vuelve un coordinador de id menor, el árbitro saliente le manda `handover:true` con el estado al completar el handshake; el que vuelve espera hasta `GAME_SYNC_WAIT_MS` (1,5 s) ese estado antes de avanzar nada (también al formarse la malla).
 - La partida usa las posiciones de la simulación de cada coordinador; las de jugadores remotos llegan por el mesh, por eso el árbitro aplica `RANGE_TOLERANCE` a los rangos.
 
+### Lugares de la partida en el mapa de Virus City
+
+La partida se juega **solo en el mapa principal** (3840 × 3840, `MAP_FILE=./map/virus-city.json`). Cada zona es un **edificio real** de la ciudad y sus dos estaciones están en la acera o el camino de su entrada:
+
+| Zona | Edificio (casillas) | Estaciones en | Sale a |
+|---|---|---|---|
+| Hospital | Hospital Virus Care (la antigua clínica), c55–62 r37–41 | acera de la Calle Sur | Calle Sur |
+| Laboratorio | **Laboratorio Vega** (nuevo), c13–21 r5–9 | acera de la Calle Norte | Calle Norte |
+| Farmacia | Farmacia, c9–13 r21–25 | acera de la Avenida Central | Avenida Central |
+| Central de datos | **Central de datos** (nueva), c67–76 r15–18 | Callejón del Mercado | Boulevard |
+| Planta de síntesis | **Planta de síntesis** (nueva), c10–19 r47–50 | Camino Verde | Calle del Parque |
+| Almacén | **Almacén** (nuevo, junto al Granero), c64–68 r47–51 | patio de la granja | Calle Este |
+
+- **Plaza de aparición:** ala este de la Plaza Mayor, junto al Ayuntamiento (casilla 45, 18). Es el lugar de la plaza donde el círculo de aparición (radio 80) no pisa nada sólido, para cualquier roster de 1 a 12.
+- **Una sola fuente:** `client/public/js/play/map/match-places.js` define zonas, estaciones y plaza; `npm run map` (en `client/`) las guarda en `virus-city.json` (campo `city`) junto con la grilla. El coordinador las valida al arrancar (`parseMap`: estaciones y plaza en casillas libres) y `buildCity` exige las 6 zonas y las 12 estaciones de las misiones; si no cuadran, no arranca. Sin `MAP_FILE`, la ciudad sale de las coordenadas normalizadas de `city.js` (la usan las pruebas y `smoke:viruscity`).
+- **Recorridos:** desde la plaza hasta cada estación hay entre 26 y 67 casillas de camino (6 a 16 s caminando): hacer una misión también cuesta tiempo de viaje, y el infectado tiene dónde emboscar.
+- Las pruebas `client/test/map.test.mjs` y `coordinator/test/city.test.js` comprueban que cada estación esté libre, dentro de su zona y alcanzable caminando desde la plaza, que cada zona contenga su edificio y que nadie aparezca sobre algo sólido.
+
 ## 5. Qué pasa en cada falla y limitaciones conocidas
 
 | Falla | Qué pasa |
@@ -152,7 +170,7 @@ Limitaciones conocidas:
 - **Una misión en curso puede perderse en un relevo** (si el `game_state` con ella no llegó antes de la caída): el jugador ve que se cerró y la puede repetir.
 - **Los minijuegos se resuelven en el cliente:** un cliente modificado puede "resolverlos" sin jugar. El servidor valida lo que importa: que el jugador esté sano, en rango, inmóvil y que haya pasado al menos `MISSION_MIN_MS` (no se puede acelerar la cura).
 - **Sin persistencia:** la partida vive en memoria de los coordinadores; si se caen todos a la vez, se pierde.
-- **Mapa real:** las coordenadas de la ciudad están normalizadas para cualquier tamaño de mundo, pero sobre el mapa de Virus City (3840 × 3840, `MAP_FILE`) 6 de las 12 estaciones y el centro de la plaza caen en casillas sólidas. Para jugar Viruscity se usa el mundo sin mapa (`MAP_FILE=` vacío, 1200 × 800) hasta ubicar la ciudad a mano sobre el mapa.
+- **Interiores:** el Burger Neón y el Supermercado siguen abiertos durante la partida (se entra por su puerta). No hay estaciones dentro; esconderse ahí es válido, pero la cura no avanza.
 - **Varias pestañas en el mismo navegador comparten la sesión** (localStorage, Taller 5): para probar con varios jugadores en un equipo se usan navegadores o perfiles distintos (por ejemplo Chrome, una ventana de incógnito y Edge).
 
 ## 6. Protocolo
@@ -217,14 +235,13 @@ Todas en el `.env` de cada coordinador (`.env.coord-a`, …; los `.example` trae
 | `GAME_VIEW_MS` | Cada cuánto se manda `game` a cada cliente | 250 |
 | `GAME_SYNC_WAIT_MS` | Espera de un árbitro sin estado (o recién unido a la malla) por un handover | 1500 |
 
-Además siguen las del Taller 6 (identidad, puertos, URLs y secretos) y las del Taller 5 (mapa, velocidad, tick). `MAP_FILE` vacío = mundo de 1200 × 800 sin mapa (recomendado para Viruscity, ver limitaciones).
+Además siguen las del Taller 7 (`AUTH_URLS`), las del Taller 6 (identidad, puertos, URLs y secretos) y las del Taller 5 (mapa, velocidad, tick). La partida se juega con `MAP_FILE=./map/virus-city.json` (el valor de los `.example`); `MAP_FILE` vacío = mundo de 1200 × 800 sin mapa, solo para pruebas.
 
 ### Receta: partida rápida para probar
 
 1. En `coordinator/.env.coord-a`, `-b` y `-c` (los tres iguales):
 
    ```
-   MAP_FILE=
    MATCH_COUNTDOWN_MS=3000
    INITIAL_LOCK_MS=5000
    INFECT_COOLDOWN_MS=8000
@@ -234,7 +251,7 @@ Además siguen las del Taller 6 (identidad, puertos, URLs y secretos) y las del 
    RESULTS_MS=8000
    ```
 
-2. Levantar todo como en el Taller 6 (cinco terminales): `cd auth-service && npm start` · `cd coordinator && npm run start:a` (y `start:b`, `start:c`) · `cd client && npm start`.
+2. Levantar todo como en el Taller 7 (siete terminales): `cd auth-service && npm run start:a` (y `start:b`, `start:c`) · `cd coordinator && npm run start:a` (y `start:b`, `start:c`) · `cd client && npm start`.
 3. Abrir `http://localhost:3000` en **tres navegadores o perfiles distintos** y entrar con tres usuarios. Al entrar el tercero empieza la cuenta (3 s).
 4. Para volver a la partida real, borrar esas líneas (o volver a los valores de los `.example`) y reiniciar los coordinadores.
 
