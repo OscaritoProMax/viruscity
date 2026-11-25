@@ -20,3 +20,12 @@ ngrok.yml
 tunel/tunel.env
 tunel/ngrok-*.yml
 tunel/abrir-tuneles.cmd
+
+# Material personal de estudio y del examen: solo en local, no se entrega
+PLAN-*.md
+PLAN-*.pdf
+GUIA-*.md
+GUIA-*.pdf
+DISENO-MISIONES.md
+PROMPT-MINIJUEGOS.md
+SSD_*.pdf
