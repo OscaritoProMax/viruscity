@@ -123,7 +123,7 @@ Los smokes levantan sus propios procesos en puertos de prueba, con secretos alea
 - **Un solo equipo:** el despliegue por túnel corre todo en una máquina, así que si se cae el equipo se cae todo. Lo natural sería repartir los nodos en varias máquinas: el diseño ya lo permite, porque todo se configura por URL.
 - **La persistencia no es una base replicada:** cada coordinador tiene la suya y la verdad sale de reconciliarlas.
 - **Espectadores:** para miles harían falta procesos retransmisores (*fan-out*).
-- **Minijuegos:** 8 de las 12 misiones tienen minijuego gráfico propio. Las 4 de la Planta y el Almacén usan las mecánicas simples (deslizador, secuencia, mantener y código).
+- **Minijuegos:** las 12 misiones tienen su minijuego propio dibujado en canvas, pero el cliente es quien lo resuelve. El servidor solo valida el tiempo mínimo, el rango y que el jugador siga sano: un tramposo podría mandar `mission_complete` sin jugar, aunque no antes de `MISSION_MIN_MS`.
 
 **Mapa del README**
 - [Track 2.1 · Persistencia](#track-21--persistencia-del-estado-del-juego-track-principal) · [Track 2.5 · Espectador](#track-25--modo-espectador-track-secundario)
@@ -285,12 +285,12 @@ Mientras no hay partida, la ciudad es el **mundo abierto** de siempre. Cuando ha
 | farmacia-2 | Farmacia | Etiquetar las dosis | **Línea de etiquetado** |
 | central-1 | Central de datos | Restaurar el registro de contagios | **Panel de conexiones** |
 | central-2 | Central de datos | Descargar el historial clínico | **Transferencia** |
-| planta-1 | Planta de síntesis | Sintetizar el compuesto | Calibración |
-| planta-2 | Planta de síntesis | Purificar el reactor | Secuencia |
-| almacen-1 | Almacén | Cargar el suero en los camiones | Mantener |
-| almacen-2 | Almacén | Inventariar el cargamento | Código |
+| planta-1 | Planta de síntesis | Sintetizar el compuesto | **Válvulas** |
+| planta-2 | Planta de síntesis | Purificar el reactor | **Secuencia del reactor** |
+| almacen-1 | Almacén | Cargar el suero en los camiones | **Carga** |
+| almacen-2 | Almacén | Inventariar el cargamento | **Escáner** |
 
-Minijuegos (`client/public/js/vc/minigames/`). Las misiones pasan por fases a **minijuegos jugables**, uno propio por misión: dibujados en canvas con animaciones (motor común `canvas-kit.js`: lienzo nítido que se adapta del móvil al escritorio, partículas, animación de éxito) y jugables con ratón, dedo o teclado; con *prefers-reduced-motion* las animaciones se reducen. Ya están:
+Minijuegos (`client/public/js/vc/minigames/`). Cada misión tiene su **minijuego jugable** propio: dibujados en canvas con animaciones (motor común `canvas-kit.js`: lienzo nítido que se adapta del móvil al escritorio, partículas, animación de éxito) y jugables con ratón, dedo o teclado; con *prefers-reduced-motion* las animaciones se reducen. 
 
 | Minijuego | Cómo se juega | Teclado |
 |---|---|---|
@@ -302,8 +302,12 @@ Minijuegos (`client/public/js/vc/minigames/`). Las misiones pasan por fases a **
 | **Doble hélice** | completar los 6 huecos de la hebra con la base complementaria (A–T, C–G) mientras la hélice gira | teclas A, T, C o G |
 | **Línea de etiquetado** | una cinta trae 5 viales; estampar la etiqueta de su color cuando cada uno pasa por la marca (los que pasan sin etiqueta dan la vuelta) | teclas 1 a 4 |
 | **Transferencia** | iniciar la descarga entre dos equipos; cuando la antena pierde la señal, reconectar en menos de 1,5 s o la barra retrocede | Enter o Espacio |
+| **Válvulas** | girar 3 volantes hasta dejar las 3 agujas en su zona verde a la vez y sostenerlas un instante; cada válvula también sube el medidor de su derecha (las agujas tienen inercia y sale vapor al estabilizar) | ←/→ o 1–3 eligen, ↑/↓ abren y cierran |
+| **Secuencia del reactor** | el reactor enciende una serie de luces y hay que repetirla en 3 rondas de 3, 4 y 5; el núcleo se aclara con cada ronda y, si fallas, vuelve a mostrar la serie | flechas (↑ amarilla, → azul, ↓ verde, ← roja) o 1–4 |
+| **Carga** | subir 5 cajas de suero al camión, que ya trae 3 cajas viejas; arriba solo se puede con una caja debajo (la caja cae con rebote, el camión se hunde y al final baja la persiana) | flechas para la casilla, Enter o Espacio para subir |
+| **Escáner** | pasar el lector sobre el código de barras de 3 cajas, de izquierda a derecha y a la velocidad justa (cada caja tiene su rango): "Muy rápido", "Muy lento" o "Leído" | ↑/↓ velocidad 1–6, mantener → para pasarlo |
 
-El resto de las misiones (Planta de síntesis y Almacén) sigue, por ahora, con los minijuegos sencillos: **Secuencia** (repetir 5 símbolos ▲ ● ■ ◆), **Código** (6 caracteres mostrados 4 s), **Calibración** (detener el marcador en la zona verde 3 veces seguidas) y **Mantener** (E pulsada 10 s).
+Los minijuegos sencillos de las primeras versiones (**Secuencia**, **Código**, **Cables**, **Calibración** y **Mantener**) siguen en el código, pero ninguna misión los usa: si un `kind` es desconocido, el cliente abre **Mantener**.
 
 Flujo: el sano llega a la estación (≤ `MISSION_RANGE` = 60 px + tolerancia) y pulsa E → `mission_start` → si el árbitro acepta, la misión queda `in_progress` reservada a él y el jugador queda **inmóvil** (el servidor ignora su movimiento) → el cliente abre el minijuego **solo** al recibir `mission_started` → al resolverlo espera a `missionStartedAt + MISSION_MIN_MS + 300 ms` ("Verificando…") y manda `mission_complete` → el árbitro la acepta si pasaron entre `MISSION_MIN_MS` (8 s) y `MISSION_MAX_MS` (45 s), el jugador sigue en rango y sigue sano. Esc o "Cancelar" mandan `mission_cancel`. La misión se libera sola si expira, si el jugador se infecta, se desconecta o se aleja.
 
@@ -487,7 +491,7 @@ Además siguen las del Taller 7 (`AUTH_URLS`), las del Taller 6 (identidad, puer
 | F | Infectar al sano más cercano (infectado) |
 | Esc | Cancelar el minijuego (manda `mission_cancel`) o cerrar una conversación |
 | Cualquier tecla | Cerrar la pantalla de rol |
-| 1-4 · Espacio · E (mantener) | Dentro de los minijuegos: Secuencia, Calibración y Mantener |
+| Ratón, dedo, flechas, Enter, Espacio, 1–4, A/T/C/G | Dentro de cada minijuego (ver la tabla de minijuegos) |
 | Q | Poder del personaje (solo visual, Taller 5) |
 
 ```
@@ -507,7 +511,7 @@ client/public/
     ├── city-render.js # ciudad, plaza y anillos de las estaciones en el canvas
     ├── hud.js         # chip de fase y rol, cura, jugadores, misiones, pista, avisos, pantallas de rol y fin
     ├── mission.js     # minijuego de la misión en curso (abrir, verificar, reintentar, cancelar)
-    └── minigames/     # index.js (modal accesible) y sequence, code, wires, slider, hold
+    └── minigames/     # index.js (modal accesible), canvas-kit.js (motor) y los 12 jugables: samples, uvlamp, microscope, helix, dosing, labeling, patchpanel, transfer, valves, reactor, loading, scanner (más los sencillos sequence, code, wires, slider, hold)
 ```
 
 ## 9. Pruebas
