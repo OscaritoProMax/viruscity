@@ -183,6 +183,12 @@ if (persistCfg.dbPath) {
     console.log(`Persistencia: ${path.basename(persistCfg.dbPath)} · ${recovered} jugadores recuperados · ${matchText}`);
 }
 
+// Extras sin los campos pasajeros (powerOn: el poder dura 0,7 s y no debe sobrevivir a una reconexión)
+function withoutTransient(extras) {
+    const { powerOn, ...rest } = extras ?? {}; // eslint-disable-line no-unused-vars
+    return rest;
+}
+
 // Entrada persistible de un jugador vivo. Un jugador LOCAL que cambió (posición, extras o nombre) sube de
 // versión: la versión la incrementa solo su dueño, así el orden no depende del reloj de cada máquina.
 // Las copias REMOTAS conservan la versión que anuncia el dueño en positions_sync (nunca menos de la conocida).
@@ -411,8 +417,9 @@ wss.on("connection", (ws, payload) => {
         x,
         y,
         intent: { x: 0, y: 0 },
-        // Track 2.1: recupera también sus extras (color…), saneados otra vez por si vienen de la base o de un peer
-        extras: sanitizeExtras({ extras: previous?.extras ?? lastPositions.get(userId)?.extras ?? {} }, cfg) ?? {},
+        // Track 2.1: recupera también sus extras (color…), saneados otra vez por si vienen de la base o de un peer.
+        // powerOn es un estado de 0,7 s (poder en uso): no se restaura aunque se haya guardado justo en ese momento
+        extras: withoutTransient(sanitizeExtras({ extras: previous?.extras ?? lastPositions.get(userId)?.extras ?? {} }, cfg) ?? {}),
         version: Math.max(previous?.version ?? 0, lastPositions.get(userId)?.version ?? 0), // track 2.1
     };
     players.set(userId, player);
