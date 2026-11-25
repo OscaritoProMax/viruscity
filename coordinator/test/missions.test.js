@@ -8,13 +8,13 @@ const { buildCity } = require("../city.js");
 const { seededRng } = require("./support/rng.js");
 
 const EXPECTED = [
-    ["hospital-1", "Recolectar muestras de pacientes", "sequence"],
-    ["hospital-2", "Esterilizar el quirófano", "hold"],
+    ["hospital-1", "Recolectar muestras de pacientes", "samples"],
+    ["hospital-2", "Esterilizar el quirófano", "uvlamp"],
     ["laboratorio-1", "Analizar la muestra del paciente cero", "slider"],
     ["laboratorio-2", "Secuenciar el genoma del virus", "code"],
-    ["farmacia-1", "Preparar el suero base", "wires"],
+    ["farmacia-1", "Preparar el suero base", "dosing"],
     ["farmacia-2", "Etiquetar las dosis", "code"],
-    ["central-1", "Restaurar el registro de contagios", "wires"],
+    ["central-1", "Restaurar el registro de contagios", "patchpanel"],
     ["central-2", "Descargar el historial clínico", "hold"],
     ["planta-1", "Sintetizar el compuesto", "slider"],
     ["planta-2", "Purificar el reactor", "sequence"],
@@ -26,7 +26,7 @@ test("MISSIONS: las 12 misiones de la decisión 13, válidas y con ids únicos",
     assert.equal(MISSIONS.length, 12);
     assert.deepEqual(MISSIONS.map((m) => [m.id, m.title, m.kind]), EXPECTED);
     assert.equal(new Set(MISSIONS.map((m) => m.id)).size, 12);
-    assert.deepEqual([...KINDS].sort(), ["code", "hold", "sequence", "slider", "wires"]);
+    assert.deepEqual([...KINDS].sort(), ["code", "dosing", "helix", "hold", "labeling", "loading", "microscope", "patchpanel", "reactor", "samples", "scanner", "sequence", "slider", "transfer", "uvlamp", "valves", "wires"]);
     for (const m of MISSIONS) {
         assert.match(m.id, /^[a-z0-9-]{1,40}$/, "el id cumple el patrón de missionId del protocolo");
         assert.equal(m.stationId, m.id);

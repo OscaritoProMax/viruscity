@@ -5,17 +5,21 @@
 // pickMissions(count, rng) → `count` misiones al azar, sin repetir (Fisher-Yates con rng inyectable)
 "use strict";
 
-const KINDS = Object.freeze(["sequence", "code", "wires", "slider", "hold"]);
+// Tipos de minijuego: los 5 sencillos (botones) y los 12 de las misiones jugables (canvas animado), uno por
+// misión. Las misiones pasan a los nuevos por fases (M2: muestras, lámpara UV, dosificador y conexiones).
+const SIMPLE_KINDS = ["sequence", "code", "wires", "slider", "hold"];
+const PLAYABLE_KINDS = ["samples", "uvlamp", "microscope", "helix", "dosing", "labeling", "patchpanel", "transfer", "valves", "reactor", "loading", "scanner"];
+const KINDS = Object.freeze([...SIMPLE_KINDS, ...PLAYABLE_KINDS]);
 
 const MISSIONS = Object.freeze(
     [
-        ["hospital-1", "hospital", "Recolectar muestras de pacientes", "sequence"],
-        ["hospital-2", "hospital", "Esterilizar el quirófano", "hold"],
+        ["hospital-1", "hospital", "Recolectar muestras de pacientes", "samples"],
+        ["hospital-2", "hospital", "Esterilizar el quirófano", "uvlamp"],
         ["laboratorio-1", "laboratorio", "Analizar la muestra del paciente cero", "slider"],
         ["laboratorio-2", "laboratorio", "Secuenciar el genoma del virus", "code"],
-        ["farmacia-1", "farmacia", "Preparar el suero base", "wires"],
+        ["farmacia-1", "farmacia", "Preparar el suero base", "dosing"],
         ["farmacia-2", "farmacia", "Etiquetar las dosis", "code"],
-        ["central-1", "central", "Restaurar el registro de contagios", "wires"],
+        ["central-1", "central", "Restaurar el registro de contagios", "patchpanel"],
         ["central-2", "central", "Descargar el historial clínico", "hold"],
         ["planta-1", "planta", "Sintetizar el compuesto", "slider"],
         ["planta-2", "planta", "Purificar el reactor", "sequence"],
@@ -36,4 +40,4 @@ function pickMissions(count, rng = Math.random) {
     return pool.slice(0, n);
 }
 
-module.exports = { MISSIONS, KINDS, pickMissions };
+module.exports = { MISSIONS, KINDS, SIMPLE_KINDS, PLAYABLE_KINDS, pickMissions };
