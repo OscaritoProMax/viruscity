@@ -261,11 +261,13 @@ app.get("/status", (req, res) => {
     res.status(200).json({
         coordinatorId: COORDINATOR_ID,
         uptime: Math.floor(process.uptime()),
-        localPlayers: countLocal(players),
+        localPlayers: countLocal(players), // los espectadores NO cuentan (track 2.5)
         totalPlayers: players.size,
         peers: net.readyPeerIds(), // ids de peers con handshake completo
         authReachable: authReachable === true,
         authNodesUp,
+        // Track 2.5: espectadores conectados, máximo y lo que se les ignoró, rechazó o saltó
+        spectators: { connected: spectators.size, max: conf.spectators.max, ...spectatorStats },
         // Track 2.1: ¿persiste?, cada cuánto, último guardado y cuántos jugadores conoce
         persistence: { enabled: store !== null, everyMs: persistCfg.everyMs, lastSavedAt: lastPersistAt, knownPlayers: lastPositions.size },
         // Partida (sin roles): fase, número de partida, versión, cura y tamaño del roster
@@ -326,6 +328,7 @@ server.on("upgrade", (req, socket, head) => {
     socket.on("error", () => {}); // un reset del cliente durante el handshake no debe tumbar el proceso
 
     const url = new URL(req.url, "http://localhost");
+    if (url.pathname === "/spectate") return acceptSpectator(req, socket, head); // track 2.5: sin token
     if (url.pathname !== "/connect") {
         socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
         socket.destroy();
@@ -350,6 +353,23 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 // ---------- Jugadores ----------
+
+// Lo que el cliente necesita para dibujar: coordinador, mundo, ciudad de la partida y reglas (decisión 20).
+// Lo reciben igual los jugadores (con "you") y los espectadores (con spectator: true).
+function welcomeBase() {
+    return {
+        coordinatorId: COORDINATOR_ID,
+        world: { width: cfg.WORLD_WIDTH, height: cfg.WORLD_HEIGHT, playerRadius: cfg.PLAYER_RADIUS, tickRate: cfg.TICK_RATE },
+        city,
+        game: {
+            minPlayers: cfg.MIN_PLAYERS_TO_START,
+            missionMinMs: cfg.MISSION_MIN_MS,
+            missionMaxMs: cfg.MISSION_MAX_MS,
+            infectRange: cfg.INFECT_RANGE,
+            missionRange: cfg.MISSION_RANGE,
+        },
+    };
+}
 
 // Envía un mensaje JSON solo si el socket sigue abierto (adaptado de send() del código base)
 function send(ws, message) {
@@ -409,20 +429,7 @@ wss.on("connection", (ws, payload) => {
 
     // Bienvenida: quién soy, cómo es el mundo, la ciudad de la partida (zonas, estaciones y plaza) y las
     // reglas que el cliente necesita para dibujar (decisión 20). Luego, de inmediato, su vista 'game'.
-    send(ws, {
-        type: "welcome",
-        coordinatorId: COORDINATOR_ID,
-        you: { userId, username, provider },
-        world: { width: cfg.WORLD_WIDTH, height: cfg.WORLD_HEIGHT, playerRadius: cfg.PLAYER_RADIUS, tickRate: cfg.TICK_RATE },
-        city,
-        game: {
-            minPlayers: cfg.MIN_PLAYERS_TO_START,
-            missionMinMs: cfg.MISSION_MIN_MS,
-            missionMaxMs: cfg.MISSION_MAX_MS,
-            infectRange: cfg.INFECT_RANGE,
-            missionRange: cfg.MISSION_RANGE,
-        },
-    });
+    send(ws, { type: "welcome", ...welcomeBase(), you: { userId, username, provider } });
     sendView(userId, player, Date.now());
     broadcastPlayers();
 
@@ -507,11 +514,92 @@ wss.on("connection", (ws, payload) => {
     });
 });
 
+// ---------- Espectadores (track 2.5 del examen final) ----------
+// /spectate acepta WebSockets SIN token. Un espectador NO es un jugador: no está en el Map players, así que no
+// se simula, no se replica por el mesh, no cuenta en connectedPlayers (el directorio no lo usa para repartir
+// carga) ni en la partida. Recibe el state a SPECTATOR_STATE_MS (10 Hz, la mitad que un jugador), la vista
+// pública de la partida (como un jugador sin rol: los roles solo al terminar) y los avisos públicos.
+// Todo lo que mande se IGNORA (intent, extras_update, game_action…): solo se cuenta; si inunda, se cierra.
+// Costo acotado: como mucho MAX_SPECTATORS por coordinador (4003 al resto, que el cliente manda a otro),
+// el JSON se arma UNA vez por envío para todos, y a un espectador lento se le saltan cuadros (bufferedAmount)
+// en vez de acumularle memoria.
+const spectatorWss = new WebSocketServer({ noServer: true, maxPayload: 512 });
+const spectators = new Set();
+const SPECTATOR_MAX_MSGS_PER_SEC = 10;
+const SPECTATOR_MAX_BUFFER = 256 * 1024; // bytes pendientes: por encima se salta el cuadro
+const SPECTATOR_VIEW_ID = ""; // id que nunca está en el roster: la vista de la partida es la de alguien sin rol
+const spectatorStats = { ignoredMessages: 0, rejected: 0, droppedFrames: 0, closedForFlood: 0 };
+
+function acceptSpectator(req, socket, head) {
+    spectatorWss.handleUpgrade(req, socket, head, (ws) => {
+        ws.on("error", () => {});
+        if (spectators.size >= conf.spectators.max) {
+            spectatorStats.rejected += 1;
+            ws.close(4003, "too many spectators");
+            return;
+        }
+        spectators.add(ws);
+        console.log(`Espectador conectado · espectadores: ${spectators.size}`);
+        ws.isAlive = true;
+        ws.on("pong", () => {
+            ws.isAlive = true;
+        });
+        send(ws, { type: "welcome", spectator: true, ...welcomeBase() });
+        send(ws, spectatorView(Date.now()));
+
+        // El espectador no puede mandar nada: se ignora sin leerlo (ni siquiera se parsea) y se cuenta
+        let windowStart = Date.now();
+        let count = 0;
+        ws.on("message", () => {
+            spectatorStats.ignoredMessages += 1;
+            const now = Date.now();
+            if (now - windowStart >= RATE_WINDOW_MS) {
+                windowStart = now;
+                count = 0;
+            }
+            count += 1;
+            if (count > SPECTATOR_MAX_MSGS_PER_SEC && ws.readyState === ws.OPEN) {
+                spectatorStats.closedForFlood += 1;
+                ws.close(1008, "spectators cannot send");
+            }
+        });
+        ws.on("close", () => {
+            if (spectators.delete(ws)) console.log(`Espectador desconectado · espectadores: ${spectators.size}`);
+        });
+    });
+}
+
+// Envío a un espectador con contrapresión: si tiene mucho pendiente (red lenta) se salta este cuadro
+function sendToSpectator(ws, text) {
+    if (ws.readyState !== ws.OPEN) return;
+    if (ws.bufferedAmount > SPECTATOR_MAX_BUFFER) {
+        spectatorStats.droppedFrames += 1;
+        return;
+    }
+    ws.send(text);
+}
+
+const spectatorView = (now) => buildClientView(match, SPECTATOR_VIEW_ID, { now, connected: players.size, cfg });
+
+function sendSpectatorViews(now = Date.now()) {
+    if (spectators.size === 0) return;
+    const text = JSON.stringify(spectatorView(now));
+    for (const ws of spectators) sendToSpectator(ws, text);
+}
+
+// state a 10 Hz: el mismo formato que reciben los jugadores, armado una sola vez para todos los espectadores
+const spectatorTicker = setInterval(() => {
+    if (spectators.size === 0) return;
+    const ghostOf = match.phase === "playing" ? (userId) => isGhost(match, userId) : null;
+    const text = JSON.stringify({ type: "state", t: Date.now(), coordinatorId: COORDINATOR_ID, players: snapshot(players, ghostOf) });
+    for (const ws of spectators) sendToSpectator(ws, text);
+}, conf.spectators.stateMs);
+
 // ---------- Heartbeat ----------
 // Cada HEARTBEAT_INTERVAL_MS se hace ping; quien no respondió al ping anterior se termina
 // (detecta conexiones muertas que nunca enviaron el cierre, p. ej. sin red).
 const heartbeat = setInterval(() => {
-    for (const ws of wss.clients) {
+    for (const ws of [...wss.clients, ...spectatorWss.clients]) {
         if (!ws.isAlive) {
             ws.terminate(); // dispara 'close', que lo quita del Map y avisa a los demás
             continue;
@@ -594,6 +682,8 @@ function deliverEvents(events) {
                 send(p.socket, msg);
                 affected.add(id);
             }
+            const text = JSON.stringify(msg); // track 2.5: los avisos públicos también los ven los espectadores
+            for (const ws of spectators) sendToSpectator(ws, text);
         } else {
             const p = players.get(userId);
             if (p && isLocal(p)) {
@@ -715,7 +805,10 @@ const matchTicker = setInterval(() => {
 }, cfg.GAME_TICK_MS);
 
 // Cada GAME_VIEW_MS: la vista 'game' a cada cliente local
-const viewTicker = setInterval(() => sendViewsToLocals(), cfg.GAME_VIEW_MS);
+const viewTicker = setInterval(() => {
+    sendViewsToLocals();
+    sendSpectatorViews(); // track 2.5
+}, cfg.GAME_VIEW_MS);
 
 // ---------- Replicación del árbitro (decisión 17) ----------
 const REPLICATE_MIN_GAP_MS = 50; // tras una acción, como mucho una réplica cada 50 ms
@@ -876,6 +969,8 @@ function shutdown(signal) {
     net.stop();
     // 1001 = "going away": el servidor se está apagando
     for (const ws of wss.clients) ws.close(1001, "server shutting down");
+    for (const ws of spectators) ws.close(1001, "server shutting down");
+    clearInterval(spectatorTicker);
     clearTimeout(gameLoop);
     clearInterval(matchTicker);
     clearInterval(viewTicker);

@@ -155,6 +155,16 @@ function readPersist(env, baseDir, coordinatorId) {
     };
 }
 
+// Espectadores (track 2.5): máximo por coordinador (0 = sin espectadores) y cada cuánto reciben el state
+function readSpectators(env) {
+    const raw = String(env.MAX_SPECTATORS ?? "").trim();
+    if (raw && !/^\d+$/.test(raw)) throw new Error("MAX_SPECTATORS debe ser un entero mayor o igual a 0 (espectadores)");
+    return {
+        max: raw ? Number(raw) : 50,
+        stateMs: readInt(env, "SPECTATOR_STATE_MS", 100, 20),
+    };
+}
+
 function loadConfig(env = process.env, { baseDir = __dirname } = {}) {
     const coordinatorId = String(env.COORDINATOR_ID ?? "").trim();
     if (!ID_REGEX.test(coordinatorId)) {
@@ -199,6 +209,7 @@ function loadConfig(env = process.env, { baseDir = __dirname } = {}) {
         map,
         game,
         persist: readPersist(env, baseDir, coordinatorId),
+        spectators: readSpectators(env),
     };
 }
 

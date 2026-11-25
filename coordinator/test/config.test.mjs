@@ -111,3 +111,10 @@ test("persistencia (track 2.1): base propia por id, se puede apagar y valida los
     assert.throws(() => loadConfig(valid({ PERSIST_MS: "50" })), /PERSIST_MS/);
     assert.throws(() => loadConfig(valid({ PERSIST_MAX_AGE_MS: "abc" })), /PERSIST_MAX_AGE_MS/);
 });
+
+test("espectadores (track 2.5): máximo por coordinador y frecuencia del state", () => {
+    assert.deepEqual(loadConfig(valid()).spectators, { max: 50, stateMs: 100 });
+    assert.deepEqual(loadConfig(valid({ MAX_SPECTATORS: "0", SPECTATOR_STATE_MS: "200" })).spectators, { max: 0, stateMs: 200 });
+    assert.throws(() => loadConfig(valid({ MAX_SPECTATORS: "-1" })), /MAX_SPECTATORS/);
+    assert.throws(() => loadConfig(valid({ SPECTATOR_STATE_MS: "5" })), /SPECTATOR_STATE_MS/);
+});
