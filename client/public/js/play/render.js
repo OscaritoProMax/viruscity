@@ -344,7 +344,10 @@ export function createRenderer(canvas, minimap) {
             ctx.restore();
         }
         const flyHeight = look.power === "jetpack" && powerT !== null ? jetpackHeight(powerT) : 0;
-        drawCharacter(ctx, look, anim?.dir ?? "DOWN", reducedMotion.matches ? false : Boolean(anim?.moving), anim?.walkTime ?? 0, { flyHeight });
+        // La caminata se dibuja SIEMPRE: no es decoración, es la información de quién se mueve. Antes se apagaba con
+        // prefers-reduced-motion, que Windows activa solo al quitar "Efectos de animación": en esos PC nadie caminaba.
+        // Con movimiento reducido se siguen apagando los efectos decorativos (humo, fuente, agua, destellos).
+        drawCharacter(ctx, look, anim?.dir ?? "DOWN", Boolean(anim?.moving), anim?.walkTime ?? 0, { flyHeight });
         ctx.restore();
     }
 

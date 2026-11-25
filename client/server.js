@@ -75,7 +75,10 @@ app.get("/config.js", (req, res) => {
     res.send("window.APP_CONFIG = " + JSON.stringify({ AUTH_URLS, AUTH_URL, COORDINATOR_WS_URL, GOOGLE_CLIENT_ID, RECONNECT_GRACE_MS }) + ";");
 });
 
-app.use(express.static(path.join(__dirname, "public")));
+// Páginas, JS y CSS con "no-cache": el navegador puede guardarlos, pero pregunta en cada carga si cambiaron (ETag →
+// 304 si no). Sin esto, un navegador (p. ej. otro PC entrando por ngrok) podía seguir usando una versión vieja del
+// juego un buen rato después de actualizar el código.
+app.use(express.static(path.join(__dirname, "public"), { setHeaders: (res) => res.set("Cache-Control", "no-cache") }));
 
 // Cualquier otra ruta
 app.use((req, res) => {
