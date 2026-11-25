@@ -43,6 +43,7 @@ test("coordinator/map/virus-city.json coincide con el trazado del cliente", { sk
 import { matchCity, MATCH_ZONES } from "../public/js/play/map/match-places.js";
 import { buildingsList, reachable, idx } from "../public/js/play/map/layout.js";
 import { areaName } from "../public/js/play/map/zones.js";
+import { sceneAt } from "../public/js/play/map/scenes.js";
 
 test("ciudad de la partida: 6 zonas y 12 estaciones con los ids y nombres del coordinador; va en virus-city.json", () => {
     const city = matchCity();
@@ -51,27 +52,55 @@ test("ciudad de la partida: 6 zonas y 12 estaciones con los ids y nombres del co
     assert.deepEqual(data.city, city, "buildMapData incluye la ciudad");
 });
 
-test("ciudad de la partida: cada estación en una casilla libre de la ciudad, dentro de su zona y alcanzable desde la plaza", () => {
+// Casillas alcanzables caminando desde (c, r) en el mundo completo, atravesando los portales (puertas de los locales)
+function reachableWorld(c0, r0) {
+    const cols = data.cols;
+    const free = (c, r) => c >= 0 && r >= 0 && c < cols && r < data.rows && data.solid[r][c] === "0";
+    const portalAt = new Map();
+    for (const p of data.portals) for (let r = p.r0; r <= p.r1; r++) for (let c = p.c0; c <= p.c1; c++) portalAt.set(r * cols + c, [Math.floor(p.x / TILE_SIZE), Math.floor(p.y / TILE_SIZE)]);
+    const seen = new Set([r0 * cols + c0]);
+    const queue = [[c0, r0]];
+    while (queue.length) {
+        const [c, r] = queue.pop();
+        for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            let nc = c + dc;
+            let nr = r + dr;
+            if (!free(nc, nr)) continue;
+            const jump = portalAt.get(nr * cols + nc);
+            if (jump) [nc, nr] = jump; // pisar la puerta lleva al otro lado
+            const k = nr * cols + nc;
+            if (seen.has(k)) continue;
+            seen.add(k);
+            queue.push([nc, nr]);
+        }
+    }
+    return seen;
+}
+
+test("ciudad de la partida: cada estación está DENTRO de la sala de su zona, en casilla libre, y se llega desde la plaza entrando por la puerta", () => {
     const city = matchCity();
-    const plazaC = Math.floor(city.plaza.x / TILE_SIZE);
-    const plazaR = Math.floor(city.plaza.y / TILE_SIZE);
-    const seen = reachable(plazaC, plazaR);
+    const seen = reachableWorld(Math.floor(city.plaza.x / TILE_SIZE), Math.floor(city.plaza.y / TILE_SIZE));
     for (const s of city.stations) {
         const c = Math.floor(s.x / TILE_SIZE);
         const r = Math.floor(s.y / TILE_SIZE);
-        assert.ok(r < MAP_ROWS, `${s.id} en la ciudad (no en los interiores)`);
-        assert.equal(data.solid[r][c], "0", `${s.id} en casilla libre`);
-        assert.ok(seen[idx(c, r)], `${s.id} se puede alcanzar caminando desde la plaza`);
         const z = city.zones.find((zone) => zone.id === s.zoneId);
-        assert.ok(s.x > z.x && s.x < z.x + z.w && s.y > z.y && s.y < z.y + z.h, `${s.id} dentro de su zona`);
+        const room = z.inside;
+        assert.ok(s.x > room.x && s.x < room.x + room.w && s.y > room.y && s.y < room.y + room.h, `${s.id} dentro de la sala de ${z.id}`);
+        assert.ok(r >= MAP_ROWS, `${s.id} en la zona de interiores`);
+        // la caja del jugador (32 × 32) cabe parada en la estación
+        for (const [dx, dy] of [[-16, -16], [15.9, -16], [-16, 15.9], [15.9, 15.9]]) assert.equal(data.solid[Math.floor((s.y + dy) / TILE_SIZE)][Math.floor((s.x + dx) / TILE_SIZE)], "0", `${s.id}: caja libre`);
+        assert.ok(seen.has(r * data.cols + c), `${s.id} se puede alcanzar desde la plaza entrando al edificio`);
     }
+    // y la sala de cada zona es la escena a la que lleva la puerta de su edificio
+    for (const z of city.zones) assert.equal(sceneAt(z.inside.x + 10, z.inside.y + 10), z.id);
 });
 
 test("ciudad de la partida: cada zona contiene un edificio del mapa con su puerta, y las zonas no se superponen", () => {
     for (const z of MATCH_ZONES) {
         const b = buildingsList.find((bl) => bl.c >= z.c0 && bl.r >= z.r0 && bl.c + bl.spec.w - 1 <= z.c1 && bl.r + bl.spec.h - 1 <= z.r1);
         assert.ok(b, `la zona ${z.id} contiene un edificio`);
-        assert.ok(b.doorRow < z.r1, `la puerta del edificio de ${z.id} da a la franja de sus estaciones`);
+        assert.ok(b.doorRow < z.r1, `la puerta del edificio de ${z.id} da a la franja de su entrada`);
+        assert.equal(b.spec.enter, z.id, `la puerta del edificio de ${z.id} lleva a su sala`);
         assert.ok(areaName((b.c + 1) * TILE_SIZE, (b.r + 1) * TILE_SIZE).length > 0);
     }
     for (const a of MATCH_ZONES) for (const b of MATCH_ZONES) {

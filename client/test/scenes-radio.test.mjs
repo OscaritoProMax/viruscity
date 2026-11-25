@@ -5,6 +5,7 @@ import { buildMapData } from "../public/js/play/map/map-data.js";
 import { buildScenes } from "../public/js/play/map/interiors.js";
 import { sceneAt, sceneRect, WORLD_SCENE } from "../public/js/play/map/scenes.js";
 import { areaName } from "../public/js/play/map/zones.js";
+import { ROOMS } from "../public/js/play/map/rooms.js";
 import { doors, worldInteractables, buildWorld } from "../public/js/play/map/layout.js";
 import { PLAYLIST, programAt, estimateOffset, songMs, GAP_MS, STATION } from "../public/js/play/radio.js";
 
@@ -13,15 +14,17 @@ const scenes = buildScenes();
 const T = data.tile;
 const solidAt = (x, y) => data.solid[Math.floor(y / T)][Math.floor(x / T)] === "1";
 
-test("dos locales con puerta: Burger Neón y Supermercado", () => {
-    assert.deepEqual(doors.map((d) => d.to).sort(), ["burger", "market"]);
+test("ocho locales con puerta: Burger Neón, Supermercado y las 6 salas de las misiones", () => {
+    assert.deepEqual(doors.map((d) => d.to).sort(), ["almacen", "burger", "central", "farmacia", "hospital", "laboratorio", "market", "planta"]);
     assert.equal(sceneRect("burger").name, "Burger Neón");
     assert.equal(sceneRect("market").name, "Supermercado");
+    assert.equal(sceneRect("laboratorio").name, "Laboratorio Vega");
+    assert.equal(sceneRect("central").width, 12 * T);
     assert.equal(sceneRect(WORLD_SCENE).height, 2880);
 });
 
 test("portales: entrar lleva al local y salir devuelve a la ciudad, siempre a una casilla libre", () => {
-    assert.equal(data.portals.length, 4);
+    assert.equal(data.portals.length, 16);
     for (const p of data.portals) {
         assert.equal(solidAt(p.x, p.y), false, `destino libre (${p.x}, ${p.y})`);
         const from = sceneAt((p.c0 + 0.5) * T, (p.r0 + 0.5) * T);
@@ -31,7 +34,8 @@ test("portales: entrar lleva al local y salir devuelve a la ciudad, siempre a un
         assert.equal(data.solid[p.r0][p.c0], "0");
     }
     const tos = data.portals.map((p) => sceneAt(p.x, p.y)).sort();
-    assert.deepEqual(tos, ["burger", "market", "world", "world"]);
+    assert.deepEqual(tos.filter((t) => t !== "world"), ["almacen", "burger", "central", "farmacia", "hospital", "laboratorio", "market", "planta"]);
+    assert.equal(tos.filter((t) => t === "world").length, 8, "cada local tiene su salida a la ciudad");
 });
 
 test("sceneAt: ciudad, interiores y zona de pared", () => {
@@ -48,7 +52,11 @@ test("conversaciones: vecinos y carteles tienen líneas en español", () => {
     buildWorld; // el mundo ya se construyó en buildMapData
     assert.ok(worldInteractables.length >= 15, `${worldInteractables.length} carteles en la ciudad`);
     for (const sc of Object.values(scenes)) {
-        assert.ok(sc.npcs.length >= 5, sc.id);
+        // Los locales tienen vecinos; las salas de las misiones van vacías a propósito (un vecino se confundiría
+        // con un jugador o con el infectado) y solo tienen su cartel
+        if (ROOMS.some((r) => r.id === sc.id)) assert.equal(sc.npcs.length, 0, sc.id);
+        else assert.ok(sc.npcs.length >= 5, sc.id);
+        assert.ok(sc.interactables.length >= 1, `${sc.id} tiene al menos un cartel`);
         for (const n of sc.npcs) assert.ok(Array.isArray(n.lines) && n.lines.length > 0 && n.speaker, n.name);
         assert.ok(sc.interactables.every((o) => o.lines.length > 0));
     }

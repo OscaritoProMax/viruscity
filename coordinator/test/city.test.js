@@ -88,13 +88,14 @@ test("mapa real: buildCity usa la ciudad del mapa (mismas zonas y orden; una est
     assert.notEqual(map.city.zones[0].x, -1);
 });
 
-test("mapa real: cada estación está en una casilla libre, dentro de su zona y su zona es la más cercana", () => {
+test("mapa real: cada estación está en una casilla libre, DENTRO de la sala de su zona, y la alerta nombra esa zona", () => {
     const map = parseMap(MAP_JSON);
     const city = buildCity({ width: map.width, height: map.height }, map);
     for (const s of city.stations) {
         assert.equal(boxBlocked(map, s.x, s.y, PLAYER_RADIUS), false, `${s.id}: el jugador cabe parado en la estación`);
         const z = city.zones.find((zone) => zone.id === s.zoneId);
-        assert.ok(inside(s, z), `${s.id} dentro de la zona ${z.id}`);
+        assert.ok(z.inside && inside(s, z.inside), `${s.id} dentro de la sala de ${z.id}`);
+        assert.ok(!inside(s, z), `${s.id} no está en la calle (se entra al edificio)`);
         assert.equal(zoneNear(city, s.x, s.y), z.name, `${s.id}: alerta de contagio con la zona correcta`);
     }
 });
@@ -120,6 +121,7 @@ test("mapa: parseMap rechaza una ciudad inválida y buildCity una que no coincid
     assert.throws(() => parseMap(bad((c) => (c.stations[1].zoneId = "otra"))), /zona desconocida/);
     assert.throws(() => parseMap(bad((c) => (c.plaza = { x: 99999, y: 10 }))), /plaza/);
     assert.throws(() => parseMap(bad((c) => (c.zones[2].w = 1e6))), /fuera del mundo/);
+    assert.throws(() => parseMap(bad((c) => (c.zones[3].inside = { x: 0, y: 0, w: 1e6, h: 10 }))), /inside fuera del mundo/);
     assert.throws(() => parseMap(bad((c) => (c.zones[1].id = c.zones[0].id))), /repetido/);
     assert.throws(() => parseMap(bad((c) => (c.zones = "x"))), /city.zones/);
     const map = parseMap(bad((c) => c.zones.reverse()));
@@ -129,4 +131,16 @@ test("mapa: parseMap rechaza una ciudad inválida y buildCity una que no coincid
     const noCity = clone(MAP_JSON);
     delete noCity.city;
     assert.equal(parseMap(noCity).city, null, "un mapa sin ciudad sigue siendo válido (se usa la ciudad normalizada)");
+});
+
+test("zoneNear: dentro de una sala gana su zona aunque el centro de otra esté más cerca", () => {
+    const city = {
+        zones: [
+            { id: "a", name: "Zona A", x: 0, y: 0, w: 100, h: 100, inside: { x: 1000, y: 1000, w: 100, h: 100 } },
+            { id: "b", name: "Zona B", x: 900, y: 900, w: 100, h: 100 },
+        ],
+    };
+    assert.equal(zoneNear(city, 1050, 1050), "Zona A", "dentro de la sala de A");
+    assert.equal(zoneNear(city, 960, 960), "Zona B", "fuera de cualquier sala: la más cercana");
+    assert.equal(zoneNear(city, 1100, 1050), "Zona B", "el borde derecho de la sala ya no es la sala");
 });
