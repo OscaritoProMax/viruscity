@@ -1,10 +1,12 @@
 // Modal de los minijuegos de Viruscity (decisión 11: el cliente resuelve el minijuego y el servidor valida
 // el tiempo y la posición). Accesible: role="dialog", aria-modal, foco atrapado, Esc cancela.
 //
-// openMinigame(kind, container, { title, onSolved, onCancel, rng }) → { close(), setInfo(text), isSolved() }
-//   kind: sequence | code | wires | slider | hold (otro valor → hold)
+// openMinigame(kind, container, { title, onSolved, onCancel, rng, sfx }) → { close(), setInfo(text), isSolved() }
+//   kind: los de las misiones jugables (samples, uvlamp, patchpanel, dosing, …; dibujados en canvas) o los
+//         sencillos sequence | code | wires | slider | hold (otro valor → hold)
+//   sfx(nombre): sonidos opcionales ("ok", "error", "tick", "done"); el modal pasa además reduceMotion
 //   onSolved() se llama una sola vez; onCancel() con Esc o con el botón "Cancelar".
-// Cada minijuego exporta mount(container, { onSolved, rng }) → { close(), focusTarget?, onKeyDown?, onKeyUp? }.
+// Cada minijuego exporta mount(container, { onSolved, rng, reduceMotion, sfx }) → { close(), focusTarget?, onKeyDown?, onKeyUp? }.
 
 import { el, button } from "./dom.js";
 import * as sequence from "./sequence.js";
@@ -12,6 +14,10 @@ import * as code from "./code.js";
 import * as wires from "./wires.js";
 import * as slider from "./slider.js";
 import * as hold from "./hold.js";
+import * as samples from "./samples.js";
+import * as uvlamp from "./uvlamp.js";
+import * as patchpanel from "./patchpanel.js";
+import * as dosing from "./dosing.js";
 
 export const MINIGAMES = Object.freeze({
     sequence: { name: "Secuencia", module: sequence },
@@ -19,12 +25,19 @@ export const MINIGAMES = Object.freeze({
     wires: { name: "Cables", module: wires },
     slider: { name: "Calibración", module: slider },
     hold: { name: "Mantener", module: hold },
+    // Misiones jugables (canvas animado)
+    samples: { name: "Muestras", module: samples, canvas: true },
+    uvlamp: { name: "Lámpara UV", module: uvlamp, canvas: true },
+    patchpanel: { name: "Conexiones", module: patchpanel, canvas: true },
+    dosing: { name: "Dosificador", module: dosing, canvas: true },
 });
+
+const prefersReducedMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const FOCUSABLE = "button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex='-1'])";
 let counter = 0;
 
-export function openMinigame(kind, container, { title = "Misión", onSolved = () => {}, onCancel = () => {}, rng = Math.random } = {}) {
+export function openMinigame(kind, container, { title = "Misión", onSolved = () => {}, onCancel = () => {}, rng = Math.random, sfx = () => {} } = {}) {
     const game = MINIGAMES[kind] ?? MINIGAMES.hold;
     const previousFocus = document.activeElement;
     const id = `vcMg${++counter}`;
@@ -36,6 +49,7 @@ export function openMinigame(kind, container, { title = "Misión", onSolved = ()
     card.setAttribute("aria-labelledby", `${id}Title`);
     card.tabIndex = -1;
     card.dataset.kind = kind;
+    if (game.canvas) card.dataset.canvas = "true";
     const kicker = el("p", "vc-mg__kicker", `Misión · ${game.name}`);
     const heading = el("h2", "vc-mg__title", title);
     heading.id = `${id}Title`;
@@ -50,6 +64,8 @@ export function openMinigame(kind, container, { title = "Misión", onSolved = ()
     let closed = false;
     const instance = game.module.mount(body, {
         rng,
+        sfx,
+        reduceMotion: prefersReducedMotion(),
         onSolved() {
             if (solved || closed) return;
             solved = true;

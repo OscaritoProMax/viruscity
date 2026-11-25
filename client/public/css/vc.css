@@ -599,6 +599,23 @@
 
 .vc-mg__card:focus { outline: none; }
 
+/* Minijuegos de las misiones jugables (canvas): tarjeta más ancha y lienzo que se adapta al ancho */
+.vc-mg__card[data-canvas="true"] { width: min(620px, 100%); }
+.vc-stage { width: 100%; max-width: 560px; }
+.vc-stage__canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: var(--radius-m, 12px);
+    border: 1px solid var(--border, #2a3560);
+    background: var(--bg, #0b1020);
+    cursor: pointer;
+    touch-action: none;
+}
+.vc-stage__canvas:focus { outline: none; }
+.vc-stage__canvas:focus-visible { outline: 2px solid var(--accent, #4dd2ff); outline-offset: 2px; }
+.vc-stage__status { text-align: center; }
+
 .vc-mg__card[data-solved="true"] { border-color: var(--accent, #4dd2ff); }
 
 .vc-mg__kicker {
