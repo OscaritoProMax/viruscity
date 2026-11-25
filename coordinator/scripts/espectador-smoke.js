@@ -216,8 +216,16 @@ async function main() {
     a.send({ type: "intent", intent: { dir: { x: before && before.x > 600 ? -1 : 1, y: 0 } } });
     await sleep(800);
     a.send({ type: "intent", intent: { dir: { x: 0, y: 0 } } });
-    await sleep(400);
-    const after = spec.find(alice.username);
+    // alice juega en coord-b: en coord-a su posición se corrige con positions_sync (cada PEER_SYNC_MS), así que se
+    // espera a que quede quieta del todo antes de medir (si no, E4 vería esa corrección y no al espectador)
+    let after = null;
+    await waitFor(async () => {
+        const p1 = spec.find(alice.username);
+        await sleep(700);
+        const p2 = spec.find(alice.username);
+        after = p2;
+        return Boolean(p1 && p2) && p1.x === p2.x && p1.y === p2.y;
+    }, 8000, 0);
     report("E3", "el espectador ve moverse a alice, que juega en OTRO coordinador", Boolean(before && after) && Math.abs(after.x - before.x) > 50, `${fmt(before)} → ${fmt(after)}`);
 
     // E4: lo que mande el espectador se ignora
