@@ -264,3 +264,20 @@ AUTH_HEARTBEAT_MS=2000, LEADER_TIMEOUT_MS=6000, ELECTION_JITTER_MS=1500, READ_TO
 
 ### Pruebas
 Núcleo de elección puro y nodo de replicación con reloj falso y transporte en memoria (caídas, particiones, reinicios, pérdidas de mensajes); smoke multi-proceso `npm run smoke:auth-cluster` (auth) y `npm run smoke:full` (auth + coordinadores + jugador). Regresión: las pruebas y smokes de Taller 5 y 6 siguen pasando.
+
+## EXAMEN FINAL – TRACKS 2.1 Y 2.5 Y DESPLIEGUE (prevalece sobre decisiones anteriores en caso de conflicto)
+
+### Track 2.1 · Persistencia (coordinator/persist.js)
+- Cada coordinador guarda en SU node:sqlite (STATE_DB_PATH; vacío = state-<id>.db; "off" la apaga) cada PERSIST_MS (2000) lo que sabe de cada jugador {userId, username, x, y, extras, version, savedAt, ownerId} y la partida.
+- Reconciliación: gana la versión mayor (solo el DUEÑO la sube cuando el jugador cambia), luego savedAt, luego ownerId. Un jugador vivo nunca se pisa con un snapshot. Lo de más de PERSIST_MAX_AGE_MS (600000) se descarta.
+- Mesh: world_snapshot {origin, players} al conectar un peer; positions_sync lleva v (versión) opcional. Una partida recuperada se ofrece al árbitro como game_state handover (regla isNewer).
+- Todo smoke que no pruebe persistencia usa STATE_DB_PATH=off (si no, restaura estado entre corridas).
+
+### Track 2.5 · Espectador
+- /spectate sin token. Los espectadores NUNCA entran al Map players (no se simulan, no se replican, no cuentan en connectedPlayers ni en la partida).
+- Reciben welcome {spectator:true} sin you, state a SPECTATOR_STATE_MS (100), la vista de alguien sin rol y solo eventos públicos. Todo lo que mandan se ignora sin parsear (se cuenta); >10 msgs/s → 1008. MAX_SPECTATORS (50) → 4003. Contrapresión por bufferedAmount.
+- Cliente: spectate.html + js/play/spectate.js (sin controles; cámara seguir/libre, pura en spectator.js).
+
+### Despliegue
+- Entrega con 7 túneles de ngrok (uno por servicio, sin proxy). tunel/configurar.js escribe solo AUTH_URLS (client), PUBLIC_URL y AUTH_NODES (auth) y PUBLIC_URL wss (coordinadores); PEER_URL y los AUTH_URLS de los coordinadores siguen en localhost. tunel/tunel.env, tunel/ngrok-*.yml y tunel/abrir-tuneles.cmd no se versionan; los authtoken nunca se imprimen.
+- gateway/ queda como alternativa documentada (una sola cuenta de ngrok); no se usa en la entrega.
