@@ -18,6 +18,10 @@ import * as samples from "./samples.js";
 import * as uvlamp from "./uvlamp.js";
 import * as patchpanel from "./patchpanel.js";
 import * as dosing from "./dosing.js";
+import * as microscope from "./microscope.js";
+import * as helix from "./helix.js";
+import * as labeling from "./labeling.js";
+import * as transfer from "./transfer.js";
 
 export const MINIGAMES = Object.freeze({
     sequence: { name: "Secuencia", module: sequence },
@@ -30,6 +34,10 @@ export const MINIGAMES = Object.freeze({
     uvlamp: { name: "Lámpara UV", module: uvlamp, canvas: true },
     patchpanel: { name: "Conexiones", module: patchpanel, canvas: true },
     dosing: { name: "Dosificador", module: dosing, canvas: true },
+    microscope: { name: "Microscopio", module: microscope, canvas: true },
+    helix: { name: "Doble hélice", module: helix, canvas: true },
+    labeling: { name: "Etiquetado", module: labeling, canvas: true },
+    transfer: { name: "Transferencia", module: transfer, canvas: true },
 });
 
 const prefersReducedMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
