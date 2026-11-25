@@ -69,20 +69,29 @@ Mientras no hay partida, la ciudad es el **mundo abierto** de siempre. Cuando ha
 
 | Misión (id = estación) | Zona | Título | Minijuego |
 |---|---|---|---|
-| hospital-1 | Hospital | Recolectar muestras de pacientes | Secuencia |
-| hospital-2 | Hospital | Esterilizar el quirófano | Mantener |
+| hospital-1 | Hospital | Recolectar muestras de pacientes | **Gradilla de muestras** |
+| hospital-2 | Hospital | Esterilizar el quirófano | **Lámpara UV** |
 | laboratorio-1 | Laboratorio | Analizar la muestra del paciente cero | Calibración |
 | laboratorio-2 | Laboratorio | Secuenciar el genoma del virus | Código |
-| farmacia-1 | Farmacia | Preparar el suero base | Cables |
+| farmacia-1 | Farmacia | Preparar el suero base | **Dosificador** |
 | farmacia-2 | Farmacia | Etiquetar las dosis | Código |
-| central-1 | Central de datos | Restaurar el registro de contagios | Cables |
+| central-1 | Central de datos | Restaurar el registro de contagios | **Panel de conexiones** |
 | central-2 | Central de datos | Descargar el historial clínico | Mantener |
 | planta-1 | Planta de síntesis | Sintetizar el compuesto | Calibración |
 | planta-2 | Planta de síntesis | Purificar el reactor | Secuencia |
 | almacen-1 | Almacén | Cargar el suero en los camiones | Mantener |
 | almacen-2 | Almacén | Inventariar el cargamento | Código |
 
-Minijuegos (`client/public/js/vc/minigames/`): **Secuencia** (repetir 5 símbolos ▲ ● ■ ◆), **Código** (6 caracteres mostrados 4 s), **Cables** (unir 4 colores), **Calibración** (detener el marcador en la zona verde 3 veces seguidas) y **Mantener** (E pulsada 10 s).
+Minijuegos (`client/public/js/vc/minigames/`). Las misiones pasan por fases a **minijuegos jugables**, uno propio por misión: dibujados en canvas con animaciones (motor común `canvas-kit.js`: lienzo nítido que se adapta del móvil al escritorio, partículas, animación de éxito) y jugables con ratón, dedo o teclado; con *prefers-reduced-motion* las animaciones se reducen. Ya están:
+
+| Minijuego | Cómo se juega | Teclado |
+|---|---|---|
+| **Gradilla de muestras** | arrastrar 4 tubos de ensayo a la gradilla, cada uno al hueco del color de su tapa (el tubo se inclina al arrastrarlo y el líquido se mece; el hueco correcto se enciende) | ←/→ elegir, Enter tomar y dejar |
+| **Lámpara UV** | pasar la lámpara sobre la mesa de operaciones hasta borrar las 8 colonias de germen (se encogen y chispean bajo la luz) | flechas para moverla; Enter la lleva a la siguiente colonia |
+| **Dosificador** | mantener pulsado para verter del matraz al vaso y soltar dentro de la franja dorada; si te pasas, el vaso se vacía | mantener Espacio o Enter |
+| **Panel de conexiones** | arrastrar 4 cables hasta el enchufe de su mismo símbolo (el cable cuelga en curva y salta una chispa al conectar) | ↑/↓ elegir, Enter tomar y conectar |
+
+El resto de las misiones sigue, por ahora, con los minijuegos sencillos: **Secuencia** (repetir 5 símbolos ▲ ● ■ ◆), **Código** (6 caracteres mostrados 4 s), **Calibración** (detener el marcador en la zona verde 3 veces seguidas) y **Mantener** (E pulsada 10 s).
 
 Flujo: el sano llega a la estación (≤ `MISSION_RANGE` = 60 px + tolerancia) y pulsa E → `mission_start` → si el árbitro acepta, la misión queda `in_progress` reservada a él y el jugador queda **inmóvil** (el servidor ignora su movimiento) → el cliente abre el minijuego **solo** al recibir `mission_started` → al resolverlo espera a `missionStartedAt + MISSION_MIN_MS + 300 ms` ("Verificando…") y manda `mission_complete` → el árbitro la acepta si pasaron entre `MISSION_MIN_MS` (8 s) y `MISSION_MAX_MS` (45 s), el jugador sigue en rango y sigue sano. Esc o "Cancelar" mandan `mission_cancel`. La misión se libera sola si expira, si el jugador se infecta, se desconecta o se aleja.
 
