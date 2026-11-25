@@ -697,7 +697,7 @@ async function clusterTests(users) {
     const endsAt = live[0].game.endsAt;
     const ended = await waitFor(() => live.every((c) => c.closed || c.game.phase === "ended"), Math.max(0, endsAt - Date.now()) + 4000, 200);
     const res = live.find((c) => !c.closed)?.game.results;
-    const validEnd = ended && ["players", "infected"].includes(res?.winner) && ["cure", "all_infected", "time", "no_infected"].includes(res?.reason);
+    const validEnd = ended && ["players", "infected"].includes(res?.winner) && ["cure", "all_infected", "time", "no_infected", "healthy_left"].includes(res?.reason);
     report("X4", "relevo: matan a coord-a; coord-b asume en < 3 s conservando la partida; sus clientes reconectan con su rol y la partida termina bien", x4partial && validEnd, `${x4detail} · final ${res?.winner}/${res?.reason}`);
     for (const id of ["X5", "X6", "X7"]) report(id, results[id].desc, results[id].ok, results[id].detail);
     for (const c of live) c.close();

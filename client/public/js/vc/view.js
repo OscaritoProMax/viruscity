@@ -18,7 +18,7 @@ import { formatMMSS } from "./clock.js";
 export const PHASES = Object.freeze(["open_world", "countdown", "playing", "ended"]);
 export const MISSION_STATUSES = Object.freeze(["available", "in_progress", "done"]);
 export const WINNERS = Object.freeze(["players", "infected"]);
-export const END_REASONS = Object.freeze(["cure", "all_infected", "time", "no_infected"]);
+export const END_REASONS = Object.freeze(["cure", "all_infected", "time", "no_infected", "healthy_left"]);
 const ROLES = new Set(["healthy", "infected", "spectator", null]);
 const RESULT_ROLES = new Set(["healthy", "infected"]);
 const SLUG = /^[a-z0-9-]{1,40}$/;
@@ -122,7 +122,8 @@ const EVENT_FIELDS = {
     contagion_alert: { zone: (v) => v === null || v === undefined || isText(v, 60) },
     cure_update: { cure: (v) => isNum(v) && v >= 0 && v <= 100 },
     match_cancelled: { reason: optReason },
-    match_ended: { winner: (v) => WINNERS.includes(v) },
+    match_ended: { winner: (v) => WINNERS.includes(v), reason: (v) => v === undefined || END_REASONS.includes(v) },
+    player_abandoned: {}, // público: alguien no volvió a tiempo (sin nombre ni rol)
 };
 export const EVENT_KINDS = Object.freeze(Object.keys(EVENT_FIELDS));
 
@@ -293,7 +294,11 @@ export function eventText(event) {
         case "match_cancelled":
             return event.reason === "not_enough_players" ? "Partida cancelada: no quedan suficientes jugadores" : "Partida cancelada";
         case "match_ended":
+            if (event.reason === "no_infected") return "El infectado abandonó la partida: ganan los jugadores";
+            if (event.reason === "healthy_left") return "Los sanos abandonaron la partida: ganan los infectados";
             return event.winner === "players" ? "¡La cura funcionó! Ganan los jugadores" : "La ciudad ha caído: ganan los infectados";
+        case "player_abandoned":
+            return "Un jugador no volvió a tiempo y abandonó la partida";
         default:
             return "";
     }
@@ -311,6 +316,7 @@ export function eventTone(event) {
         case "mission_result":
             return event.ok ? "cure" : "danger";
         case "match_cancelled":
+        case "player_abandoned":
             return "danger";
         case "match_ended":
             return event.winner === "players" ? "cure" : "infected";
@@ -365,7 +371,8 @@ const END_REASON_TEXTS = {
     cure: "La cura se completó",
     all_infected: "Todos los jugadores están infectados",
     time: "Se agotó el tiempo",
-    no_infected: "No quedan infectados",
+    no_infected: "El infectado abandonó la partida",
+    healthy_left: "Los sanos abandonaron la partida",
 };
 export const endReasonText = (reason) => END_REASON_TEXTS[reason] ?? "";
 

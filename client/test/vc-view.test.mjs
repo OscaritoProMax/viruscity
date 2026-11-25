@@ -101,7 +101,8 @@ test("parseServerMessage: event válido de cada kind y campos de más descartado
         contagion_alert: { zone: "Farmacia" },
         cure_update: { cure: 50 },
         match_cancelled: { reason: "not_enough_players" },
-        match_ended: { winner: "infected" },
+        match_ended: { winner: "infected", reason: "healthy_left" },
+        player_abandoned: {},
     };
     assert.deepEqual(Object.keys(samples).sort(), [...EVENT_KINDS].sort(), "todos los kinds del contrato");
     for (const [kind, fields] of Object.entries(samples)) {
@@ -287,7 +288,21 @@ test("endSummary: título, motivo, ganaste/perdiste según rol y winner, tabla c
     fell.results.reason = "time";
     assert.equal(endSummary(fell, "1").reason, "Se agotó el tiempo");
     fell.results.reason = "no_infected";
-    assert.equal(endSummary(fell, "1").reason, "No quedan infectados");
+    assert.equal(endSummary(fell, "1").reason, "El infectado abandonó la partida");
+    fell.results.reason = "healthy_left";
+    assert.equal(endSummary(fell, "1").reason, "Los sanos abandonaron la partida");
     assert.equal(endSummary(game("ended", { you: { role: "spectator" } }), "9").outcome, "Fuiste espectador en esta partida");
     assert.equal(endSummary(game("playing"), "1"), null);
+});
+
+test("abandono: textos del aviso y del fin según quién se fue, y match_ended sin reason sigue siendo válido", async () => {
+    const { eventText, eventTone } = await import("../public/js/vc/view.js");
+    assert.equal(eventText({ kind: "match_ended", winner: "players", reason: "no_infected" }), "El infectado abandonó la partida: ganan los jugadores");
+    assert.equal(eventText({ kind: "match_ended", winner: "infected", reason: "healthy_left" }), "Los sanos abandonaron la partida: ganan los infectados");
+    assert.equal(eventText({ kind: "match_ended", winner: "players", reason: "cure" }), "¡La cura funcionó! Ganan los jugadores");
+    assert.equal(eventText({ kind: "player_abandoned" }), "Un jugador no volvió a tiempo y abandonó la partida");
+    assert.equal(eventTone({ kind: "player_abandoned" }), "danger");
+    assert.equal(parseServerMessage({ type: "event", kind: "match_ended", winner: "players" })?.kind, "event", "compatibilidad con un árbitro sin reason");
+    assert.equal(parseServerMessage({ type: "event", kind: "match_ended", winner: "players", reason: "inventado" }), null);
+    assert.deepEqual(parseServerMessage({ type: "event", kind: "player_abandoned", userId: "5", role: "infected" }).msg, { type: "event", kind: "player_abandoned" }, "nunca lleva quién ni su rol");
 });

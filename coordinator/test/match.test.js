@@ -373,7 +373,7 @@ test("M4 la última misión deja la cura en exactamente 100 y ganan los jugadore
     assert.equal(g.state.phase, "ended");
     assert.equal(g.state.results.winner, "players");
     assert.equal(g.state.results.reason, "cure");
-    assert.deepEqual(one(last, "match_ended"), { eid: g.state.eid, kind: "match_ended", winner: "players" });
+    assert.deepEqual(one(last, "match_ended"), { eid: g.state.eid, kind: "match_ended", winner: "players", reason: "cure" });
 });
 
 test("M4 la víctima de un contagio pierde su misión", () => {
@@ -469,7 +469,7 @@ test("M5 todos infectados → gana 'infected' (all_infected)", () => {
     const r = g.act(X, "infect");
     assert.equal(g.state.phase, "ended");
     assert.deepEqual([g.state.results.winner, g.state.results.reason], ["infected", "all_infected"]);
-    assert.deepEqual(one(r, "match_ended"), { eid: g.state.eid, kind: "match_ended", winner: "infected" });
+    assert.deepEqual(one(r, "match_ended"), { eid: g.state.eid, kind: "match_ended", winner: "infected", reason: "all_infected" });
     assert.equal(g.state.resultsEndsAt, g.now + 15000);
 });
 
@@ -494,17 +494,57 @@ test("M5 sin infectados (el único sale pasada la gracia) → gana 'players' (no
     assert.ok(!g.state.results.players.some((p) => p.userId === X), "ya no está en el roster");
 });
 
-test("M5 roster con menos de 2 → partida cancelada y open_world limpio", () => {
-    const { g, H } = playing({ n: 2, seed: 4, cfg: { MIN_PLAYERS_TO_START: 2 } });
+test("M5 abandono con 2 jugadores: si se va el sano gana el infectado (healthy_left); si se va el infectado, el sano", () => {
+    // antes se cancelaba sin ganador; ahora el abandono decide la partida
+    {
+        const { g, X, H } = playing({ n: 2, seed: 4, cfg: { MIN_PLAYERS_TO_START: 2 } });
+        g.leave(H[0]);
+        g.advance();
+        g.now += 60001;
+        const r = g.advance();
+        assert.equal(only(r, "player_abandoned").length, 1);
+        assert.deepEqual(one(r, "player_abandoned"), { eid: g.state.eid - 1, kind: "player_abandoned" }, "público: sin nombre ni rol");
+        assert.deepEqual(one(r, "match_ended"), { eid: g.state.eid, kind: "match_ended", winner: "infected", reason: "healthy_left" });
+        assert.deepEqual([g.state.phase, g.state.results.winner, g.state.results.reason], ["ended", "infected", "healthy_left"]);
+        assert.deepEqual(g.state.results.players.map((p) => p.userId), [X], "el que abandonó no aparece en los resultados");
+        assert.equal(only(r, "match_cancelled").length, 0);
+    }
+    {
+        const { g, X, H } = playing({ n: 2, seed: 4, cfg: { MIN_PLAYERS_TO_START: 2 } });
+        g.leave(X);
+        g.advance();
+        g.now += 60001;
+        const r = g.advance();
+        assert.deepEqual(one(r, "match_ended"), { eid: g.state.eid, kind: "match_ended", winner: "players", reason: "no_infected" });
+        assert.deepEqual(g.state.results.players.map((p) => p.userId), [H[0]]);
+    }
+});
+
+test("M5 si abandonan todos, la partida se cancela (no hay a quién dar la victoria) y vuelve a open_world limpio", () => {
+    const { g, X, H } = playing({ n: 2, seed: 4, cfg: { MIN_PLAYERS_TO_START: 2 } });
+    g.leave(H[0]);
+    g.leave(X);
+    g.advance();
+    g.now += 60001;
+    const r = g.advance();
+    assert.equal(only(r, "player_abandoned").length, 2);
+    assert.deepEqual(one(r, "match_cancelled"), { eid: g.state.eid, kind: "match_cancelled", reason: "not_enough_players" });
+    assert.equal(only(r, "match_ended").length, 0);
+    assert.equal(g.state.phase, "open_world");
+    assert.deepEqual([g.state.roster, g.state.missions, g.state.cure, g.state.results], [{}, [], 0, null]);
+    assert.equal(g.state.matchId, 1);
+});
+
+test("M5 un abandono que deja ambos roles en juego no termina la partida", () => {
+    const { g, X, H } = playing({ n: 4, seed: 4 });
     g.leave(H[0]);
     g.advance();
     g.now += 60001;
     const r = g.advance();
-    assert.deepEqual(one(r, "match_cancelled"), { eid: g.state.eid, kind: "match_cancelled", reason: "not_enough_players" });
-    assert.equal(only(r, "match_ended").length, 0, "se cancela antes de evaluar la victoria");
-    assert.equal(g.state.phase, "open_world");
-    assert.deepEqual([g.state.roster, g.state.missions, g.state.cure, g.state.results], [{}, [], 0, null]);
-    assert.equal(g.state.matchId, 1);
+    assert.equal(only(r, "player_abandoned").length, 1);
+    assert.equal(g.state.phase, "playing");
+    assert.ok(!Object.hasOwn(g.state.roster, H[0]));
+    assert.equal(g.role(X), "infected");
 });
 
 test("M5 la cura tiene prioridad sobre las demás condiciones", () => {
@@ -550,7 +590,8 @@ test("M6 pasada la gracia sale del roster y se reevalúa la victoria", () => {
     g.now += 60001;
     g.advance();
     assert.ok(!Object.hasOwn(g.state.roster, A) || g.state.phase === "ended");
-    assert.deepEqual([g.state.phase, g.state.results.reason], ["ended", "all_infected"]);
+    // el último sano se fue: ganan los infectados por abandono (no "todos infectados")
+    assert.deepEqual([g.state.phase, g.state.results.winner, g.state.results.reason], ["ended", "infected", "healthy_left"]);
 });
 
 // ---------- M7 fin de la partida ----------
