@@ -63,7 +63,7 @@ function createConfig(env = {}, map = null) {
 // ---------- Mapa (colisiones) ----------
 // Formato del archivo (lo genera client/scripts/export-map.mjs desde el mismo trazado que dibuja el cliente):
 // { id, tile, cols, rows, solid: [rows strings de cols caracteres "0"/"1"], spawns: [[col, row], ...],
-//   portals?: [{ c0, r0, c1, r1, x, y }] }
+//   portals?: [{ c0, r0, c1, r1, x, y }], city?: { zones, stations, plaza } }
 // Un portal es un rectángulo de casillas (puerta de un local o su salida): si el centro del jugador
 // entra en él, el servidor lo traslada a (x, y). Así se entra y se sale de los interiores.
 function parseMap(data) {
@@ -102,7 +102,42 @@ function parseMap(data) {
         const at = Math.floor(p.y / tile) * cols + Math.floor(p.x / tile);
         if (grid[at] || portalIndex[at] !== -1) fail(`el destino del portal ${i} es sólido o es otro portal`);
     });
-    return { id, tile, cols, rows, width: cols * tile, height: rows * tile, solid: grid, spawns: spawns.map(([c, r]) => [c, r]), portals, portalIndex };
+    const city = data.city === undefined ? null : parseMapCity(data.city, { tile, cols, rows, grid }, fail);
+    return { id, tile, cols, rows, width: cols * tile, height: rows * tile, solid: grid, spawns: spawns.map(([c, r]) => [c, r]), portals, portalIndex, city };
+}
+
+// Ciudad de la partida de Viruscity sobre el mapa (campo opcional "city"):
+// { zones:[{ id, name, x, y, w, h }], stations:[{ id, zoneId, x, y }], plaza:{ x, y } } en unidades del mundo.
+// Zonas dentro del mundo; estaciones y plaza en casillas libres. Que los ids coincidan con las misiones lo
+// comprueba city.js (este módulo no conoce las reglas de la partida).
+const CITY_ID = /^[a-z0-9-]{1,40}$/;
+function parseMapCity(city, { tile, cols, rows, grid }, fail) {
+    const W = cols * tile;
+    const H = rows * tile;
+    const num = (v) => typeof v === "number" && Number.isFinite(v);
+    const freeAt = (x, y) => num(x) && num(y) && x >= 0 && y >= 0 && x < W && y < H && !grid[Math.floor(y / tile) * cols + Math.floor(x / tile)];
+    if (!city || typeof city !== "object" || Array.isArray(city)) fail("city debe ser un objeto");
+    const { zones, stations, plaza } = city;
+    if (!Array.isArray(zones) || zones.length < 1 || zones.length > 20) fail("city.zones debe tener entre 1 y 20 zonas");
+    const zoneIds = new Set();
+    const outZones = zones.map((z, i) => {
+        if (!z || !CITY_ID.test(z.id ?? "") || zoneIds.has(z.id)) fail(`city.zones[${i}]: id inválido o repetido`);
+        if (typeof z.name !== "string" || z.name.length < 1 || z.name.length > 40) fail(`city.zones[${i}]: name inválido`);
+        if (![z.x, z.y, z.w, z.h].every(num) || z.w <= 0 || z.h <= 0 || z.x < 0 || z.y < 0 || z.x + z.w > W || z.y + z.h > H) fail(`city.zones[${i}] fuera del mundo`);
+        zoneIds.add(z.id);
+        return { id: z.id, name: z.name, x: z.x, y: z.y, w: z.w, h: z.h };
+    });
+    if (!Array.isArray(stations) || stations.length < 1 || stations.length > 40) fail("city.stations debe tener entre 1 y 40 estaciones");
+    const stationIds = new Set();
+    const outStations = stations.map((s, i) => {
+        if (!s || !CITY_ID.test(s.id ?? "") || stationIds.has(s.id)) fail(`city.stations[${i}]: id inválido o repetido`);
+        if (!zoneIds.has(s.zoneId)) fail(`city.stations[${i}]: zona desconocida`);
+        if (!freeAt(s.x, s.y)) fail(`la estación ${s.id} está fuera del mundo o en una casilla sólida`);
+        stationIds.add(s.id);
+        return { id: s.id, zoneId: s.zoneId, x: s.x, y: s.y };
+    });
+    if (!plaza || !freeAt(plaza.x, plaza.y)) fail("la plaza de la ciudad está fuera del mundo o en una casilla sólida");
+    return { zones: outZones, stations: outStations, plaza: { x: plaza.x, y: plaza.y } };
 }
 
 // ¿La caja del jugador [x-r, x+r] × [y-r, y+r] toca alguna casilla sólida? Fuera del mapa cuenta como sólido.

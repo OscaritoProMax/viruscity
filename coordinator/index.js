@@ -86,10 +86,16 @@ let authNodesUp = { up: 0, total: conf.authUrls.length };
 
 // ---------- Partida de Viruscity ----------
 // Toda la lógica está en match.js (reducer puro) y arbiter.js; aquí solo se cablea. La ciudad (zonas y
-// estaciones) sale de city.js. Un solo ÁRBITRO decide la partida: el coordinador de menor id entre este y sus
+// estaciones) sale de city.js (o del mapa). Un solo ÁRBITRO decide la partida: el coordinador de menor id entre este y sus
 // peers ready (decisión 16). El árbitro ejecuta advance/applyAction y replica game_state a los peers; los
 // demás (seguidores) solo adoptan lo que replica el árbitro.
-const city = buildCity({ width: cfg.WORLD_WIDTH, height: cfg.WORLD_HEIGHT });
+// Con el mapa de Virus City la ciudad (edificios reales, estaciones y plaza) viene en MAP_FILE; sin mapa se escala
+let city;
+try {
+    city = buildCity({ width: cfg.WORLD_WIDTH, height: cfg.WORLD_HEIGHT }, map);
+} catch (err) {
+    fatal(err.message);
+}
 let match = createMatchState();
 let lastDeliveredEid = 0; // último eid de evento entregado a los clientes locales (decisión 19)
 let arbiterId = COORDINATOR_ID; // se recalcula cuando un peer pasa a ready o se cierra

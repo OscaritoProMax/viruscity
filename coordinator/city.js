@@ -1,8 +1,11 @@
 // Ciudad de la partida de Viruscity (metodología, decisión 9): 6 zonas con 2 estaciones de misión cada una.
-// Lógica pura: las zonas están normalizadas (0-1) y se escalan al tamaño del mundo, así funciona igual
-// con 1200 × 800 que con cualquier otro mundo. El servidor envía el resultado al cliente en welcome.city.
+// Lógica pura. El servidor envía el resultado al cliente en welcome.city.
+//   - Con el mapa de Virus City (MAP_FILE): la ciudad viene en el mapa (campo "city", generado desde
+//     client/public/js/play/map/match-places.js): cada zona es un edificio real y sus estaciones están en la
+//     acera de su entrada. Se comprueba que tenga exactamente estas 6 zonas y sus 12 estaciones.
+//   - Sin mapa: las zonas están normalizadas (0-1) y se escalan al tamaño del mundo (1200 × 800 u otro).
 //
-// buildCity(world) → { zones:[{id,name,x,y,w,h}], stations:[{id,zoneId,x,y}], plaza:{x,y} }
+// buildCity(world, map?) → { zones:[{id,name,x,y,w,h}], stations:[{id,zoneId,x,y}], plaza:{x,y} }
 // zoneNear(city, x, y) → nombre de la zona cuyo centro está más cerca (para la alerta de contagio)
 "use strict";
 
@@ -22,7 +25,27 @@ const STATION_GAP = 0.06;
 
 const round2 = (v) => Math.round(v * 100) / 100;
 
-function buildCity(world) {
+// Ciudad que trae el mapa (ya validada por parseMap): mismas zonas (ids, nombres y orden) y las estaciones
+// <zona>-1 y <zona>-2 de cada una, que son los ids de las misiones. Si no cuadra, el coordinador no arranca.
+function cityFromMap(city) {
+    const fail = (reason) => {
+        throw new Error(`la ciudad del mapa no coincide con la partida: ${reason}`);
+    };
+    const zoneKey = (list) => list.map((z) => `${z.id}:${z.name}`).join(",");
+    if (zoneKey(city.zones) !== zoneKey(ZONES)) fail(`se esperaban las zonas ${ZONES.map((z) => z.name).join(", ")} en ese orden`);
+    const expected = ZONES.flatMap((z) => [`${z.id}-1`, `${z.id}-2`]);
+    const got = city.stations.map((s) => s.id);
+    if (got.join(",") !== expected.join(",")) fail(`se esperaban las estaciones ${expected.join(", ")}`);
+    for (const s of city.stations) if (!s.id.startsWith(`${s.zoneId}-`)) fail(`la estación ${s.id} no es de la zona ${s.zoneId}`);
+    return {
+        zones: city.zones.map((z) => ({ ...z })),
+        stations: city.stations.map((s) => ({ ...s })),
+        plaza: { x: city.plaza.x, y: city.plaza.y },
+    };
+}
+
+function buildCity(world, map = null) {
+    if (map?.city) return cityFromMap(map.city);
     const width = Number(world?.width);
     const height = Number(world?.height);
     if (!(width > 0) || !(height > 0)) throw new Error("buildCity necesita un mundo con width y height positivos");
