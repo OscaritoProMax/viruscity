@@ -24,7 +24,7 @@ const cors = require("cors");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { createStatements } = require("./db.js");
-const { createDirectory } = require("./directory.js");
+const { createDirectory, parseExclude } = require("./directory.js");
 const { nextUserId } = require("./oplog.js");
 const { createStandaloneReplication } = require("./replication/standalone.js");
 
@@ -281,9 +281,10 @@ function createApp({ db, jwtSecret, jwtExpiresIn = "1h", bcryptRounds = 10, veri
         next();
     };
 
-    // Coordinador asignado a un cliente: el vivo con menor carga (jugadores + reservas recientes)
+    // Coordinador asignado a un cliente: el vivo con menor carga (jugadores + reservas recientes). Con
+    // ?exclude=coord-a,coord-b se saltan los que el cliente acaba de ver fallar (si cae a y b no responde, pasa a c)
     app.get("/coordinator", noStore, (req, res) => {
-        const chosen = coordinators.pick();
+        const chosen = coordinators.pick(parseExclude(req.query.exclude));
         if (!chosen) return res.status(503).json({ error: "no_coordinators_available" });
         res.status(200).json({ coordinatorId: chosen.coordinatorId, publicUrl: chosen.publicUrl });
     });

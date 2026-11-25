@@ -203,3 +203,21 @@ test("GET /directory: solo vivos, con ageMs y ttlMs; los tres GET funcionan sin 
         await c.close();
     }
 });
+
+test("GET /coordinator?exclude=…: salta los que el cliente vio fallar (cae a, b no responde → c)", async () => {
+    const c = await startCluster({ reservationTtlMs: 0 });
+    try {
+        await c.beat("coord-a");
+        await c.beat("coord-b");
+        await c.beat("coord-c");
+        assert.equal((await c.get("/coordinator")).json.coordinatorId, "coord-a");
+        assert.equal((await c.get("/coordinator?exclude=coord-a")).json.coordinatorId, "coord-b");
+        const r = await c.get("/coordinator?exclude=coord-a,coord-b");
+        assert.equal(r.status, 200);
+        assert.deepEqual(r.json, { coordinatorId: "coord-c", publicUrl: "ws://localhost:5003" });
+        assert.equal((await c.get("/coordinator?exclude=coord-a,coord-b,coord-c")).json.coordinatorId, "coord-a", "todos excluidos: igual responde");
+        assert.equal((await c.get("/coordinator?exclude=%3Cscript%3E")).json.coordinatorId, "coord-a", "basura en exclude se ignora");
+    } finally {
+        await c.close();
+    }
+});
