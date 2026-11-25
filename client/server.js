@@ -42,6 +42,9 @@ const AUTH_URLS_KEY = process.env.AUTH_URLS ? "AUTH_URLS" : "AUTH_URL";
 const COORDINATOR_WS_URL = trimSlash(process.env.COORDINATOR_WS_URL || "");
 // Client ID público de Google (Taller 5). Opcional: si falta, el login no muestra el botón de Google.
 const GOOGLE_CLIENT_ID = trimSlash((process.env.GOOGLE_CLIENT_ID || "").trim());
+// Tiempo de gracia del juego y del espectador sin coordinador antes de volver al inicio (ms, >= 5000; por defecto 45000)
+const GRACE_RAW = String(process.env.RECONNECT_GRACE_MS ?? "").trim();
+const RECONNECT_GRACE_MS = GRACE_RAW === "" ? 45000 : Number(GRACE_RAW);
 
 if (!process.env.PORT) fatal("PORT es obligatorio");
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) fatal("PORT debe ser un número de puerto válido");
@@ -54,6 +57,7 @@ const AUTH_URLS = AUTH_URLS_RAW.split(",").map((part, i) => {
 });
 if (new Set(AUTH_URLS).size !== AUTH_URLS.length) fatal(`${AUTH_URLS_KEY} tiene una URL repetida`);
 const AUTH_URL = AUTH_URLS[0]; // compatibilidad: el primero
+if (!/^\d*$/.test(GRACE_RAW) || !Number.isInteger(RECONNECT_GRACE_MS) || RECONNECT_GRACE_MS < 5000) fatal("RECONNECT_GRACE_MS debe ser un entero mayor o igual a 5000 (milisegundos)");
 if (COORDINATOR_WS_URL) checkUrl("COORDINATOR_WS_URL", COORDINATOR_WS_URL, ["ws:", "wss:"]); // opcional (Taller 6)
 
 // ---------- HTTP ----------
@@ -68,7 +72,7 @@ app.get("/", (req, res) => {
 app.get("/config.js", (req, res) => {
     res.set("Content-Type", "application/javascript; charset=utf-8");
     res.set("Cache-Control", "no-store");
-    res.send("window.APP_CONFIG = " + JSON.stringify({ AUTH_URLS, AUTH_URL, COORDINATOR_WS_URL, GOOGLE_CLIENT_ID }) + ";");
+    res.send("window.APP_CONFIG = " + JSON.stringify({ AUTH_URLS, AUTH_URL, COORDINATOR_WS_URL, GOOGLE_CLIENT_ID, RECONNECT_GRACE_MS }) + ";");
 });
 
 app.use(express.static(path.join(__dirname, "public")));

@@ -95,6 +95,7 @@ Di primero en una frase qué demuestras y luego hazlo.
 - **¿Por qué un árbitro y no que cada coordinador decida?** Un solo orden de eventos: evita dos infecciones simultáneas contradictorias o la misma misión hecha dos veces. El costo es un salto de red para las acciones de los jugadores de otros coordinadores.
 - **¿Proxy reverso?** No hay: 7 túneles directos. El gateway del Taller 7 existe solo como alternativa para una sola cuenta de ngrok.
 - **¿Qué ve un tramposo?** Puede editar su dibujo (`lastState`) y elegir su apariencia. No puede moverse más rápido, atravesar paredes, cambiar su identidad ni ver roles.
+- **¿Y si se caen todos los servicios?** El cliente tiene un tiempo de gracia (`RECONNECT_GRACE_MS`, 45 s) con cuenta atrás en pantalla. Si un coordinador vuelve a tiempo, reconecta y el jugador sigue donde estaba (persistencia). Si no, vuelve al login con "Se cayeron los servicios del juego". La gracia se mide por tiempo y no por intentos porque, con los auth caídos, cada intento tarda hasta 12 s en fallar.
 
 ## E. Cierre (3 min): qué haríamos distinto y limitaciones
 

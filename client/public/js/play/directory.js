@@ -3,8 +3,37 @@
 // Flujo del cliente: login → GET {AUTH_URL}/coordinator → { coordinatorId, publicUrl } → WebSocket a
 // {publicUrl}/connect?token=…. Si la conexión se cae, NO se reconecta al mismo coordinador: se vuelve a
 // pedir uno al directorio (que solo devuelve coordinadores vivos).
+//
+// Tiempo de gracia: desde que se pierde la conexión (o desde el primer intento fallido) el cliente reintenta
+// durante RECONNECT_GRACE_MS. Si en ese tiempo no vuelve a tener un coordinador, los servicios se dan por caídos y
+// vuelve al inicio con un aviso. Se mide por TIEMPO y no por intentos: si el auth también cayó, cada intento puede
+// tardar hasta 12 s (failover), y con un límite de intentos la espera se alargaba a minutos.
 
 export const MAX_ATTEMPTS = 20;
+export const DEFAULT_RECONNECT_GRACE_MS = 45000;
+export const MIN_RECONNECT_GRACE_MS = 5000;
+export const CONNECT_TIMEOUT_MS = 8000; // un WebSocket que no abre en este tiempo se da por fallido
+export const SERVICES_DOWN_MESSAGE = "Se cayeron los servicios del juego: no hay coordinadores disponibles. Vuelve a entrar cuando estén en línea.";
+
+// RECONNECT_GRACE_MS de /config.js: entero en ms ≥ MIN_RECONNECT_GRACE_MS; cualquier otro valor usa el de por defecto
+export function readGraceMs(value) {
+    const n = Number(value);
+    return Number.isInteger(n) && n >= MIN_RECONNECT_GRACE_MS ? n : DEFAULT_RECONNECT_GRACE_MS;
+}
+
+// Milisegundos de gracia que quedan (lostAt null = conectado: queda toda la gracia)
+export function graceLeftMs(lostAt, now, graceMs) {
+    if (lostAt === null || lostAt === undefined) return graceMs;
+    return Math.max(0, graceMs - (now - lostAt));
+}
+
+// ¿Hay que rendirse? Se acabó la gracia, o se llegó al máximo de intentos (lo que pase primero)
+export const shouldGiveUp = (lostAt, now, graceMs, attempts) => (lostAt !== null && lostAt !== undefined && graceLeftMs(lostAt, now, graceMs) === 0) || attempts >= MAX_ATTEMPTS;
+
+// Aviso mientras se reintenta, con la cuenta atrás hasta volver al inicio
+export function reconnectNotice(reason, leftMs) {
+    return `${reason} Reintentando… si no vuelve en ${Math.ceil(leftMs / 1000)} s, se vuelve al inicio.`;
+}
 
 const WS_URL = /^wss?:\/\//i;
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);

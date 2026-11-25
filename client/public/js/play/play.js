@@ -22,7 +22,7 @@ import { createAudio } from "./audio.js";
 import { createRadio, STATION, estimateOffset } from "./radio.js";
 import { createDialogue } from "./dialogue.js";
 import { sceneAt, WORLD_SCENE } from "./map/scenes.js";
-import { parseCoordinatorResponse, buildWsUrl, isMixedContent, nextDelay, classifyClose, MAX_ATTEMPTS } from "./directory.js";
+import { parseCoordinatorResponse, buildWsUrl, isMixedContent, nextDelay, classifyClose, readGraceMs, graceLeftMs, shouldGiveUp, reconnectNotice, CONNECT_TIMEOUT_MS, SERVICES_DOWN_MESSAGE } from "./directory.js";
 import { parseServerMessage, parseCity, parseRules, eventText, eventTone, reasonText } from "../vc/view.js";
 import { createClock } from "../vc/clock.js";
 import { createHud } from "../vc/hud.js";
@@ -36,7 +36,6 @@ const CLOSE_MESSAGES = {
     4001: "Tu sesión expiró o el token no es válido. Inicia sesión de nuevo.",
     4002: "Tu sesión se abrió en otra pestaña. Esta sesión fue cerrada.",
 };
-const NO_COORDINATOR_MESSAGE = "No hay coordinadores disponibles. Inténtalo más tarde.";
 const NGROK_HEADERS = { "ngrok-skip-browser-warning": "true" }; // evita la página de aviso de ngrok
 
 // Vigilancia del token guardado (igual que el lobby): si cambia o desaparece, la sesión se cae
@@ -166,6 +165,11 @@ function startGame(token) {
     let coordinatorId = null; // coordinador actual (el de welcome manda sobre el del directorio)
     let attempts = 0; // intentos fallidos seguidos (se reinicia con cada welcome)
     let retryTimer = null;
+    // Tiempo de gracia (directory.js): lostAt = cuándo se perdió el coordinador (null = conectado). Si pasa
+    // RECONNECT_GRACE_MS sin volver a tener uno, los servicios se dan por caídos y se vuelve al inicio.
+    const GRACE_MS = readGraceMs(window.APP_CONFIG?.RECONNECT_GRACE_MS);
+    let lostAt = null;
+    let lastReason = "";
     const isOpen = () => ws !== null && ws.readyState === WebSocket.OPEN;
     const sendJson = (msg) => {
         if (isOpen()) ws.send(JSON.stringify(msg));
@@ -185,6 +189,7 @@ function startGame(token) {
     function leaveToLogin(message, clearToken = true) {
         loggingOut = true;
         clearTimeout(retryTimer);
+        clearInterval(graceWatch);
         clearInterval(tokenWatch);
         sessionStorage.setItem("sessionMessage", message);
         if (clearToken) clearSession(token);
@@ -224,29 +229,46 @@ function startGame(token) {
         openSocket(url, result.coordinatorId);
     }
 
-    // Nuevo intento dentro de nextDelay(intento); tras MAX_ATTEMPTS fallos seguidos, al login
-    function retry(text) {
+    // Nuevo intento dentro de nextDelay(intento). Si se acabó la gracia (o los intentos), los servicios se dan por
+    // caídos: al inicio con el aviso. El aviso del clúster lleva la cuenta atrás.
+    function retry(reason) {
         attempts += 1;
-        if (attempts >= MAX_ATTEMPTS) {
-            leaveToLogin(NO_COORDINATOR_MESSAGE);
+        if (lostAt === null) lostAt = Date.now();
+        lastReason = reason;
+        if (shouldGiveUp(lostAt, Date.now(), GRACE_MS, attempts)) {
+            leaveToLogin(SERVICES_DOWN_MESSAGE);
             return;
         }
-        showClusterNotice(text(attempts));
+        showClusterNotice(reconnectNotice(reason, graceLeftMs(lostAt, Date.now(), GRACE_MS)));
         clearTimeout(retryTimer);
         retryTimer = setTimeout(conectar, nextDelay(attempts));
     }
 
+    // Vigilancia de la gracia cada segundo: actualiza la cuenta atrás y vuelve al inicio aunque un intento siga
+    // colgado (un auth caído puede tardar 12 s en responder; un túnel, no responder nunca)
+    const graceWatch = setInterval(() => {
+        if (loggingOut || lostAt === null) return;
+        const left = graceLeftMs(lostAt, Date.now(), GRACE_MS);
+        if (left === 0) leaveToLogin(SERVICES_DOWN_MESSAGE);
+        else showClusterNotice(reconnectNotice(lastReason, left));
+    }, 1000);
+
     // El directorio no dio coordinador: sin vivos (503) o el auth no respondió
     function onDirectoryFailure(kind) {
         setConnection("disconnected");
-        retry(() => (kind === "none" ? "Sin coordinadores disponibles. Reintentando…" : "No se pudo contactar al servicio de autenticación. Reintentando…"));
+        retry(kind === "none" ? "Sin coordinadores disponibles." : "No se pudo contactar al servicio de autenticación.");
     }
 
     function openSocket(url, assignedId) {
         const socket = new WebSocket(url);
         ws = socket;
         coordinatorId = assignedId;
+        // Un WebSocket que no abre a tiempo (coordinador colgado, túnel sin respuesta) se cierra y cuenta como fallo
+        const connectTimer = setTimeout(() => {
+            if (ws === socket && socket.readyState === WebSocket.CONNECTING) socket.close();
+        }, CONNECT_TIMEOUT_MS);
         socket.onopen = () => {
+            clearTimeout(connectTimer);
             if (ws === socket) setConnection("connected");
         };
         socket.onmessage = (event) => {
@@ -285,8 +307,9 @@ function startGame(token) {
                 world = { width: w.width, height: w.height, playerRadius: w.playerRadius, tickRate: w.tickRate };
                 welcomeAt = performance.now();
             }
-            // Conectado: se reinician los intentos y se muestra el coordinador
+            // Conectado: se reinician los intentos y la gracia, y se muestra el coordinador
             attempts = 0;
+            lostAt = null;
             showClusterNotice(null);
             setCoordinatorPill(world?.tickRate ?? "?", coordinatorId);
             if (msg.you?.userId) me = { userId: String(msg.you.userId) };
@@ -322,7 +345,7 @@ function startGame(token) {
         missionUi.close();
         hud.reset();
         setCoordinatorPill(null, null);
-        retry((n) => `Conexión perdida con ${previous}. Buscando otro coordinador… (intento ${n})`);
+        retry(`Conexión perdida con ${previous}. Buscando otro coordinador.`);
     }
 
     $("logoutButton").addEventListener("click", () => {
