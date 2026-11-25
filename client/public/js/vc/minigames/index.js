@@ -22,6 +22,10 @@ import * as microscope from "./microscope.js";
 import * as helix from "./helix.js";
 import * as labeling from "./labeling.js";
 import * as transfer from "./transfer.js";
+import * as valves from "./valves.js";
+import * as reactor from "./reactor.js";
+import * as loading from "./loading.js";
+import * as scanner from "./scanner.js";
 
 export const MINIGAMES = Object.freeze({
     sequence: { name: "Secuencia", module: sequence },
@@ -38,6 +42,10 @@ export const MINIGAMES = Object.freeze({
     helix: { name: "Doble hélice", module: helix, canvas: true },
     labeling: { name: "Etiquetado", module: labeling, canvas: true },
     transfer: { name: "Transferencia", module: transfer, canvas: true },
+    valves: { name: "Válvulas", module: valves, canvas: true },
+    reactor: { name: "Reactor", module: reactor, canvas: true },
+    loading: { name: "Carga", module: loading, canvas: true },
+    scanner: { name: "Escáner", module: scanner, canvas: true },
 });
 
 const prefersReducedMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
