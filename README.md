@@ -66,6 +66,53 @@ Los archivos `*.db` no se versionan. Código: [coordinator/persist.js](coordinat
 
 ---
 
+# Track 2.5 · Modo espectador (track secundario)
+
+**Por qué dos tracks.** El principal (2.1) es el que tiene la parte distribuida difícil: reconciliar estados entre coordinadores. El espectador es más corto, pero encaja con el juego: se puede mirar una partida de Viruscity sin jugarla y sin conocer los roles. Además sirve en la sustentación, porque el docente puede ver la partida desde su propio navegador.
+
+**Qué hace.**
+- El coordinador acepta WebSockets en **`/spectate` sin token**. Un espectador no es un jugador:
+  - no está en el Map `players`, así que no se simula ni se replica por el mesh;
+  - no cuenta en `connectedPlayers` (el directorio no lo usa para repartir carga) ni en la partida.
+- Recibe:
+  - el `welcome` (con `spectator: true` y sin `you`);
+  - el mismo `state` que un jugador, a 10 Hz;
+  - la vista pública de la partida, la misma que la de alguien sin rol: fase, cura y misiones; los roles solo al terminar;
+  - los avisos públicos.
+- **Todo lo que mande se ignora** sin leerlo: `intent`, `extras_update`, `game_action` o cualquier otra cosa. Solo se cuenta en `/status` (`spectators.ignoredMessages`). Si manda más de 10 mensajes por segundo, se cierra con 1008. El tamaño máximo de mensaje es de 512 bytes.
+- El cliente tiene `spectate.html`, enlazada desde el login ("Ver la partida como espectador"):
+  - es la misma ciudad y el mismo HUD del juego, en solo lectura, con la insignia **MODO ESPECTADOR** y un marco amarillo;
+  - no tiene panel de personaje, ni teclas de juego, ni sesión;
+  - la cámara sigue a un jugador (◀ ▶ o las teclas `,` y `.`) o es libre (C, y se mueve con WASD o las flechas). La cámara es solo visual.
+
+**Lo difícil: 100 jugadores y 1000 espectadores en un coordinador**
+
+| Decisión | Por qué |
+|---|---|
+| **Límite por coordinador** (`MAX_SPECTATORS`, 50 por defecto) | Al que sobra se le cierra con **4003** y el cliente pide otro coordinador al directorio, igual que en un failover. El costo de un coordinador queda acotado y los espectadores se reparten entre los 3. |
+| **10 Hz para espectadores** (`SPECTATOR_STATE_MS`) | Son la mitad de envíos que para un jugador. Mirar no necesita la latencia de jugar, y el cliente ya suaviza el movimiento. |
+| **Una sola serialización por envío** | El JSON del `state` se arma una vez y se manda el mismo texto a todos. El costo por espectador es solo el `send`. |
+| **Contrapresión** | Si un espectador tiene más de 256 KB pendientes (red lenta), se le salta ese cuadro (`droppedFrames`) en vez de acumularle memoria. Un espectador lento no frena a nadie. |
+| **Fuera del juego** | Los espectadores no entran al game loop, al mesh ni a la partida: el tick de 20 Hz de los jugadores no depende de cuántos miren. |
+| ¿Un coordinador especial "de espectadores"? | **No, por ahora.** Rompería "todos los coordinadores son iguales" y agregaría un salto. Para 1000 o más espectadores lo correcto sería un nivel de **retransmisores**: procesos que se suscriben una vez al `state` de un coordinador y lo reparten (*fan-out*), sin tocar el juego. Queda como trabajo futuro. |
+
+**Demo obligatoria (y prueba automática).**
+1. Abre `spectate.html` en una pestaña sin sesión y `play.html` con un jugador en otra. El espectador ve moverse al jugador y no tiene controles.
+2. En DevTools del espectador escribe `vcSpectator.send({ type: "intent", intent: { dir: { x: 1, y: 0 } } })`. No se mueve nada, el coordinador sigue vivo y `GET /status` muestra `spectators.ignoredMessages` sumando 1.
+
+`cd coordinator && npm run smoke:espectador` comprueba E1–E10:
+- el espectador entra sin token y ve moverse a alice, que está en **otro** coordinador;
+- lo que manda se ignora;
+- no cuenta en `/status` ni en el directorio;
+- en partida no ve el rol de nadie;
+- con el máximo lleno, el siguiente recibe 4003;
+- si inunda de mensajes, se le cierra con 1008;
+- `/connect` sin token sigue dando 4001.
+
+Código: [coordinator/index.js](coordinator/index.js) (sección "Espectadores"), [client/public/spectate.html](client/public/spectate.html), [client/public/js/play/spectate.js](client/public/js/play/spectate.js) y [spectator.js](client/public/js/play/spectator.js) (cámara pura, con pruebas).
+
+---
+
 # Viruscity
 
 El juego sobre el sistema de los Talleres 6 y 7 (coordinadores replicados y auth replicados): **la ciudad de Virus City**, con jugadores **sanos** que fabrican la cura con misiones en sus edificios y un **infectado** oculto que contagia a los demás. La partida se juega en el **mapa principal** (el mismo mundo abierto de siempre) y empieza sola cuando hay 3 jugadores conectados. Todo lo decide el servidor; el cliente solo muestra su vista y manda acciones. Rama `viruscity`; las reglas fijas están en CLAUDE.md, sección "VIRUSCITY – METODOLOGÍA".
