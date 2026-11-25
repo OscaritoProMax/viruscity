@@ -69,3 +69,64 @@ test("buildCity rechaza un mundo sin tamaño; zoneNear sin zonas devuelve null",
     assert.throws(() => buildCity(null), /width y height/);
     assert.equal(zoneNear({ zones: [] }, 0, 0), null);
 });
+
+// ---------- Ciudad sobre el mapa de Virus City (MAP_FILE) ----------
+const { parseMap, boxBlocked } = require("../game.js");
+const { MISSIONS } = require("../missions.js");
+const { plazaSpawns } = require("../match.js");
+const MAP_JSON = require("../map/virus-city.json");
+const PLAYER_RADIUS = 16;
+const clone = (v) => JSON.parse(JSON.stringify(v));
+
+test("mapa real: buildCity usa la ciudad del mapa (mismas zonas y orden; una estación por misión)", () => {
+    const map = parseMap(MAP_JSON);
+    const city = buildCity({ width: map.width, height: map.height }, map);
+    assert.deepEqual(city, map.city, "la ciudad es la del mapa");
+    assert.deepEqual(city.zones.map((z) => z.name), ["Hospital", "Laboratorio", "Farmacia", "Central de datos", "Planta de síntesis", "Almacén"]);
+    assert.deepEqual(city.stations.map((s) => s.id).sort(), MISSIONS.map((m) => m.stationId).sort());
+    city.zones[0].x = -1; // es una copia: modificarla no toca el mapa
+    assert.notEqual(map.city.zones[0].x, -1);
+});
+
+test("mapa real: cada estación está en una casilla libre, dentro de su zona y su zona es la más cercana", () => {
+    const map = parseMap(MAP_JSON);
+    const city = buildCity({ width: map.width, height: map.height }, map);
+    for (const s of city.stations) {
+        assert.equal(boxBlocked(map, s.x, s.y, PLAYER_RADIUS), false, `${s.id}: el jugador cabe parado en la estación`);
+        const z = city.zones.find((zone) => zone.id === s.zoneId);
+        assert.ok(inside(s, z), `${s.id} dentro de la zona ${z.id}`);
+        assert.equal(zoneNear(city, s.x, s.y), z.name, `${s.id}: alerta de contagio con la zona correcta`);
+    }
+});
+
+test("mapa real: la plaza deja libre el círculo de aparición para cualquier roster (1 a 12 jugadores)", () => {
+    const map = parseMap(MAP_JSON);
+    const city = buildCity({ width: map.width, height: map.height }, map);
+    for (let n = 1; n <= 12; n++) {
+        const roster = Object.fromEntries(Array.from({ length: n }, (_, i) => [String(i + 1), { username: `j${i + 1}` }]));
+        for (const [userId, p] of Object.entries(plazaSpawns({ roster }, city))) {
+            assert.equal(boxBlocked(map, p.x, p.y, PLAYER_RADIUS), false, `roster ${n}: el jugador ${userId} aparece en (${p.x}, ${p.y}) libre`);
+        }
+    }
+});
+
+test("mapa: parseMap rechaza una ciudad inválida y buildCity una que no coincide con las misiones", () => {
+    const bad = (mutate) => {
+        const data = clone(MAP_JSON);
+        mutate(data.city);
+        return data;
+    };
+    assert.throws(() => parseMap(bad((c) => (c.stations[0].x = 0))), /estación hospital-1 .*sólida/, "estación sobre el bosque del borde");
+    assert.throws(() => parseMap(bad((c) => (c.stations[1].zoneId = "otra"))), /zona desconocida/);
+    assert.throws(() => parseMap(bad((c) => (c.plaza = { x: 99999, y: 10 }))), /plaza/);
+    assert.throws(() => parseMap(bad((c) => (c.zones[2].w = 1e6))), /fuera del mundo/);
+    assert.throws(() => parseMap(bad((c) => (c.zones[1].id = c.zones[0].id))), /repetido/);
+    assert.throws(() => parseMap(bad((c) => (c.zones = "x"))), /city.zones/);
+    const map = parseMap(bad((c) => c.zones.reverse()));
+    assert.throws(() => buildCity({ width: map.width, height: map.height }, map), /zonas/);
+    const missing = parseMap(bad((c) => c.stations.pop()));
+    assert.throws(() => buildCity({ width: missing.width, height: missing.height }, missing), /estaciones/);
+    const noCity = clone(MAP_JSON);
+    delete noCity.city;
+    assert.equal(parseMap(noCity).city, null, "un mapa sin ciudad sigue siendo válido (se usa la ciudad normalizada)");
+});
