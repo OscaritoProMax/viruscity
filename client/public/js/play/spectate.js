@@ -16,7 +16,7 @@ import { gameMinutes, formatClock, isNight } from "./map/clock.js";
 import { ZOOM_STEP, clampZoom } from "./view.js";
 import { WORLD_SCENE } from "./map/scenes.js";
 import { MOVEMENT_CODES, computeIntent } from "./intent.js";
-import { parseCoordinatorResponse, buildSpectateUrl, isMixedContent, nextDelay, readGraceMs, graceLeftMs, shouldGiveUp, reconnectNotice, CONNECT_TIMEOUT_MS, SERVICES_DOWN_MESSAGE } from "./directory.js";
+import { parseCoordinatorResponse, buildSpectateUrl, isMixedContent, nextDelay, readGraceMs, graceLeftMs, shouldGiveUp, reconnectNotice, CONNECT_TIMEOUT_MS, SERVICES_DOWN_MESSAGE, rememberFailure, forgetFailure, recentFailures, coordinatorPath } from "./directory.js";
 import { nextFollow, panCamera, followLabel } from "./spectator.js";
 import { parseServerMessage, parseCity, parseRules, eventText, eventTone } from "../vc/view.js";
 import { createClock } from "../vc/clock.js";
@@ -138,6 +138,8 @@ function startSpectator() {
     // Tiempo de gracia igual que en el juego: sin coordinador durante RECONNECT_GRACE_MS se vuelve al inicio
     const GRACE_MS = readGraceMs(window.APP_CONFIG?.RECONNECT_GRACE_MS);
     let lostAt = null;
+    // Coordinadores que acaban de fallar: se le pide al directorio que los salte (si cae a y b no responde, va a c)
+    let failed = {};
     let lastReason = "";
     const isOpen = () => ws !== null && ws.readyState === WebSocket.OPEN;
 
@@ -188,7 +190,7 @@ function startSpectator() {
         setConnection("connecting");
         let result;
         try {
-            const res = await window.authFetch("/coordinator", { headers: NGROK_HEADERS, cache: "no-store" });
+            const res = await window.authFetch(coordinatorPath(recentFailures(failed, Date.now())), { headers: NGROK_HEADERS, cache: "no-store" });
             let body = null;
             try {
                 body = await res.json();
@@ -236,6 +238,7 @@ function startSpectator() {
             hud.reset();
             setCoordinatorPill(null, null);
             const previous = coordinatorId ?? "el coordinador";
+            failed = rememberFailure(failed, coordinatorId, Date.now()); // el próximo pedido al directorio lo salta
             retry(`${CLOSE_TEXT[event.code] ?? `Conexión perdida con ${previous}.`} Buscando otro coordinador.`);
         };
     }
@@ -268,6 +271,7 @@ function startSpectator() {
             }
             attempts = 0;
             lostAt = null;
+            failed = forgetFailure(failed, coordinatorId); // este sí responde
             showClusterNotice(null);
             setCoordinatorPill(world?.tickRate ?? "?", coordinatorId);
             if (followId === null && !freePos) goFree();
