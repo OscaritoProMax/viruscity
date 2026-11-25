@@ -20,9 +20,10 @@ function seeded(seed) {
     };
 }
 
-test("los 5 tipos del servidor tienen minijuego con nombre en español", () => {
-    assert.deepEqual(Object.keys(MINIGAMES).sort(), ["code", "hold", "sequence", "slider", "wires"]);
-    assert.deepEqual(Object.values(MINIGAMES).map((m) => m.name), ["Secuencia", "Código", "Cables", "Calibración", "Mantener"]);
+test("los 5 tipos sencillos tienen minijuego con nombre en español (los de canvas en vc-minigames-canvas)", () => {
+    const simple = ["sequence", "code", "wires", "slider", "hold"];
+    for (const k of simple) assert.ok(MINIGAMES[k], k);
+    assert.deepEqual(simple.map((k) => MINIGAMES[k].name), ["Secuencia", "Código", "Cables", "Calibración", "Mantener"]);
     for (const { module } of Object.values(MINIGAMES)) assert.equal(typeof module.mount, "function");
 });
 
