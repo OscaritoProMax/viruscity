@@ -322,12 +322,18 @@ Flujo: el sano llega a la estación (≤ `MISSION_RANGE` = 60 px + tolerancia) y
 
 - Cada misión hecha suma **100/M** a la cura (la última deja exactamente 100). La barra es pública: la ven todos, infectados incluidos.
 - Orden de evaluación: **cura ≥ 100** → ganan los jugadores · **sin sanos** en el roster → ganan los infectados · **sin infectados** en el roster → ganan los jugadores · **tiempo agotado** → ganan los infectados.
-- Si el roster queda con menos de 2 personas (conectadas o en gracia) la partida se cancela (`match_cancelled`) y vuelve a open_world.
+- **Abandono:** un miembro del roster que no vuelve dentro de `RECONNECT_GRACE_MS` (60 s) abandona la partida. Todos ven el aviso público "Un jugador no volvió a tiempo y abandonó la partida", sin nombre ni rol. Según quién queda:
+  - si se fue el infectado y solo quedan sanos → **ganan los jugadores** (`no_infected`: "El infectado abandonó la partida");
+  - si se fueron los últimos sanos y solo quedan infectados → **ganan los infectados** (`healthy_left`: "Los sanos abandonaron la partida");
+  - si no queda nadie → la partida se cancela (`match_cancelled`) y vuelve a open_world, porque no hay a quién dar la victoria;
+  - si quedan los dos roles → la partida sigue.
+
+  Antes, si el roster quedaba con menos de 2 personas, se cancelaba sin ganador; ahora el abandono la decide.
 
 ### Espectadores y reconexión
 
 - Quien entra durante `playing` (o no estaba en el roster) es espectador: `you.role = 'spectator'`, se dibuja con `ghost:true` (35 % de opacidad, sin insignia) y E y F no actúan sobre la partida (E sigue sirviendo para hablar o mirar).
-- Un miembro del roster que se desconecta conserva su rol durante `RECONNECT_GRACE_MS` (60 s) y su misión se libera de inmediato. Si vuelve a **cualquier** coordinador en ese plazo, recupera su rol y reaparece en su punto de la plaza; si no, sale del roster y se reevalúa la victoria.
+- Un miembro del roster que se desconecta conserva su rol durante `RECONNECT_GRACE_MS` (60 s) y su misión se libera de inmediato. Si vuelve a **cualquier** coordinador en ese plazo, recupera su rol y reaparece en su punto de la plaza; si no, abandona la partida (ver **Abandono** arriba).
 
 ## 3. Información oculta: qué ve cada rol
 

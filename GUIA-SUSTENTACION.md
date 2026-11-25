@@ -96,6 +96,7 @@ Di primero en una frase qué demuestras y luego hazlo.
 - **¿Proxy reverso?** No hay: 7 túneles directos. El gateway del Taller 7 existe solo como alternativa para una sola cuenta de ngrok.
 - **¿Qué ve un tramposo?** Puede editar su dibujo (`lastState`) y elegir su apariencia. No puede moverse más rápido, atravesar paredes, cambiar su identidad ni ver roles.
 - **¿Y si se caen todos los servicios?** El cliente tiene un tiempo de gracia (`RECONNECT_GRACE_MS`, 45 s) con cuenta atrás en pantalla. Si un coordinador vuelve a tiempo, reconecta y el jugador sigue donde estaba (persistencia). Si no, vuelve al login con "Se cayeron los servicios del juego". La gracia se mide por tiempo y no por intentos porque, con los auth caídos, cada intento tarda hasta 12 s en fallar.
+- **¿Y si un jugador se sale a mitad de partida?** Conserva su rol 60 s (`RECONNECT_GRACE_MS` del coordinador). Si vuelve, sigue en la partida; si no, abandona. Todos ven un aviso sin su nombre ni su rol, para no revelar información oculta. El abandono decide la partida según quién queda: si se fue el infectado, ganan los jugadores; si se fueron los últimos sanos, ganan los infectados; si no queda nadie, se cancela. Lo decide el árbitro en el reductor puro (`match.js`), así que todos los coordinadores ven el mismo resultado.
 
 ## E. Cierre (3 min): qué haríamos distinto y limitaciones
 
