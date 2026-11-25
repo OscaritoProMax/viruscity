@@ -16,10 +16,10 @@ const EXPECTED = [
     ["farmacia-2", "Etiquetar las dosis", "labeling"],
     ["central-1", "Restaurar el registro de contagios", "patchpanel"],
     ["central-2", "Descargar el historial clínico", "transfer"],
-    ["planta-1", "Sintetizar el compuesto", "slider"],
-    ["planta-2", "Purificar el reactor", "sequence"],
-    ["almacen-1", "Cargar el suero en los camiones", "hold"],
-    ["almacen-2", "Inventariar el cargamento", "code"],
+    ["planta-1", "Sintetizar el compuesto", "valves"],
+    ["planta-2", "Purificar el reactor", "reactor"],
+    ["almacen-1", "Cargar el suero en los camiones", "loading"],
+    ["almacen-2", "Inventariar el cargamento", "scanner"],
 ];
 
 test("MISSIONS: las 12 misiones de la decisión 13, válidas y con ids únicos", () => {
