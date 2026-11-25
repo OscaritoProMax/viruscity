@@ -10,6 +10,13 @@ export function areaName(x, y) {
     const c = Math.floor(x / TILE_SIZE);
     const r = Math.floor(y / TILE_SIZE);
     const inR = (c0, r0, c1, r1) => c >= c0 && c <= c1 && r >= r0 && r <= r1;
+    // Edificios de la partida de Viruscity (match-places.js)
+    if (inR(13, 5, 21, 10)) return "Laboratorio Vega";
+    if (inR(9, 21, 13, 25)) return "Farmacia";
+    if (inR(67, 15, 76, 18)) return "Central de datos";
+    if (inR(55, 37, 62, 41)) return "Hospital";
+    if (inR(10, 47, 19, 51)) return "Planta de síntesis";
+    if (inR(64, 47, 68, 51)) return "Almacén";
     if (inR(27, 2, 48, 10)) return "Parque Central";
     if (inR(27, 15, 48, 25)) return "Plaza Mayor";
     if (inR(26, 46, 49, 57)) return "Lago Sur";

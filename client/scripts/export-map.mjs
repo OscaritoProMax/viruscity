@@ -3,7 +3,7 @@
 // El cliente DIBUJA el mapa con public/js/play/map/layout.js; el servidor, que es la autoridad del
 // movimiento, necesita saber qué casillas son sólidas. Este script ejecuta el MISMO layout (es puro y
 // determinista) y guarda solo los datos que usa el servidor:
-//   { id, tile, cols, rows, solid: ["0101…", …], spawns: [[col, row], …] }
+//   { id, tile, cols, rows, solid: ["0101…", …], spawns: [[col, row], …], portals: […], city: { zones, stations, plaza } }
 //
 // Uso (desde client/):  node scripts/export-map.mjs [archivo de salida]
 // Por defecto escribe ../coordinator/map/virus-city.json. La prueba client/test/map.test.mjs

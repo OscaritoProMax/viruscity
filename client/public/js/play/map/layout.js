@@ -217,7 +217,11 @@ export function buildWorld() {
     for (let r = 0; r < MAP_ROWS; r++) for (let c = 0; c < MAP_COLS; c++) if (c < 2 || r < 2 || c >= MAP_COLS - 2 || r >= MAP_ROWS - 2) solid[idx(c, r)] = 1;
 
     // ---------- Edificios: bloque NO (casas + jardines) ----------
-    [3, 8, 13, 18].forEach(c => { const b = house(c, 9); frontYard(c, b.doorCols[0], 10); });
+    [3, 8].forEach(c => { const b = house(c, 9); frontYard(c, b.doorCols[0], 10); });
+    houseN += 2; // las casas de las columnas 13 y 18 dejaron su lugar al laboratorio; las demás conservan sus colores
+    // ---------- Viruscity: Laboratorio Vega (zona "Laboratorio" de la partida, ver match-places.js) ----------
+    building({ kind: 'shop', w: 9, h: 5, wall: '#e2e8f0', stripe: '#0f766e', sign: { text: 'LABORATORIO VEGA', bg: '#134e4a', fg: '#99f6e4' }, awning: ['#14b8a6', '#f0fdfa'], display: 'pharma', doorW: 2, openText: 'SELLADO', seed: 21, name: 'Laboratorio', roofTop: '#64748b', roofItems: [roofVent(40), roofAntenna(200), roofAC(320)] }, 13, 5);
+    talk(17 * 48, 10.6 * 48, ['LABORATORIO VEGA', 'Aquí el Dr. Elías Vega estudiaba las esporas verdes. Sus equipos siguen encendidos.'], { r: 90 });
     // ---------- Bloque NE: apartamentos, casa, iglesia ----------
     building({ kind: 'apartment', w: 7, h: 7, wall: '#a8553a', name: 'RESIDENCIAL ARCOÍRIS', seed: 4 }, 55, 4);
     { const b = house(63, 9); frontYard(63, b.doorCols[0], 10); }
@@ -232,7 +236,11 @@ export function buildWorld() {
     building({ kind: 'shop', w: 4, h: 5, wall: '#1e1b4b', sign: { text: 'ARCADE', bg: '#0f172a', fg: '#4ade80' }, neon: true, awning: ['#0ea5e9', '#e0f2fe'], display: 'arcade', glassBack: '#1e1b4b', trim: '#c7d2fe', seed: 8 }, 19, 21);
 
     // ---------- Banda este ----------
-    [55, 61, 67, 73].forEach(c => house(c, 18));
+    [55, 61].forEach(c => house(c, 18));
+    houseN += 2; // las casas de las columnas 67 y 73 dejaron su lugar a la central de datos
+    // ---------- Viruscity: Central de datos (zona "Central de datos"; su entrada da al Callejón del Mercado) ----------
+    building({ kind: 'shop', w: 10, h: 4, wall: '#0f172a', sign: { text: 'CENTRAL DE DATOS', bg: '#020617', fg: '#38bdf8' }, neon: true, awning: ['#0284c7', '#e0f2fe'], display: 'arcade', glassBack: '#0c4a6e', trim: '#7dd3fc', doorW: 2, openText: 'ONLINE', seed: 22, name: 'Central de datos', roofTop: '#334155', roofItems: [roofAntenna(40), roofSky(200), roofAntenna(420)] }, 67, 15);
+    talk(72 * 48, 19.6 * 48, ['CENTRAL DE DATOS', 'Aquí se guarda el registro de contagios de toda la ciudad. Los servidores zumban sin parar.'], { r: 90 });
     building({ kind: 'shop', w: 9, h: 5, wall: '#fef3c7', stripe: '#dc2626', sign: { text: 'BURGER NEÓN', bg: '#be123c', fg: '#fef08a' }, neon: true, awning: ['#dc2626', '#ffffff'], display: 'cafe', doorW: 2, rooftop: 'burger', enter: 'burger', openText: 'ABIERTO', seed: 9, name: 'Burger Neón', roofItems: [roofAC(20), roofVent(300)] }, 54, 21);
     building({ kind: 'shop', w: 7, h: 5, wall: '#7f1d1d', sign: { text: 'CINE RIALTO', bg: '#0f172a', fg: '#fde047', bulbs: true }, awning: ['#facc15', '#7f1d1d'], display: 'posters', glassBack: '#1e1b4b', openText: 'CINE', seed: 10, roofTop: '#44403c' }, 63, 21);
     building({ kind: 'shop', w: 4, h: 5, wall: '#fbcfe8', sign: { text: 'PELUQUERÍA', bg: '#be185d', fg: '#ffffff', size: 14 }, awning: ['#ec4899', '#fdf2f8'], display: 'barber', seed: 11 }, 70, 21);
@@ -285,16 +293,21 @@ export function buildWorld() {
     [38, 44].forEach(c => { const b = house(c, 40); frontYard(c, b.doorCols[0], 41); });
     tree('pine', 38, 34); tree('oak2', 41, 35); tree('oak0', 46, 34); tree('pine', 48, 36); tree('birch', 37, 33); tree('oak1', 43, 33);
 
-    // ---------- Clínica y casas este ----------
-    building({ kind: 'shop', w: 8, h: 5, wall: '#f1f5f9', roofTop: '#94a3b8', sign: { text: 'CLÍNICA VIRUS CARE', bg: '#0e7490', fg: '#ffffff', pad: 30 }, cross: true, awning: ['#0ea5e9', '#ffffff'], display: 'pharma', doorW: 2, openText: '24H', seed: 14, name: 'Clínica' }, 55, 37);
-    talk(58.4 * 48, 42.1 * 48, ['CLÍNICA VIRUS CARE', 'Letrero en la puerta: "Cerrado por desinfección. Volvemos pronto".'], { r: 90 });
+    // ---------- Hospital y casas este ----------
+    // Viruscity: la antigua clínica es el Hospital de la partida (zona "Hospital")
+    building({ kind: 'shop', w: 8, h: 5, wall: '#f1f5f9', roofTop: '#94a3b8', sign: { text: 'HOSPITAL VIRUS CARE', bg: '#0e7490', fg: '#ffffff', pad: 30 }, cross: true, awning: ['#0ea5e9', '#ffffff'], display: 'pharma', doorW: 2, openText: '24H', seed: 14, name: 'Hospital' }, 55, 37);
+    talk(58.4 * 48, 42.1 * 48, ['HOSPITAL VIRUS CARE', 'Letrero en la puerta: "Urgencias: solo muestras y personal de la cura".'], { r: 90 });
     { const b = house(64, 40); frontYard(64, b.doorCols[0], 41); }
     { const b = house(74, 40); frontYard(74, b.doorCols[0], 41); }
     tree('oak0', 55, 33); tree('oak2', 58, 34); tree('pine', 62, 33); tree('birch', 66, 35); tree('oak1', 74, 34); tree('pine', 76, 36); tree('cherry', 68, 33);
     tree('oak1', 64, 33); tree('oak0', 60, 35);
 
     // ---------- Barrio sur-oeste ----------
-    [4, 10, 16].forEach(c => { const b = house(c, 50); frontYard(c, b.doorCols[0], 51); });
+    [4].forEach(c => { const b = house(c, 50); frontYard(c, b.doorCols[0], 51); });
+    houseN += 2; // las casas de las columnas 10 y 16 dejaron su lugar a la planta de síntesis
+    // ---------- Viruscity: Planta de síntesis (zona "Planta de síntesis"; su entrada da al Camino Verde) ----------
+    building({ kind: 'shop', w: 10, h: 4, wall: '#57534e', wallStyle: 'brick', stripe: '#facc15', sign: { text: 'PLANTA DE SÍNTESIS', bg: '#365314', fg: '#d9f99d' }, awning: ['#65a30d', '#f7fee7'], display: 'pharma', glassBack: '#1a2e05', trim: '#bef264', doorW: 2, openText: 'PELIGRO', seed: 23, name: 'Planta de síntesis', roofTop: '#3f3f46', roofItems: [roofVent(40), roofVent(160), roofAC(280), roofVent(400)] }, 10, 47);
+    talk(15 * 48, 51.6 * 48, ['PLANTA DE SÍNTESIS', 'Los reactores burbujean con un líquido verde. Un cartel: "Prohibido el paso sin traje".'], { r: 90 });
     [3, 6, 9, 12, 15, 18, 21].forEach((c, k) => tree(k % 2 ? 'pine' : 'oak' + (k % 3), c, 46));
     [3, 8, 14, 20].forEach((c, k) => { tree(k % 2 ? 'oak0' : 'pine', c, 55); });
     tree('birch', 7, 56); tree('oak1', 12, 56); tree('pine', 17, 55); tree('oak2', 21, 56);
@@ -308,7 +321,10 @@ export function buildWorld() {
 
     // ---------- Granja ----------
     building({ kind: 'barn', w: 7, h: 5, seed: 3, name: 'Granero' }, 56, 47);
-    solidProp('haystack', 64, 49, 2, {}); solidProp('haystack', 66, 50, 2, {}); put('scarecrow', 61.5 * 48, 55 * 48 - 6, { name: 'scarecrow' }); block(61, 54, 61, 54);
+    // Viruscity: Almacén (zona "Almacén") junto al granero, donde antes había dos fardos de heno
+    building({ kind: 'shop', w: 5, h: 5, wall: '#78716c', stripe: '#ea580c', sign: { text: 'ALMACÉN', bg: '#7c2d12', fg: '#fed7aa' }, awning: ['#ea580c', '#fff7ed'], display: 'books', doorW: 2, openText: 'CARGA', seed: 24, name: 'Almacén', roofTop: '#57534e', roofItems: [roofAC(30), roofVent(150)] }, 64, 47);
+    talk(65.5 * 48, 52.6 * 48, ['ALMACÉN', 'Cajas de suero apiladas hasta el techo, listas para cargar en los camiones.'], { r: 80 });
+    put('scarecrow', 61.5 * 48, 55 * 48 - 6, { name: 'scarecrow' }); block(61, 54, 61, 54);
     tilePut('well', 54, 51, { dy: 4, name: 'well' }); block(54, 51, 54, 51); talk(54.5 * 48, 52.3 * 48, ['Un pozo. El agua de abajo brilla con un tono verdoso inquietante.'], { r: 70 });
     talk(61.5 * 48, 55.4 * 48, ['El espantapájaros apunta hacia la ciudad. Creo que se ha movido desde ayer.'], { r: 70 });
     // hileras de setos del huerto
@@ -322,7 +338,7 @@ export function buildWorld() {
     [[22, 26], [6, 31], [14, 31], [26, 11], [30, 14], [46, 31], [53, 20]].forEach(([c, r], k) => { if (!solid[idx(c, r)] && gAt(c, r) === G.SIDE) { block(c, r, c, r); tilePut(k % 2 ? 'hydrant' : 'trash', c, r, { dy: 2 }); } });
     [[6, 14], [16, 14], [30, 11], [56, 11], [66, 14], [76, 14], [8, 26], [18, 26], [61, 26], [68, 26], [10, 31], [40, 42], [62, 31], [20, 42], [66, 45]].forEach(([c, r]) => { if (!solid[idx(c, r)] && gAt(c, r) === G.SIDE) { block(c, r, c, r); tilePut('lamp', c, r, { name: 'lamp', light: true, dy: 2 }); } });
     // buzones en los jardines
-    [[2, 10], [7, 10], [12, 10], [17, 10], [62, 10]].forEach(([c, r]) => { if (!solid[idx(c, r)] && gAt(c, r) !== G.SIDE) { block(c, r, c, r); tilePut('mailbox', c, r, { dx: 14 }); talk((c + .5) * 48, (r + 1) * 48, LORE.mail, { r: 56 }); } });
+    [[2, 10], [7, 10], [62, 10]].forEach(([c, r]) => { if (!solid[idx(c, r)] && gAt(c, r) !== G.SIDE) { block(c, r, c, r); tilePut('mailbox', c, r, { dx: 14 }); talk((c + .5) * 48, (r + 1) * 48, LORE.mail, { r: 56 }); } });
 
     scatterVegetation();
     // el suelo del patio de cada casa que quedó como GRAVEL ya se pintó; recalcular reservados

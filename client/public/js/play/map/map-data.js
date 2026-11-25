@@ -1,4 +1,5 @@
-// Datos del mapa que comparte el servidor: grilla de casillas sólidas, casillas de aparición y portales.
+// Datos del mapa que comparte el servidor: grilla de casillas sólidas, casillas de aparición, portales y la
+// ciudad de la partida de Viruscity (zonas, estaciones de misión y plaza sobre el mapa).
 // Puro (sin DOM): lo usan client/scripts/export-map.mjs (genera coordinator/map/virus-city.json)
 // y la prueba que verifica que ese archivo coincide con lo que dibuja el cliente.
 //
@@ -10,6 +11,7 @@
 import { buildWorld, solid, idx, reachable, doors } from "./layout.js";
 import { buildScenes } from "./interiors.js";
 import { TILE_SIZE, MAP_COLS, MAP_ROWS, WORLD_ROWS } from "./constants.js";
+import { matchCity } from "./match-places.js";
 
 export const MAP_ID = "virus-city";
 
@@ -99,5 +101,7 @@ export function buildMapData() {
         solid: rows,
         spawns,
         portals: portals().map(({ c0, r0, c1, r1, x, y }) => ({ c0, r0, c1, r1, x, y })),
+        // Viruscity: zonas, estaciones y plaza de la partida sobre este mapa (match-places.js)
+        city: matchCity(),
     };
 }
