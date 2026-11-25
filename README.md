@@ -49,7 +49,7 @@ Hay dos lanzadores en la raíz, uno para cada tipo de prueba. Cada uno deja prim
    - `coordinator/.env.coord-a` (b, c);
    - `client/.env`.
 
-   Poner el **mismo** `JWT_SECRET` y `CLUSTER_SECRET` en los 6 servidores y el mismo `GOOGLE_CLIENT_ID` en los auth y el client. Para generar un secreto: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+   Poner el **mismo** `JWT_SECRET` y `CLUSTER_SECRET` en los 6 servidores y el mismo `GOOGLE_CLIENT_ID` en los auth y el client. Para generar un secreto: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. En `client/.env`, `RECONNECT_GRACE_MS` (opcional, 45000 por defecto) es cuánto espera el juego sin coordinadores antes de volver al inicio.
 3. En Windows: **`iniciar-servicios.cmd`** (doble clic) abre los 7 servicios en sus ventanas, primero los auth. A mano, en 7 terminales: `npm run start:a|b|c` en `auth-service` y en `coordinator`, y `npm start` en `client`.
 4. Abrir `http://localhost:3000`. Para ver el clúster: `http://localhost:3000/cluster.html`. Para mirar sin cuenta: `http://localhost:3000/spectate.html`.
 
@@ -109,7 +109,7 @@ Cada cuenta gratuita de ngrok tiene **un** dominio fijo. Con 7 cuentas, cada ser
 | 2 de los 3 auth | Login y registro dan 503 (`no_quorum` / `no_leader`). Los jugadores conectados siguen jugando. | Sin mayoría no hay escrituras ni lecturas seguras. El JWT se verifica sin el auth. |
 | Un coordinador | Sus jugadores reconectan a otro en 1–3 s y aparecen donde estaban. | Directorio con TTL, reintento del cliente a otro coordinador y posiciones replicadas (`positions_sync`). |
 | El árbitro a mitad de partida | La partida sigue con el siguiente id. Una misión en curso puede tener que repetirse. | Relevo con el último `game_state` replicado. |
-| Los 3 coordinadores a la vez | Al volver, cada jugador está donde estaba y la partida continúa. | Track 2.1. |
+| Los 3 coordinadores a la vez | El juego y el espectador muestran una cuenta atrás ("si no vuelve en N s, se vuelve al inicio"). Si algún coordinador vuelve dentro de la gracia (`RECONNECT_GRACE_MS`, 45 s), reconectan y cada jugador está donde estaba, con la partida en curso. Si no, vuelven al login con el aviso "Se cayeron los servicios del juego". | Gracia por **tiempo** en el cliente (`directory.js`): no por intentos, porque con los auth también caídos cada intento tarda hasta 12 s. Además, un WebSocket que no abre en 8 s se da por fallido. Lo guardado lo restaura el track 2.1. |
 | Un túnel de ngrok | Ese servicio queda inaccesible desde internet: un auth lo cubre el failover; un coordinador lo cubre la reconexión a otro. | Limitación: el directorio no sabe si el túnel de un coordinador vivo cayó. |
 
 ### 6. Pruebas
