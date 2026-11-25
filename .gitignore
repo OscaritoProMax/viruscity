@@ -15,3 +15,8 @@ BASE-ANALISIS.md
 !.env.example
 !.env.*.example
 ngrok.yml
+
+# Despliegue por túnel (tunel/configurar.js): dominios, authtokens y lo generado a partir de ellos
+tunel/tunel.env
+tunel/ngrok-*.yml
+tunel/abrir-tuneles.cmd
