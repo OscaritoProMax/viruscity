@@ -7,7 +7,8 @@
 
 // Tipos de minijuego: los 5 sencillos (botones) y los 12 de las misiones jugables (canvas animado), uno por
 // misión. Las misiones pasan a los nuevos por fases (M2: muestras, lámpara UV, dosificador y conexiones;
-// M3: microscopio, doble hélice, etiquetado y transferencia).
+// M3: microscopio, doble hélice, etiquetado y transferencia; M4: válvulas, reactor, carga y escáner). Las 12
+// misiones ya usan su minijuego propio; los sencillos quedan para compatibilidad con clientes viejos.
 const SIMPLE_KINDS = ["sequence", "code", "wires", "slider", "hold"];
 const PLAYABLE_KINDS = ["samples", "uvlamp", "microscope", "helix", "dosing", "labeling", "patchpanel", "transfer", "valves", "reactor", "loading", "scanner"];
 const KINDS = Object.freeze([...SIMPLE_KINDS, ...PLAYABLE_KINDS]);
@@ -22,10 +23,10 @@ const MISSIONS = Object.freeze(
         ["farmacia-2", "farmacia", "Etiquetar las dosis", "labeling"],
         ["central-1", "central", "Restaurar el registro de contagios", "patchpanel"],
         ["central-2", "central", "Descargar el historial clínico", "transfer"],
-        ["planta-1", "planta", "Sintetizar el compuesto", "slider"],
-        ["planta-2", "planta", "Purificar el reactor", "sequence"],
-        ["almacen-1", "almacen", "Cargar el suero en los camiones", "hold"],
-        ["almacen-2", "almacen", "Inventariar el cargamento", "code"],
+        ["planta-1", "planta", "Sintetizar el compuesto", "valves"],
+        ["planta-2", "planta", "Purificar el reactor", "reactor"],
+        ["almacen-1", "almacen", "Cargar el suero en los camiones", "loading"],
+        ["almacen-2", "almacen", "Inventariar el cargamento", "scanner"],
     ].map(([id, zoneId, title, kind]) => Object.freeze({ id, zoneId, stationId: id, title, kind })),
 );
 
