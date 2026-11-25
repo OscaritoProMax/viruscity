@@ -231,7 +231,7 @@ export function buildWorld() {
     // ---------- Banda oeste: casas / callejón / comercios ----------
     [3, 8, 13, 18].forEach(c => house(c, 18));
     building({ kind: 'shop', w: 6, h: 5, wall: '#fde68a', sign: { text: 'PANADERÍA', bg: '#7c2d12', fg: '#fde68a' }, awning: ['#f97316', '#fff7ed'], display: 'bread', seed: 5 }, 3, 21);
-    building({ kind: 'shop', w: 5, h: 5, wall: '#e0f2fe', sign: { text: 'FARMACIA', bg: '#15803d', fg: '#ffffff' }, awning: ['#16a34a', '#f0fdf4'], display: 'pharma', enter: 'farmacia', seed: 6, openText: 'ABIERTO', name: 'Farmacia' }, 9, 21);
+    building({ kind: 'shop', w: 5, h: 5, wall: '#e0f2fe', sign: { text: 'FARMACIA', bg: '#15803d', fg: '#ffffff' }, awning: ['#16a34a', '#f0fdf4'], display: 'pharma', doorW: 2, enter: 'farmacia', seed: 6, openText: 'ABIERTO', name: 'Farmacia' }, 9, 21); // puerta de 2 casillas, como las demás salas
     building({ kind: 'shop', w: 5, h: 5, wall: '#4c1d95', sign: { text: 'DISCOS 80', bg: '#be185d', fg: '#67e8f9' }, neon: true, awning: ['#7c3aed', '#ede9fe'], display: 'music', glassBack: '#2e1065', trim: '#e9d5ff', seed: 7, roofTop: '#475569' }, 14, 21);
     building({ kind: 'shop', w: 4, h: 5, wall: '#1e1b4b', sign: { text: 'ARCADE', bg: '#0f172a', fg: '#4ade80' }, neon: true, awning: ['#0ea5e9', '#e0f2fe'], display: 'arcade', glassBack: '#1e1b4b', trim: '#c7d2fe', seed: 8 }, 19, 21);
 
