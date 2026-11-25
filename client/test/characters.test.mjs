@@ -149,3 +149,71 @@ test("jetpackHeight: despega y aterriza en 0, sube en el medio", () => {
     assert.ok(jetpackHeight(0.5) > 40);
     assert.equal(jetpackHeight(-0.2), 0);
 });
+
+// Simula a un jugador caminando a 200 px/s (servidor a 20 Hz) visto por un cliente a 60 fps cuya red entrega los
+// state a ráfagas cada `burstMs` (como por internet/ngrok). Devuelve la fracción de cuadros en que se dibuja caminando.
+async function walkingShare({ burstMs, mode }) {
+    const { nextServerAnim, nextAnim, adaptiveHoldMs } = await import("../public/js/play/view.js");
+    const step = 1000 / 60;
+    let anim = null;
+    let render = null;
+    let seen = { x: 0, y: 100 };
+    let lastAt = null;
+    let gaps = [];
+    let walking = 0;
+    let frames = 0;
+    for (let t = 0; t <= 4000; t += step) {
+        if (Math.floor(t / burstMs) !== Math.floor((t - step) / burstMs)) {
+            seen = { x: Math.floor(t / 50) * 50 * 0.2, y: 100 };
+            if (lastAt !== null) gaps.push({ at: t, gap: t - lastAt });
+            lastAt = t;
+        }
+        gaps = gaps.filter((g) => t - g.at < 3000);
+        const dt = step / 1000;
+        if (!render) render = { ...seen };
+        render.x += (seen.x - render.x) * (1 - Math.exp(-20 * dt));
+        anim = mode === "antes" ? nextAnim(anim, render.x, render.y, dt) : nextServerAnim(anim, seen.x, seen.y, t, dt, adaptiveHoldMs(gaps.map((g) => g.gap)));
+        if (t > 500) {
+            frames += 1;
+            if (anim.moving) walking += 1;
+        }
+    }
+    return walking / frames;
+}
+
+test("nextServerAnim: con la red a ráfagas sigue caminando (antes se deslizaba en pose quieta: 'levitaba')", async () => {
+    for (const burstMs of [200, 300, 500]) {
+        const before = await walkingShare({ burstMs, mode: "antes" });
+        const after = await walkingShare({ burstMs, mode: "servidor" });
+        assert.ok(before < 0.95, `ráfagas de ${burstMs} ms: con el método anterior se cortaba (${Math.round(before * 100)} %)`);
+        assert.equal(after, 1, `ráfagas de ${burstMs} ms: camina en todos los cuadros`);
+    }
+    assert.equal(await walkingShare({ burstMs: 50, mode: "servidor" }), 1, "en local (sin ráfagas) también");
+});
+
+test("adaptiveHoldMs: 250 ms con red buena, crece con los huecos y no pasa de 700 ms", async () => {
+    const { adaptiveHoldMs, MOVE_HOLD_MS, MAX_MOVE_HOLD_MS } = await import("../public/js/play/view.js");
+    assert.equal(adaptiveHoldMs([]), MOVE_HOLD_MS);
+    assert.equal(adaptiveHoldMs([50, 50, 60]), MOVE_HOLD_MS);
+    assert.equal(adaptiveHoldMs([50, 320, 40]), 400);
+    assert.equal(adaptiveHoldMs([2000]), MAX_MOVE_HOLD_MS);
+    assert.equal(adaptiveHoldMs([Number.NaN, -5]), MOVE_HOLD_MS);
+});
+
+test("nextServerAnim: dirección, retención tras parar, correcciones mínimas y teletransportes", async () => {
+    const { nextServerAnim, MOVE_HOLD_MS } = await import("../public/js/play/view.js");
+    let a = nextServerAnim(null, 100, 100, 0, 0.016);
+    assert.deepEqual([a.moving, a.dir], [false, "DOWN"]);
+    a = nextServerAnim(a, 110, 100, 50, 0.016);
+    assert.deepEqual([a.moving, a.dir], [true, "RIGHT"]);
+    a = nextServerAnim(a, 110, 92, 100, 0.016);
+    assert.equal(a.dir, "UP");
+    // se detiene: sigue "caminando" hasta MOVE_HOLD_MS (absorbe huecos de red) y luego queda quieto mirando arriba
+    assert.equal(nextServerAnim(a, 110, 92, 100 + MOVE_HOLD_MS - 1, 0.016).moving, true);
+    const stopped = nextServerAnim(a, 110, 92, 100 + MOVE_HOLD_MS, 0.016);
+    assert.deepEqual([stopped.moving, stopped.dir, stopped.walkTime], [false, "UP", 0]);
+    // una corrección de medio píxel (positions_sync) no es caminar
+    assert.equal(nextServerAnim(stopped, 110.4, 92, 2000, 0.016).moving, false);
+    // un salto grande (plaza, portal, reconexión) no anima pasos
+    assert.equal(nextServerAnim(stopped, 900, 900, 2100, 0.016).moving, false);
+});

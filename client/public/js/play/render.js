@@ -18,7 +18,7 @@
 // - La cámara sigue al jugador local dentro de su escenario; el zoom es solo visual.
 // - Vecinos y coches son decorado local: cada cliente ve los suyos y no chocan con nadie.
 
-import { computeView, clampZoom, nextAnim } from "./view.js";
+import { computeView, clampZoom, nextServerAnim, adaptiveHoldMs } from "./view.js";
 import { resolveLook, POWER_MS } from "./characters/look.js";
 import { drawCharacter, CHARACTER_HEIGHT, FEET_OFFSET } from "./characters/index.js";
 import { drawPowerEffect, jetpackHeight } from "./characters/powers.js";
@@ -162,6 +162,11 @@ export function createRenderer(canvas, minimap) {
     // y el siguiente state del servidor lo corrige.
     const renderPos = new Map();
     const anims = new Map();
+    // Llegada de los state (para adaptar la animación a una red irregular): último state visto y huecos recientes
+    let lastStateSeen = null;
+    let lastStateAt = 0;
+    let stateGaps = []; // [{ at, gap }] de los últimos GAP_WINDOW_MS
+    const GAP_WINDOW_MS = 3000;
     // Poderes: cuándo vio este cliente que cada jugador activó el suyo (extras.powerOn pasa a true)
     const powers = new Map(); // userId → { on, start }
     const events = []; // activaciones de poderes y cambios de escenario vistos en este cuadro (para el sonido)
@@ -632,6 +637,13 @@ export function createRenderer(canvas, minimap) {
     }
 
     function drawScene(lastState, world, me, nowMs, dt, game) {
+        if (lastState && lastState !== lastStateSeen) {
+            if (lastStateSeen) stateGaps.push({ at: nowMs, gap: nowMs - lastStateAt });
+            lastStateSeen = lastState;
+            lastStateAt = nowMs;
+        }
+        stateGaps = stateGaps.filter((g) => nowMs - g.at < GAP_WINDOW_MS);
+        const holdMs = adaptiveHoldMs(stateGaps.map((g) => g.gap));
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.fillStyle = colors.bg;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -654,7 +666,8 @@ export function createRenderer(canvas, minimap) {
             powerTs.set(p.userId, powerProgress(p.userId, look, nowMs));
             const pos = smoothedPosition(p, dt);
             positions.set(p.userId, pos);
-            anims.set(p.userId, nextAnim(anims.get(p.userId), pos.x, pos.y, dt));
+            // la caminata se decide con la posición del SERVIDOR (no la suavizada): aguanta una red irregular
+            anims.set(p.userId, nextServerAnim(anims.get(p.userId), p.x, p.y, nowMs, dt, holdMs));
         }
         for (const id of [...renderPos.keys()]) {
             if (!positions.has(id)) {
