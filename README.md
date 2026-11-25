@@ -21,6 +21,51 @@ Universidad de Boyacá. Tres procesos independientes que se comunican por red:
 
 ---
 
+# Track 2.1 · Persistencia del estado del juego (track principal)
+
+**Problema que resuelve.** Antes, si se mataban los 3 coordinadores a la vez, al volver todos los jugadores aparecían en un punto al azar y la partida de Viruscity se perdía: el estado vivía solo en memoria.
+
+**Qué hace.**
+1. Cada coordinador guarda, cada `PERSIST_MS` (2 s), en **su propia** base `node:sqlite` (`coordinator/state-coord-a.db`, …):
+   - lo que sabe de cada jugador: posición, extras (color…), **versión** y dueño. Guarda tanto a los jugadores conectados a él como a las copias remotas que recibe por el mesh;
+   - la partida de Viruscity (fase, roster, roles, misiones y cura).
+2. **Al arrancar** recupera esa base. El jugador que vuelve aparece donde estaba (`resumePosition` comprueba que la casilla esté libre) y recupera sus extras. La partida sigue: los miembros del roster tienen la gracia de reconexión de 60 s contada desde el reinicio.
+3. **Al entrar al mesh**, cada coordinador manda a cada peer un `world_snapshot` con lo que sabe, y cada uno lo **reconcilia** con lo suyo.
+4. Si un coordinador recuperó una partida y no es el árbitro, se la ofrece al árbitro (`game_state` con `handover`). El árbitro la adopta solo si es más nueva (`matchId` y luego `rev`, la misma regla del relevo de árbitro).
+
+**Lo difícil, y cómo se resuelve**
+
+| Pregunta | Respuesta |
+|---|---|
+| Dos coordinadores recuperan un estado distinto del mismo jugador: ¿cuál gana? | Gana la **versión más alta**. Solo el **dueño** del jugador (el coordinador donde está conectado) sube la versión, y solo cuando el jugador cambió. Las copias remotas reciben esa versión en `positions_sync` (campo `v`). Si las versiones empatan, gana el `savedAt` mayor y después el `ownerId` mayor, así que todos eligen lo mismo. |
+| ¿Por qué una versión y no la hora? | Las máquinas pueden tener los relojes desfasados. Con *last-writer-wins* por hora, un coordinador con el reloj adelantado ganaría siempre. La versión es un contador lógico: no depende del reloj. |
+| ¿Y si los que sobreviven tienen un estado "más nuevo que la realidad" porque el otro murió hace 5 minutos? | Mientras X estuvo caído, sus jugadores siguieron en otro coordinador Y. Y continuó la versión (parte de la mayor conocida) y la siguió subiendo, así que lo viejo de X **pierde** al reconciliar. Lo que está **vivo** (un jugador conectado ahora) siempre gana sobre cualquier snapshot o base. Y lo que tiene más de `PERSIST_MAX_AGE_MS` (10 min) **no se recupera**: un estado de hace horas no resucita a nadie en un lugar viejo. |
+| ¿Cuánto se puede perder? | Como mucho `PERSIST_MS` (2 s) de movimiento si los 3 mueren a la vez sin cierre ordenado. Con Ctrl+C se guarda una última vez al salir. Cada guardado es una sola transacción. El `UPSERT` no pisa una fila con una versión más nueva. |
+| ¿Se pueden colar datos falsos por el mesh? | Cada entrada del `world_snapshot` se valida: `userId` string, posición dentro del mundo, versión entera, extras ≤ 1 KB (y se vuelven a sanear al usarlos). Solo se acepta un snapshot del peer de esa conexión, con el mismo `CLUSTER_SECRET` del mesh. |
+
+**Demo obligatoria (y prueba automática).** `cd coordinator && npm run smoke:persistencia` levanta auth y los 3 coordinadores con bases temporales y comprueba P1–P8:
+- P2: alice camina hasta x ≈ 400 y elige un color.
+- P4: se **matan** los 3 coordinadores a la vez.
+- P5: se levanta solo coord-c, que nunca fue su dueño, y alice vuelve en x ≈ 400 con su color.
+- P6: vuelven los otros dos y la malla se reconcilia.
+- P7: una partida en juego sobrevive a la muerte de los 3, con el mismo `matchId` y el mismo roster, y alice reconecta con su rol.
+
+A mano: `GET /status` de cada coordinador muestra `persistence` (`enabled`, `lastSavedAt`, `knownPlayers`). Al arrancar, el log dice `Persistencia: state-coord-a.db · N jugadores recuperados · partida M en playing`.
+
+**Configuración.**
+- `STATE_DB_PATH`: vacío equivale a `state-<COORDINATOR_ID>.db`; `off` la desactiva, y así la usan los demás smokes.
+- `PERSIST_MS`: por defecto 2000.
+- `PERSIST_MAX_AGE_MS`: por defecto 600000.
+
+Los archivos `*.db` no se versionan. Código: [coordinator/persist.js](coordinator/persist.js) tiene la reconciliación pura más la base; [coordinator/index.js](coordinator/index.js) tiene la sección "Persistencia"; [coordinator/mesh.js](coordinator/mesh.js) tiene `world_snapshot` y `v` en `positions_sync`. Las pruebas están en `coordinator/test/persist.test.js`.
+
+**Limitaciones.**
+- No es una base replicada: cada coordinador tiene la suya, y la verdad sale de reconciliarlas.
+- Si un coordinador nunca vuelve, lo que solo él sabía se pierde. En la práctica no pasa, porque los demás también guardan las copias remotas.
+- Las misiones en curso de un jugador desconectado se liberan, igual que en un relevo de árbitro.
+
+---
+
 # Viruscity
 
 El juego sobre el sistema de los Talleres 6 y 7 (coordinadores replicados y auth replicados): **la ciudad de Virus City**, con jugadores **sanos** que fabrican la cura con misiones en sus edificios y un **infectado** oculto que contagia a los demás. La partida se juega en el **mapa principal** (el mismo mundo abierto de siempre) y empieza sola cuando hay 3 jugadores conectados. Todo lo decide el servidor; el cliente solo muestra su vista y manda acciones. Rama `viruscity`; las reglas fijas están en CLAUDE.md, sección "VIRUSCITY – METODOLOGÍA".
