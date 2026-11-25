@@ -22,7 +22,7 @@ const { pickMissions, KINDS } = require("./missions.js");
 
 const ACTION_KINDS = new Set(["infect", "mission_start", "mission_complete", "mission_cancel"]);
 const PLAZA_RADIUS = 80; // radio del círculo de aparición al empezar la partida (decisión 3)
-const MIN_ROSTER = 2; // con menos personas en el roster la partida se cancela (decisión 14)
+const MIN_ROSTER = 2; // con menos personas en el roster la partida se cancela (decisión 14), salvo que un abandono la decida
 const MAX_MISSIONS = 12;
 const CURE_FULL = 100;
 
@@ -173,7 +173,28 @@ function endMatch(d, winner, reason, now, cfg) {
     };
     s.resultsEndsAt = now + cfg.RESULTS_MS;
     touch(d);
-    emit(d, "match_ended", { winner });
+    emit(d, "match_ended", { winner, reason });
+}
+
+// Partida decidida por abandono (true si terminó o se canceló). abandoned: roles de quienes acaban de salir.
+function decideByAbandon(d, abandoned, now, cfg) {
+    const s = d.s;
+    const roles = Object.values(s.roster).map((m) => m.role);
+    if (roles.length === 0) {
+        resetToOpenWorld(s);
+        touch(d);
+        emit(d, "match_cancelled", { reason: "not_enough_players" });
+        return true;
+    }
+    if (abandoned.includes("infected") && !roles.includes("infected")) {
+        endMatch(d, "players", "no_infected", now, cfg);
+        return true;
+    }
+    if (abandoned.includes("healthy") && !roles.includes("healthy")) {
+        endMatch(d, "infected", "healthy_left", now, cfg);
+        return true;
+    }
+    return false;
 }
 
 // Condiciones de victoria en orden: cura, sin sanos, sin infectados, tiempo. true si la partida terminó.
@@ -215,14 +236,20 @@ function tickPlaying(d, ctx, online) {
     const { now, cfg } = ctx;
     const s = d.s;
 
-    // Bajas: desconectados por más de RECONNECT_GRACE_MS salen del roster
+    // Bajas: desconectados por más de RECONNECT_GRACE_MS abandonan la partida y salen del roster. El aviso es público
+    // pero sin nombre ni rol (información oculta); el rol solo se revela en los resultados.
+    const abandoned = [];
     for (const userId of Object.keys(s.roster)) {
         const m = s.roster[userId];
         if (!m.connected && now - m.disconnectedAt > cfg.RECONNECT_GRACE_MS) {
+            abandoned.push(m.role);
             delete s.roster[userId];
-            touch(d);
+            emit(d, "player_abandoned");
         }
     }
+    // Un abandono puede decidir la partida según quién queda: si se fue el infectado y solo quedan sanos, ganan los
+    // jugadores; si se fueron los últimos sanos y solo quedan infectados, ganan los infectados. Sin nadie, se cancela.
+    if (abandoned.length > 0 && decideByAbandon(d, abandoned, now, cfg)) return;
 
     // Misiones en curso: expiran a los MISSION_MAX_MS o se liberan si el jugador se aleja
     for (const mission of s.missions) {
@@ -500,7 +527,7 @@ const PHASES = new Set(["open_world", "countdown", "playing", "ended"]);
 const ROLES = new Set(["healthy", "infected"]);
 const MISSION_STATUSES = new Set(["available", "in_progress", "done"]);
 const WINNERS = new Set(["players", "infected"]);
-const REASONS = new Set(["cure", "all_infected", "time", "no_infected"]);
+const REASONS = new Set(["cure", "all_infected", "time", "no_infected", "healthy_left"]);
 const MAX_ROSTER = 200;
 const USER_ID_MAX = 64;
 const USERNAME_REGEX = /^[a-zA-Z0-9_]{3,32}$/;
