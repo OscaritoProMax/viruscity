@@ -74,3 +74,20 @@ test("gracia de reconexión: por tiempo desde que se perdió el coordinador, con
     assert.equal(shouldGiveUp(1000, 2000, 45000, MAX), true, "el límite de intentos sigue como respaldo");
     assert.equal(reconnectNotice("Sin coordinadores disponibles.", 12001), "Sin coordinadores disponibles. Reintentando… si no vuelve en 13 s, se vuelve al inicio.");
 });
+
+test("fallos recientes: si cae a y b no responde, el pedido al directorio excluye a ambos y caducan solos", async () => {
+    const { rememberFailure, forgetFailure, recentFailures, coordinatorPath, FAILED_TTL_MS } = await import("../public/js/play/directory.js");
+    let failed = {};
+    failed = rememberFailure(failed, "coord-a", 1000);
+    failed = rememberFailure(failed, "coord-b", 2000);
+    assert.deepEqual(recentFailures(failed, 2500), ["coord-b", "coord-a"], "los más recientes primero");
+    assert.equal(coordinatorPath(recentFailures(failed, 2500)), "/coordinator?exclude=coord-b,coord-a");
+    // conectar a b lo saca de la lista; a sigue excluido hasta que caduque
+    assert.deepEqual(recentFailures(forgetFailure(failed, "coord-b"), 2500), ["coord-a"]);
+    assert.deepEqual(recentFailures(failed, 1000 + FAILED_TTL_MS), ["coord-b"], "a caducó");
+    assert.deepEqual(Object.keys(rememberFailure(failed, "coord-c", 2000 + FAILED_TTL_MS)), ["coord-c"], "al recordar uno nuevo se limpian los vencidos");
+    assert.equal(coordinatorPath([]), "/coordinator");
+    assert.equal(coordinatorPath(undefined), "/coordinator");
+    assert.deepEqual(rememberFailure(failed, null, 2500), failed, "sin id no agrega nada");
+    assert.equal(coordinatorPath(["a b"]), "/coordinator?exclude=a%20b", "los ids van codificados");
+});

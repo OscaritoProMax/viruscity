@@ -181,3 +181,23 @@ test("validateHeartbeat: rechaza cuerpos e ids, URLs y números inválidos", () 
         assert.equal(typeof r.error, "string", name);
     }
 });
+
+test("pick(exclude): si cae a y b no responde, el cliente los excluye y pasa a c; si todos están excluidos, igual da uno", () => {
+    const { parseExclude, EXCLUDE_MAX } = require("../directory.js");
+    const { dir, beat } = makeDir({ reservationTtlMs: 0 });
+    beat("coord-a", { connectedPlayers: 0 });
+    beat("coord-b", { connectedPlayers: 0 });
+    beat("coord-c", { connectedPlayers: 7 });
+    assert.equal(dir.pick().coordinatorId, "coord-a");
+    assert.equal(dir.pick(["coord-a"]).coordinatorId, "coord-b");
+    assert.equal(dir.pick(["coord-a", "coord-b"]).coordinatorId, "coord-c", "c aunque tenga más carga");
+    assert.equal(dir.pick(["coord-a", "coord-b", "coord-c"]).coordinatorId, "coord-a", "todos excluidos: se ignora exclude");
+    assert.equal(dir.pick("coord-a").coordinatorId, "coord-a", "exclude que no es lista se ignora");
+    // ?exclude= de la petición: ids válidos, sin repetir, como mucho EXCLUDE_MAX
+    assert.deepEqual(parseExclude("coord-a, coord-b,coord-a"), ["coord-a", "coord-b"]);
+    assert.deepEqual(parseExclude("coord-a,../x,,<b>"), ["coord-a"]);
+    assert.deepEqual(parseExclude(undefined), []);
+    assert.deepEqual(parseExclude(["coord-a"]), [], "exclude repetido en la query (lista) se ignora");
+    assert.equal(parseExclude(Array.from({ length: 20 }, (_, i) => `c${i}`).join(",")).length, EXCLUDE_MAX);
+    assert.deepEqual(parseExclude("x".repeat(1000)), []);
+});

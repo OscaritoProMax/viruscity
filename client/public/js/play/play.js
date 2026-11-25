@@ -22,7 +22,7 @@ import { createAudio } from "./audio.js";
 import { createRadio, STATION, estimateOffset } from "./radio.js";
 import { createDialogue } from "./dialogue.js";
 import { sceneAt, WORLD_SCENE } from "./map/scenes.js";
-import { parseCoordinatorResponse, buildWsUrl, isMixedContent, nextDelay, classifyClose, readGraceMs, graceLeftMs, shouldGiveUp, reconnectNotice, CONNECT_TIMEOUT_MS, SERVICES_DOWN_MESSAGE } from "./directory.js";
+import { parseCoordinatorResponse, buildWsUrl, isMixedContent, nextDelay, classifyClose, readGraceMs, graceLeftMs, shouldGiveUp, reconnectNotice, CONNECT_TIMEOUT_MS, SERVICES_DOWN_MESSAGE, rememberFailure, forgetFailure, recentFailures, coordinatorPath } from "./directory.js";
 import { parseServerMessage, parseCity, parseRules, eventText, eventTone, reasonText } from "../vc/view.js";
 import { createClock } from "../vc/clock.js";
 import { createHud } from "../vc/hud.js";
@@ -169,6 +169,8 @@ function startGame(token) {
     // RECONNECT_GRACE_MS sin volver a tener uno, los servicios se dan por caídos y se vuelve al inicio.
     const GRACE_MS = readGraceMs(window.APP_CONFIG?.RECONNECT_GRACE_MS);
     let lostAt = null;
+    // Coordinadores que acaban de fallar: se le pide al directorio que los salte (si cae a y b no responde, va a c)
+    let failed = {};
     let lastReason = "";
     const isOpen = () => ws !== null && ws.readyState === WebSocket.OPEN;
     const sendJson = (msg) => {
@@ -202,7 +204,7 @@ function startGame(token) {
         setConnection("connecting");
         let result;
         try {
-            const res = await window.authFetch("/coordinator", { headers: NGROK_HEADERS, cache: "no-store" });
+            const res = await window.authFetch(coordinatorPath(recentFailures(failed, Date.now())), { headers: NGROK_HEADERS, cache: "no-store" });
             let body = null;
             try {
                 body = await res.json();
@@ -310,6 +312,7 @@ function startGame(token) {
             // Conectado: se reinician los intentos y la gracia, y se muestra el coordinador
             attempts = 0;
             lostAt = null;
+            failed = forgetFailure(failed, coordinatorId); // este sí responde
             showClusterNotice(null);
             setCoordinatorPill(world?.tickRate ?? "?", coordinatorId);
             if (msg.you?.userId) me = { userId: String(msg.you.userId) };
@@ -339,6 +342,7 @@ function startGame(token) {
         if (action === "login-invalid") return leaveToLogin(CLOSE_MESSAGES[4001]);
         if (action === "login-replaced") return leaveToLogin(CLOSE_MESSAGES[4002], false);
         const previous = coordinatorId ?? "el coordinador";
+        failed = rememberFailure(failed, coordinatorId, Date.now()); // el próximo pedido al directorio lo salta
         ws = null;
         window.lastState = null;
         setLastGame(null);

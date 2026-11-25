@@ -5,7 +5,9 @@
 //   heartbeat(value)        → { ok: true } | { ok: false, status: 503, error: "directory_full" }
 //   sweep()                 elimina los coordinadores expirados (y sus reservas)
 //   alive()                 entradas vivas en orden de registro
-//   pick()                  el vivo con menor carga efectiva (o null) y le registra una reserva
+//   pick(exclude?)          el vivo con menor carga efectiva (o null) y le registra una reserva. exclude: ids que el
+//                           cliente acaba de ver fallar (se saltan); si todos los vivos están excluidos, se ignora
+//                           exclude para que el cliente igual tenga a quién intentar (pudo haber vuelto)
 //   peers()                 [{ coordinatorId, peerUrl }] de los vivos
 //   list()                  [{ coordinatorId, publicUrl, peerUrl, connectedPlayers, uptime, ageMs }] de los vivos
 // }
@@ -16,6 +18,14 @@
 // que piden coordinador casi a la vez no caigan todos en el mismo antes de su próximo heartbeat.
 
 const ID_REGEX = /^[A-Za-z0-9_-]{1,32}$/;
+const EXCLUDE_MAX = 10;
+
+// ?exclude=coord-a,coord-b de GET /coordinator → lista de ids válidos sin repetir (los inválidos se ignoran)
+function parseExclude(raw) {
+    if (typeof raw !== "string" || raw.length === 0 || raw.length > EXCLUDE_MAX * 33) return [];
+    const ids = raw.split(",").map((s) => s.trim()).filter((s) => ID_REGEX.test(s));
+    return [...new Set(ids)].slice(0, EXCLUDE_MAX);
+}
 const URL_MAX = 200;
 const URL_PROTOCOLS = new Set(["ws:", "wss:"]);
 
@@ -100,9 +110,12 @@ function createDirectory({ ttlMs, reservationTtlMs, maxCoordinators = 50, now = 
         return [...entries.values()];
     }
 
-    function pick() {
-        const list = alive();
-        if (list.length === 0) return null;
+    function pick(exclude = []) {
+        const all = alive();
+        if (all.length === 0) return null;
+        const skip = new Set(Array.isArray(exclude) ? exclude : []);
+        const candidates = all.filter((e) => !skip.has(e.coordinatorId));
+        const list = candidates.length > 0 ? candidates : all;
         const t = now();
         let best = null;
         let bestLoad = Infinity;
@@ -135,4 +148,4 @@ function createDirectory({ ttlMs, reservationTtlMs, maxCoordinators = 50, now = 
     return { validateHeartbeat, heartbeat, sweep, alive, pick, peers, list, ttlMs, reservationTtlMs };
 }
 
-module.exports = { createDirectory, validateHeartbeat };
+module.exports = { createDirectory, validateHeartbeat, parseExclude, EXCLUDE_MAX };

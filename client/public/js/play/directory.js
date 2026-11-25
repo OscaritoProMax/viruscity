@@ -38,6 +38,39 @@ export function reconnectNotice(reason, leftMs) {
 const WS_URL = /^wss?:\/\//i;
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
+// ---------- Coordinadores que acaban de fallar ----------
+// Si cae coord-a y el directorio todavía lista a coord-b aunque no responda (su TTL de 6 s no venció, o su túnel
+// cayó), el cliente recuerda los que le fallaron y pide GET /coordinator?exclude=coord-a,coord-b: así pasa a
+// coord-c sin gastar la gracia. Cada fallo se recuerda FAILED_TTL_MS (más que el TTL del directorio).
+export const FAILED_TTL_MS = 15000;
+const FAILED_MAX = 10;
+
+// failed: { [coordinatorId]: instante del fallo }. Devuelve un objeto NUEVO (sin los vencidos)
+export function rememberFailure(failed, id, now) {
+    const out = {};
+    for (const [k, at] of Object.entries(failed ?? {})) if (now - at < FAILED_TTL_MS) out[k] = at;
+    if (typeof id === "string" && id) out[id] = now;
+    return out;
+}
+export function forgetFailure(failed, id) {
+    const out = { ...(failed ?? {}) };
+    delete out[id];
+    return out;
+}
+// Ids que fallaron hace menos de FAILED_TTL_MS (los más recientes primero, como mucho FAILED_MAX)
+export function recentFailures(failed, now) {
+    return Object.entries(failed ?? {})
+        .filter(([, at]) => now - at < FAILED_TTL_MS)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, FAILED_MAX)
+        .map(([id]) => id);
+}
+// Ruta para pedir coordinador al directorio, saltando los que fallaron
+export function coordinatorPath(excludeIds) {
+    const ids = (excludeIds ?? []).filter((id) => typeof id === "string" && id);
+    return ids.length ? `/coordinator?exclude=${ids.map(encodeURIComponent).join(",")}` : "/coordinator";
+}
+
 // Respuesta de GET /coordinator → { kind: "ok", coordinatorId, publicUrl } | { kind: "none" } | { kind: "error" }
 export function parseCoordinatorResponse(status, body) {
     if (status === 200 && body && typeof body === "object") {

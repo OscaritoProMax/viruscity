@@ -281,4 +281,8 @@ Núcleo de elección puro y nodo de replicación con reloj falso y transporte en
 ### Despliegue
 - Entrega con 7 túneles de ngrok (uno por servicio, sin proxy). tunel/configurar.js escribe solo AUTH_URLS (client), PUBLIC_URL y AUTH_NODES (auth) y PUBLIC_URL wss (coordinadores); PEER_URL y los AUTH_URLS de los coordinadores siguen en localhost. tunel/tunel.env, tunel/ngrok-*.yml y tunel/abrir-tuneles.cmd no se versionan; los authtoken nunca se imprimen.
 - Lanzadores en la raíz: iniciar-servicios.cmd (pruebas locales: configurar.js --local + scripts/abrir-servicios.cmd) e iniciar-ngrok.cmd (pruebas por ngrok: configurar.js --exigir-tokens + servicios + tunel/abrir-tuneles.cmd). abrir-servicios.cmd no abre nada si los puertos ya están ocupados. Pausas con ping (timeout.exe falla sin consola).
+
+### Reconexión del cliente
+- Gracia por tiempo: sin coordinador durante RECONNECT_GRACE_MS (client/.env, 45000) el juego y el espectador vuelven al login con "Se cayeron los servicios del juego"; un WebSocket que no abre en 8 s cuenta como fallo.
+- Failover entre coordinadores: el cliente recuerda los que le fallaron (FAILED_TTL_MS 15 s) y pide GET /coordinator?exclude=id,id (parseExclude en auth-service/directory.js: ids válidos, sin repetir, máx. 10). pick(exclude) los salta; si todos los vivos están excluidos, ignora exclude.
 - gateway/ queda como alternativa documentada (una sola cuenta de ngrok); no se usa en la entrega.

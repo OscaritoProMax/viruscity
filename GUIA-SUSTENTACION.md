@@ -78,7 +78,7 @@ Di primero en una frase qué demuestras y luego hazlo.
 ## C. Las 5 piezas (1 minuto cada una, ensayadas)
 
 1. **Auth replicado (Taller 7):** elección estilo Raft (término, voto persistido antes de votar, log al día, *jitter*). Escritura: el líder pide la mayoría ANTES de aplicar; si no la consigue, `write_abort` y deshace. Puerta de lectura: nunca emite un token con la base atrasada. Es CP.
-2. **Directorio y reconexión (Taller 6):** estado blando con TTL de 6 s y reservas de 3 s para repartir ráfagas. Heartbeat a los 3 auth. El cliente pide **otro** coordinador cuando se cae el suyo (no hay sticky sessions).
+2. **Directorio y reconexión (Taller 6):** estado blando con TTL de 6 s y reservas de 3 s para repartir ráfagas. Heartbeat a los 3 auth. El cliente pide **otro** coordinador cuando se cae el suyo (no hay sticky sessions). Además recuerda los que le fallaron y los excluye (`/coordinator?exclude=coord-a,coord-b`): si cae a y b no responde, pasa a c en unos 3 s, sin esperar a que el TTL los saque del directorio.
 3. **Malla de coordinadores:** una conexión por par (la abre el id menor). Cada jugador tiene un dueño y solo el dueño habla de él. Al conectar se hace un resync, y cada 1 s `positions_sync` por la deriva de `dt`. Sesión duplicada: gana la más nueva (`connectedAtMs`, luego el id).
 4. **Partida distribuida:** reductor puro (`match.js`) con reloj y azar inyectados. Árbitro único que replica `game_state` con `rev` y `eid`. Handover cuando aparece un id menor; relevo cuando cae.
 5. **Tracks:**
