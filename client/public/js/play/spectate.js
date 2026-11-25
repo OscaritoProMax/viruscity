@@ -16,7 +16,7 @@ import { gameMinutes, formatClock, isNight } from "./map/clock.js";
 import { ZOOM_STEP, clampZoom } from "./view.js";
 import { WORLD_SCENE } from "./map/scenes.js";
 import { MOVEMENT_CODES, computeIntent } from "./intent.js";
-import { parseCoordinatorResponse, buildSpectateUrl, isMixedContent, nextDelay } from "./directory.js";
+import { parseCoordinatorResponse, buildSpectateUrl, isMixedContent, nextDelay, readGraceMs, graceLeftMs, shouldGiveUp, reconnectNotice, CONNECT_TIMEOUT_MS, SERVICES_DOWN_MESSAGE } from "./directory.js";
 import { nextFollow, panCamera, followLabel } from "./spectator.js";
 import { parseServerMessage, parseCity, parseRules, eventText, eventTone } from "../vc/view.js";
 import { createClock } from "../vc/clock.js";
@@ -134,6 +134,11 @@ function startSpectator() {
     let coordinatorId = null;
     let attempts = 0;
     let retryTimer = null;
+    let leaving = false;
+    // Tiempo de gracia igual que en el juego: sin coordinador durante RECONNECT_GRACE_MS se vuelve al inicio
+    const GRACE_MS = readGraceMs(window.APP_CONFIG?.RECONNECT_GRACE_MS);
+    let lostAt = null;
+    let lastReason = "";
     const isOpen = () => ws !== null && ws.readyState === WebSocket.OPEN;
 
     function showClusterNotice(text) {
@@ -146,14 +151,40 @@ function startSpectator() {
     setCoordinatorPill(null, null);
     setConnection("connecting");
 
-    function retry(text) {
+    // Al inicio (login) con el aviso de que los servicios cayeron
+    function leaveToStart() {
+        if (leaving) return;
+        leaving = true;
+        clearTimeout(retryTimer);
+        clearInterval(graceWatch);
+        try {
+            sessionStorage.setItem("sessionMessage", SERVICES_DOWN_MESSAGE);
+        } catch {
+            // sin almacenamiento: el login se abre sin aviso
+        }
+        window.location.href = "login.html";
+    }
+
+    function retry(reason) {
         attempts += 1;
-        showClusterNotice(text(attempts));
+        if (lostAt === null) lostAt = Date.now();
+        lastReason = reason;
+        if (shouldGiveUp(lostAt, Date.now(), GRACE_MS, attempts)) return leaveToStart();
+        showClusterNotice(reconnectNotice(reason, graceLeftMs(lostAt, Date.now(), GRACE_MS)));
         clearTimeout(retryTimer);
         retryTimer = setTimeout(conectar, nextDelay(attempts));
     }
 
+    // Cuenta atrás cada segundo; vuelve al inicio aunque un intento siga colgado
+    const graceWatch = setInterval(() => {
+        if (leaving || lostAt === null) return;
+        const left = graceLeftMs(lostAt, Date.now(), GRACE_MS);
+        if (left === 0) leaveToStart();
+        else showClusterNotice(reconnectNotice(lastReason, left));
+    }, 1000);
+
     async function conectar() {
+        if (leaving) return;
         setConnection("connecting");
         let result;
         try {
@@ -170,7 +201,7 @@ function startSpectator() {
         }
         if (result.kind !== "ok") {
             setConnection("disconnected");
-            retry(() => (result.kind === "none" ? "Sin coordinadores disponibles. Reintentando…" : "No se pudo contactar al servicio de autenticación. Reintentando…"));
+            retry(result.kind === "none" ? "Sin coordinadores disponibles." : "No se pudo contactar al servicio de autenticación.");
             return;
         }
         const url = buildSpectateUrl(result.publicUrl);
@@ -186,7 +217,11 @@ function startSpectator() {
         const socket = new WebSocket(url);
         ws = socket;
         coordinatorId = assignedId;
+        const connectTimer = setTimeout(() => {
+            if (ws === socket && socket.readyState === WebSocket.CONNECTING) socket.close();
+        }, CONNECT_TIMEOUT_MS);
         socket.onopen = () => {
+            clearTimeout(connectTimer);
             if (ws === socket) setConnection("connected");
         };
         socket.onmessage = (event) => {
@@ -201,7 +236,7 @@ function startSpectator() {
             hud.reset();
             setCoordinatorPill(null, null);
             const previous = coordinatorId ?? "el coordinador";
-            retry((n) => `${CLOSE_TEXT[event.code] ?? `Conexión perdida con ${previous}.`} Buscando otro coordinador… (intento ${n})`);
+            retry(`${CLOSE_TEXT[event.code] ?? `Conexión perdida con ${previous}.`} Buscando otro coordinador.`);
         };
     }
 
@@ -232,6 +267,7 @@ function startSpectator() {
                 welcomeAt = performance.now();
             }
             attempts = 0;
+            lostAt = null;
             showClusterNotice(null);
             setCoordinatorPill(world?.tickRate ?? "?", coordinatorId);
             if (followId === null && !freePos) goFree();

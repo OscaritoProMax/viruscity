@@ -54,3 +54,23 @@ test("classifyClose: logout, 4001, 4002 y cualquier otro cierre", () => {
     assert.equal(classifyClose(4002, false), "login-replaced");
     for (const code of [1000, 1001, 1006, 1011, 4010, undefined]) assert.equal(classifyClose(code, false), "reconnect", String(code));
 });
+
+test("gracia de reconexión: por tiempo desde que se perdió el coordinador, con cuenta atrás", async () => {
+    const { readGraceMs, graceLeftMs, shouldGiveUp, reconnectNotice, DEFAULT_RECONNECT_GRACE_MS, MIN_RECONNECT_GRACE_MS, MAX_ATTEMPTS: MAX } = await import("../public/js/play/directory.js");
+    // configuración: entero >= mínimo, si no el valor por defecto
+    assert.equal(readGraceMs(30000), 30000);
+    assert.equal(readGraceMs(undefined), DEFAULT_RECONNECT_GRACE_MS);
+    assert.equal(readGraceMs(MIN_RECONNECT_GRACE_MS - 1), DEFAULT_RECONNECT_GRACE_MS);
+    assert.equal(readGraceMs("abc"), DEFAULT_RECONNECT_GRACE_MS);
+    assert.equal(readGraceMs(1.5e4 + 0.5), DEFAULT_RECONNECT_GRACE_MS);
+    // conectado: toda la gracia; perdido: baja con el tiempo y nunca es negativa
+    assert.equal(graceLeftMs(null, 99999, 45000), 45000);
+    assert.equal(graceLeftMs(1000, 11000, 45000), 35000);
+    assert.equal(graceLeftMs(1000, 999999, 45000), 0);
+    // se rinde al acabarse la gracia, aunque haya hecho pocos intentos (p. ej. un auth caído tarda 12 s por intento)
+    assert.equal(shouldGiveUp(1000, 1000 + 44999, 45000, 3), false);
+    assert.equal(shouldGiveUp(1000, 1000 + 45000, 45000, 3), true);
+    assert.equal(shouldGiveUp(null, 1e9, 45000, 0), false, "conectado nunca se rinde");
+    assert.equal(shouldGiveUp(1000, 2000, 45000, MAX), true, "el límite de intentos sigue como respaldo");
+    assert.equal(reconnectNotice("Sin coordinadores disponibles.", 12001), "Sin coordinadores disponibles. Reintentando… si no vuelve en 13 s, se vuelve al inicio.");
+});
