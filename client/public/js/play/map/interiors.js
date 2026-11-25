@@ -1,4 +1,5 @@
-// Interiores (Burger Neón y Supermercado): muebles, casillas sólidas, vecinos, carteles y salida.
+// Interiores (Burger Neón, Supermercado y las 6 salas de las misiones de Viruscity, ver rooms.js): muebles,
+// casillas sólidas, vecinos, carteles y salida.
 // Es PURO (sin canvas): el servidor recibe sus casillas sólidas y sus puertas a través de map-data.js.
 // Cada interior está en la zona de interiores del mundo (debajo de la ciudad), en PLACEMENT; las
 // coordenadas de cada escena son relativas a su esquina (ox, oy).
@@ -6,10 +7,12 @@
 // Dibujo en canvas sin dependencias externas.
 
 import { TILE_SIZE } from "./constants.js";
+import { ROOM_PLACEMENT, buildRoomScenes } from "./rooms.js";
 
 export const SCENES = {};
 // Esquina de cada interior en casillas del mundo (filas 62+; la fila 60-61 es pared)
-export const PLACEMENT = { burger: { c0: 2, r0: 62 }, market: { c0: 22, r0: 62 } };
+// Las salas de las misiones van en el bloque libre de las columnas 44-79 (rooms.js)
+export const PLACEMENT = { burger: { c0: 2, r0: 62 }, market: { c0: 22, r0: 62 }, ...ROOM_PLACEMENT };
 
 function newScene(id, name, cols, rows) {
     const { c0, r0 } = PLACEMENT[id];
@@ -96,7 +99,7 @@ let built = false;
 export function buildScenes() {
     if (built) return SCENES;
     built = true;
-    buildBurger(); buildMarket();
+    buildBurger(); buildMarket(); buildRoomScenes(newScene, SCENES);
     Object.values(SCENES).forEach(sc => sc.npcs.forEach(n => {
         const d = { dir: 'DOWN', mode: 'walk', pi: 0, wait: 0, wt: 0, moving: false, ph: Math.random() * 6, speed: 0.85 };
         for (const k in d) if (n[k] === undefined) n[k] = d[k];

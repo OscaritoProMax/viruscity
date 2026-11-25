@@ -26,6 +26,7 @@ import { WORLD_WIDTH, WORLD_HEIGHT, TILE_SIZE, MAP_COLS, MAP_ROWS, CITY_WIDTH, C
 import { buildWorld, worldObjs, buildingsList, ground, idx, gAt, G, worldInteractables, doors } from "./map/layout.js";
 import { buildScenes } from "./map/interiors.js";
 import { buildInteriorSprites, paintBurgerBase, paintMarketBase } from "./map/interior-art.js";
+import { buildRoomSprites, paintRoomBase } from "./map/room-art.js";
 import { sceneAt, sceneRect, WORLD_SCENE } from "./map/scenes.js";
 import { SPRITES, buildAllPropSprites } from "./map/props.js";
 import { buildBuildingSprite } from "./map/buildings.js";
@@ -88,6 +89,7 @@ function ensureCity() {
     if (city) return city;
     buildAllPropSprites();
     buildInteriorSprites();
+    buildRoomSprites();
     buildWorld();
     for (const o of worldObjs) o.sp = o.kind === "building" ? buildBuildingSprite(o.spec) : SPRITES[o.sprite];
     const objs = worldObjs.filter((o) => o.sp); // un sprite que no exista no rompe el dibujo
@@ -124,7 +126,7 @@ function ensureCity() {
     const scenes = buildScenes();
     const painters = { burger: paintBurgerBase, market: paintMarketBase };
     for (const sc of Object.values(scenes)) {
-        sc.base = painters[sc.id]();
+        sc.base = painters[sc.id] ? painters[sc.id]() : paintRoomBase(sc); // salas de las misiones (rooms.js)
         for (const o of sc.objs) o.sp = SPRITES[o.sprite];
         sc.objs = sc.objs.filter((o) => o.sp);
     }
@@ -531,7 +533,7 @@ export function createRenderer(canvas, minimap) {
     }
 
     // ---------- Interiores ----------
-    function drawInterior(sc, nowMs, dt, players, positions, looks, powerTs, radius, meId) {
+    function drawInterior(sc, nowMs, dt, players, positions, looks, powerTs, radius, meId, onFloor = () => {}) {
         ctx.drawImage(sc.base, sc.ox, sc.oy);
         // Charcos de luz cálida sobre el suelo (debajo de muebles y personas)
         ctx.save();
@@ -540,6 +542,7 @@ export function createRenderer(canvas, minimap) {
         for (const l of sc.lights) glow(ctx, sc.ox + l.x, sc.oy + l.y, l.r, l.c, la);
         ctx.restore();
         drawSceneExit(sc, nowMs); // en el suelo: muebles y personas pasan por encima
+        onFloor(); // Viruscity: anillos de las estaciones de misión de esta sala
 
         const f = Math.min(dt, 0.1) * 60;
         for (const n of sc.npcs) updateNPC(n, f, talkingTo);
@@ -690,7 +693,7 @@ export function createRenderer(canvas, minimap) {
             for (const n of worldNPCs) updateNPC(n, f, talkingTo);
             updateCars(f, mePos?.x ?? -9999, (mePos?.y ?? -9999) + radius - FEET_OFFSET);
             // Ciudad de la partida sobre el suelo y debajo de edificios y personas
-            drawCity(ctx, matchCity, game, me, nowMs, reducedMotion.matches, { zoneAlpha: ZONE_ALPHA_MAP });
+            drawCity(ctx, matchCity, game, me, nowMs, reducedMotion.matches, { zoneAlpha: ZONE_ALPHA_MAP, area: { x: 0, y: 0, w: CITY_WIDTH, h: CITY_HEIGHT } });
         } else if (!withMap) {
             drawPlainWorld(world);
             drawCity(ctx, matchCity, game, me, nowMs, reducedMotion.matches);
@@ -708,7 +711,10 @@ export function createRenderer(canvas, minimap) {
 
         if (withMap && !inCity) {
             const sc = city.scenes[myScene];
-            drawInterior(sc, nowMs, dt, visible, positions, looks, powerTs, radius, meId);
+            const area = sceneRect(myScene);
+            drawInterior(sc, nowMs, dt, visible, positions, looks, powerTs, radius, meId, () =>
+                drawCity(ctx, matchCity, game, me, nowMs, reducedMotion.matches, { stationsOnly: true, area: { x: area.x, y: area.y, w: area.width, h: area.height } }),
+            );
             for (const p of visible) drawPlayerPower(p, positions.get(p.userId), radius, looks.get(p.userId), powerTs.get(p.userId));
             for (const p of visible) drawLabel(p, positions.get(p.userId), radius, world);
             currentTarget = talkingTo ? null : findTarget(myScene, mePos);

@@ -6,6 +6,8 @@
 // ringLook(status, role, reduceMotion) → cómo se ve una estación (lógica pura, probada)
 // drawCity(ctx, city, game, me, nowMs, reduceMotion, opts?)
 //   opts.zoneAlpha: opacidad del relleno de las zonas (más baja sobre el mapa de Virus City)
+//   opts.area: {x,y,w,h} → solo se dibujan las estaciones dentro de ese rectángulo (la escena visible)
+//   opts.stationsOnly: true → sin zonas ni plaza (dentro de una sala de misiones)
 // Todo el texto va con fillText.
 
 const PLAZA_RING = 110; // radio del círculo de la plaza (los jugadores aparecen a 80 del centro)
@@ -127,7 +129,13 @@ export function drawCity(ctx, city, game, me, nowMs, reduceMotion, opts = {}) {
     if (!city) return;
     const c = colors();
     const role = game?.you?.role ?? me?.role ?? null;
-    drawZones(ctx, city, c, opts.zoneAlpha ?? 0.85);
-    drawPlaza(ctx, city.plaza, c);
-    for (const mark of stationMarks(city, game)) drawStation(ctx, mark, ringLook(mark.status, role, reduceMotion), c, nowMs);
+    if (!opts.stationsOnly) {
+        drawZones(ctx, city, c, opts.zoneAlpha ?? 0.85);
+        drawPlaza(ctx, city.plaza, c);
+    }
+    const a = opts.area;
+    for (const mark of stationMarks(city, game)) {
+        if (a && !(mark.x >= a.x && mark.x < a.x + a.w && mark.y >= a.y && mark.y < a.y + a.h)) continue;
+        drawStation(ctx, mark, ringLook(mark.status, role, reduceMotion), c, nowMs);
+    }
 }
