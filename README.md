@@ -1,23 +1,139 @@
-# Viruscity · Sistemas Distribuidos · Proyecto final (Partes I, II, III y IV + el juego)
+# Viruscity · Sistemas Distribuidos · Proyecto final
 
-Universidad de Boyacá. Tres procesos independientes que se comunican por red:
+Universidad de Boyacá. Viruscity es un juego multijugador en vivo sobre un sistema distribuido sin servidores centrales únicos:
+- **3 auth-services replicados**, con un líder elegido y escrituras por mayoría.
+- **3 coordinadores de juego** autoritativos, en malla.
+- **Un cliente web.**
 
-- **auth-service** (Taller 7: tres réplicas auth-a/b/c en 4001-4003 con mesh en 4101-4103; un nodo único sigue usando 4000): registro e inicio de sesión con usuario/contraseña **y con Google**. Una sola tabla `users` en SQLite (`node:sqlite`) y JWT HS256.
-- **auth-service** además es **directory service** (Taller 6): los coordinadores le avisan que están vivos y el cliente le pregunta a cuál conectarse.
-- **coordinator** (tres instancias: coord-a 5001, coord-b 5002 y coord-c 5003, más los puertos del mesh 5101–5103): **servidores autoritativos** del juego en vivo. Reciben a los jugadores por WebSocket, aplican sus *intenciones* en un game loop a 20 Hz (con choques contra el mapa de Virus City) y se replican entre sí por un mesh WebSocket para que todos tengan el mismo mundo.
-- **client** (puerto 3000): páginas HTML + JS plano servidas con Express. `login.html` (con botón de Google) y `play.html` (el juego sobre el mapa de la ciudad, con selector de personaje).
+En el juego, los sanos fabrican la cura haciendo misiones (minijuegos) dentro de los edificios de la ciudad, mientras un infectado oculto los contagia. Un árbitro único, replicado entre los coordinadores, decide la partida. El proyecto integra los Talleres 4 a 7 y dos tracks del examen final: **persistencia (2.1)** y **modo espectador (2.5)**.
 
-**Parte I (Taller 4)** fue la identidad: login con JWT y lobby en vivo. **Parte II (Taller 5)** agrega el juego en vivo con el servidor como autoridad y el login con Google. **Parte III (Taller 6)** reparte el juego entre varios coordinadores intercambiables con el mismo estado. **Parte IV (Taller 7)** replica el auth-service en tres nodos con un líder elegido y failover en coordinadores y cliente. Sobre ese sistema corre **el juego de Viruscity**: sanos que fabrican la cura con misiones contra un infectado oculto, con un árbitro único replicado entre los coordinadores. Este README empieza por Viruscity, sigue con el Taller 7 (auth replicados) y el Taller 6 (el clúster de coordinadores); el Taller 5 sigue siendo válido para el juego, la base de datos y Google, y al final hay un resumen del Taller 4.
+## Resumen en 10 minutos
 
-**Contenido**
+### 1. Qué hay y cómo se habla
+
+```
+                         navegador (client · 3000)
+          login/registro/Google │ GET /coordinator         │ WebSocket /connect?token=JWT
+         (failover por AUTH_URLS)│                          │ (o /spectate sin token)
+                                ▼                           ▼
+   ┌──────── auth-a 4001 ── auth-b 4002 ── auth-c 4003 ┐   coord-a 5001 ── coord-b 5002 ── coord-c 5003
+   │  mesh 4101-4103: elección estilo Raft, oplog,     │   mesh 5101-5103: jugadores replicados (dueño),
+   │  escrituras por MAYORÍA; users-x.db (node:sqlite) │   árbitro de la partida (id menor), world_snapshot
+   │  + directorio de coordinadores (estado blando)    │◄── heartbeat cada 2 s a los 3 auth ─┘  state-x.db
+   └───────────────────────────────────────────────────┘
+```
+
+| Pieza | Responsabilidad | Código |
+|---|---|---|
+| **auth-service** ×3 | Usuarios (contraseña bcrypt y Google) y JWT HS256. Replicación con líder y mayoría. También es el directorio de coordinadores vivos. | `auth-service/` |
+| **coordinator** ×3 | Servidor autoritativo: aplica *intenciones* a 20 Hz con choques contra el mapa. Malla entre coordinadores, partida de Viruscity, persistencia y espectadores. | `coordinator/` |
+| **client** | HTML y JS plano: `login.html`, `play.html` (juego), `spectate.html` (espectador) y `cluster.html` (estado del clúster). | `client/` |
+
+Dependencias de producción: `express`, `ws`, `jsonwebtoken`, `bcryptjs`, `cors`, `dotenv` y `google-auth-library`, más `node:sqlite` del propio Node. **No hay** Redis, Kafka ni librerías de consenso: la elección, la replicación y la reconciliación están escritas a mano.
+
+### 2. Cómo levantar todo
+
+**Requisitos:** Node.js ≥ 22.13 (probado en 24).
+
+**Local (7 servicios):**
+1. Instalar: `cd auth-service && npm ci`, y lo mismo en `coordinator` y `client`.
+2. Copiar cada `.example` sin el sufijo:
+   - `auth-service/.env.auth-a` (b, c);
+   - `coordinator/.env.coord-a` (b, c);
+   - `client/.env`.
+
+   Poner el **mismo** `JWT_SECRET` y `CLUSTER_SECRET` en los 6 servidores y el mismo `GOOGLE_CLIENT_ID` en los auth y el client. Para generar un secreto: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+3. En Windows: `iniciar-servicios.cmd` abre los 7 servicios en sus ventanas (primero los auth). A mano, en 7 terminales: `npm run start:a|b|c` en `auth-service` y en `coordinator`, y `npm start` en `client`.
+4. Abrir `http://localhost:3000`. Para ver el clúster: `http://localhost:3000/cluster.html`. Para mirar sin cuenta: `http://localhost:3000/spectate.html`.
+
+**Por túnel (7 cuentas de ngrok, una por servicio, sin proxy delante):**
+
+Cada cuenta gratuita de ngrok tiene **un** dominio fijo. Con 7 cuentas, cada servicio tiene su propia URL pública y el sistema funciona igual que en local: el navegador habla directo con cada auth y con cada coordinador.
+
+1. Copiar `tunel/tunel.example.env` como `tunel/tunel.env` (no se versiona). Poner los 7 dominios (`https://…ngrok-free.app`) y el authtoken de la cuenta dueña de cada uno.
+2. Ejecutar `node tunel/configurar.js`. Escribe **solo** estas claves (con `--simular` muestra qué cambiaría sin escribir):
+
+   | Archivo | Clave | Valor |
+   |---|---|---|
+   | `client/.env` | `AUTH_URLS` | `https://<auth-a>,https://<auth-b>,https://<auth-c>` |
+   | `auth-service/.env.auth-a` (b, c) | `PUBLIC_URL` | `https://<auth-a>` (b, c). Debe ser **igual** a su entrada en `AUTH_URLS`: el cliente solo sigue un `leaderUrl` que esté en su lista |
+   | los 3 `.env.auth-*` | `AUTH_NODES` | `auth-a\|https://<auth-a>\|ws://localhost:4101,auth-b\|https://<auth-b>\|ws://localhost:4102,auth-c\|https://<auth-c>\|ws://localhost:4103` |
+   | `coordinator/.env.coord-a` (b, c) | `PUBLIC_URL` | `wss://<coord-a>` (b, c): es la URL que el directorio entrega al navegador |
+   | **sin cambios** | `PEER_URL` de todos y `AUTH_URLS` de los coordinadores | siguen en `localhost`: el mesh y los heartbeats no salen de la máquina |
+
+   Además genera `tunel/ngrok-<servicio>.yml` (authtoken y un puerto de inspector distinto para cada agente) y `tunel/abrir-tuneles.cmd`, e imprime los 7 comandos, por ejemplo `ngrok http 4001 --url https://<auth-a> --config tunel/ngrok-auth-a.yml`.
+3. Reiniciar los 7 servicios y abrir los túneles con `tunel\abrir-tuneles.cmd` (o con los 7 comandos).
+4. **Google:** en Google Cloud → Credenciales → el ID de cliente OAuth → *Orígenes autorizados de JavaScript*, agregar `https://<client>`. Basta una vez: el dominio fijo no cambia.
+5. Si ngrok muestra su página de aviso:
+   - en el client se acepta una vez;
+   - las llamadas al auth ya mandan `ngrok-skip-browser-warning`;
+   - si un WebSocket de un coordinador no abre, abrir una vez `https://<coord-x>/health` en ese navegador y aceptar el aviso.
+6. Para volver a jugar en local: `node tunel/configurar.js --local`.
+
+> El `gateway/` del Taller 7 (un solo túnel con proxy por prefijo) queda en el repositorio como alternativa documentada, pero **no se usa en la entrega**: con 7 túneles no hace falta y así se cumple "sin proxy reverso delante del sistema".
+
+### 3. Restricciones del examen
+
+| Restricción | Cómo se cumple |
+|---|---|
+| Servidor autoritativo | El cliente solo manda intenciones (`dir` con el signo de cada eje) y extras validados. El coordinador mueve, choca contra el mapa y decide la partida. Un `intent` con posición o con `dir: {x: 50}` no cambia nada. |
+| Sin Redis, Kafka ni librerías de consenso | La elección estilo Raft, el oplog, la mayoría, el árbitro y la reconciliación están escritos con `ws`, `express` y `node:sqlite`. |
+| JWT con secreto compartido, sin sesiones en el auth | Los coordinadores verifican el JWT localmente: el juego sigue aunque caigan los auth. |
+| Sin proxy reverso | 7 túneles directos, uno por servicio (ver arriba). |
+| El cliente conoce la lista de servidores | `AUTH_URLS` en el cliente (con failover). Los coordinadores los da el directorio, que solo devuelve los vivos. |
+| Sin sticky sessions | Cualquier coordinador sirve a cualquier jugador, porque todos tienen el mundo completo. Al reconectar se pide **otro** coordinador al directorio. |
+
+### 4. Decisiones clave
+
+| Decisión | Por qué |
+|---|---|
+| Auth con **un líder y escrituras por mayoría** (2 de 3) | Consistencia antes que disponibilidad (CP): nunca se emite un token con una base atrasada (puerta de lectura). Con 2 auth caídos el login falla (503), pero el juego sigue. |
+| Directorio como **estado blando** (TTL de 6 s) en los 3 auth | Los coordinadores no se desregistran: caducan. El heartbeat va a los 3 auth, así que el directorio responde aunque no haya líder. |
+| Malla completa de coordinadores; **solo el dueño** habla de su jugador | No hay bucles ni conflictos de escritura. Si la misma cuenta está en dos coordinadores, gana la sesión más nueva (4002 a la otra) con desempate determinista por id. |
+| **Árbitro único** de la partida (el coordinador de id menor) | Un solo orden de los eventos y nada de conflictos de roles. Replica `game_state` cada 250 ms. Si cae, el siguiente asume con el último estado (`matchId`, `rev`). |
+| Persistencia con **versión por jugador** (track 2.1) | Un contador lógico que sube solo el dueño: el reloj de cada máquina no decide quién gana. |
+| Espectadores **fuera del juego** (track 2.5) | No se simulan ni se replican ni cuentan como carga. Están limitados por coordinador y reciben 10 Hz con contrapresión. |
+
+### 5. Qué pasa si cae X
+
+| Falla | Qué se ve | Por qué |
+|---|---|---|
+| El líder de auth | Unos segundos sin registro ni login (como mucho ~8 s); luego hay un líder nuevo con el término mayor. El juego no se entera. | Elección con *timeout* más *jitter*. El cliente reintenta en otro auth (failover de 4 s por intento, 12 s en total). |
+| 2 de los 3 auth | Login y registro dan 503 (`no_quorum` / `no_leader`). Los jugadores conectados siguen jugando. | Sin mayoría no hay escrituras ni lecturas seguras. El JWT se verifica sin el auth. |
+| Un coordinador | Sus jugadores reconectan a otro en 1–3 s y aparecen donde estaban. | Directorio con TTL, reintento del cliente a otro coordinador y posiciones replicadas (`positions_sync`). |
+| El árbitro a mitad de partida | La partida sigue con el siguiente id. Una misión en curso puede tener que repetirse. | Relevo con el último `game_state` replicado. |
+| Los 3 coordinadores a la vez | Al volver, cada jugador está donde estaba y la partida continúa. | Track 2.1. |
+| Un túnel de ngrok | Ese servicio queda inaccesible desde internet: un auth lo cubre el failover; un coordinador lo cubre la reconexión a otro. | Limitación: el directorio no sabe si el túnel de un coordinador vivo cayó. |
+
+### 6. Pruebas
+
+| Comando | Qué cubre |
+|---|---|
+| `npm test` en `auth-service` / `coordinator` / `client` / `gateway` | 111 / 146 / 141 / 9 pruebas unitarias. El núcleo puro (elección, oplog, partida, malla, persistencia, minijuegos) se prueba con reloj y azar inyectados. |
+| `cd coordinator && npm run smoke:full` | 3 auth y 3 coordinadores reales, con un jugador moviéndose mientras caen el líder, un coordinador y la mayoría. |
+| `npm run smoke:cluster` · `smoke:viruscity` (`-- --coordinators=3`) · `cd auth-service && npm run smoke:auth-cluster` | Taller 6, la partida distribuida y los auth replicados. |
+| `npm run smoke:persistencia` · `npm run smoke:espectador` | Las demos obligatorias de los dos tracks (ver sus secciones). |
+
+Los smokes levantan sus propios procesos en puertos de prueba, con secretos aleatorios y bases temporales, y al terminar los cierran y borran todo.
+
+### 7. Limitaciones y qué haríamos distinto
+
+- **Raft simplificado:** no tiene compactación del log ni cambio de membresía. Los 3 nodos son fijos.
+- **Particiones:** si la malla de coordinadores se parte, cada lado elige su árbitro y al unirse gana la partida más nueva; la otra se descarta.
+- **Un solo equipo:** el despliegue por túnel corre todo en una máquina, así que si se cae el equipo se cae todo. Lo natural sería repartir los nodos en varias máquinas: el diseño ya lo permite, porque todo se configura por URL.
+- **La persistencia no es una base replicada:** cada coordinador tiene la suya y la verdad sale de reconciliarlas.
+- **Espectadores:** para miles harían falta procesos retransmisores (*fan-out*).
+- **Minijuegos:** 8 de las 12 misiones tienen minijuego gráfico propio. Las 4 de la Planta y el Almacén usan las mecánicas simples (deslizador, secuencia, mantener y código).
+
+**Mapa del README**
+- [Track 2.1 · Persistencia](#track-21--persistencia-del-estado-del-juego-track-principal) · [Track 2.5 · Espectador](#track-25--modo-espectador-track-secundario)
 - [Viruscity](#viruscity): 1. Concepto y ciclo · 2. Reglas · 3. Información oculta · 4. Arquitectura · 5. Fallas y limitaciones · 6. Protocolo · 7. Configuración · 8. Controles y archivos · 9. Pruebas · 10. Balance · 11. Demostración
-- [Taller 7: auth-services replicados](#taller-7-auth-services-replicados): 1. Arquitectura · 2. Mesh · 3. Elección · 4. Consistencia · 5. Directorio · 6. Failover · 7. Variables · 8. Correr todo · 9. ngrok con gateway · 10. Limitaciones · 11. Sustentación
-- [Parte III · Taller 6](#parte-iii--taller-6): 1. Arquitectura · 2. Directorio · 3. Mesh · 4. Los cuatro problemas · 5. Seguridad · 6. Cliente · 7. Variables · 8. Correr el clúster · 9. ngrok · 10. Limitaciones · 11. Decisiones · 12. Sustentación
-- [Parte II · Taller 5](#parte-ii--taller-5): 1. Arquitectura · 2. Base de datos · 3. Google · 4. API del auth · 5. Coordinador · 6. Extra: personaje · 7. Cliente · 8. Variables · 9. Correr todo · 10. Google Cloud · 11. ngrok · 12. Decisiones · 13. Errores típicos · 14. Sustentación
-- [Estructura del repositorio](#estructura-del-repositorio)
-- [Interfaz de Viruscity](#interfaz-de-viruscity)
-- [Parte I · Taller 4 (resumen)](#parte-i--taller-4-resumen)
-- [Créditos](#créditos)
+- Anexos de los talleres (cómo se construyó cada parte):
+  - [Taller 7: auth-services replicados](#taller-7-auth-services-replicados): 1. Arquitectura · 2. Mesh · 3. Elección · 4. Consistencia · 5. Directorio · 6. Failover · 7. Variables · 8. Correr todo · 9. ngrok con gateway (alternativa) · 10. Limitaciones · 11. Sustentación
+  - [Parte III · Taller 6](#parte-iii--taller-6): 1. Arquitectura · 2. Directorio · 3. Mesh · 4. Los cuatro problemas · 5. Seguridad · 6. Cliente · 7. Variables · 8. Correr el clúster · 9. ngrok · 10. Limitaciones · 11. Decisiones · 12. Sustentación
+  - [Parte II · Taller 5](#parte-ii--taller-5): 1. Arquitectura · 2. Base de datos · 3. Google · 4. API del auth · 5. Coordinador · 6. Extra: personaje · 7. Cliente · 8. Variables · 9. Correr todo · 10. Google Cloud · 11. ngrok · 12. Decisiones · 13. Errores típicos · 14. Sustentación
+  - [Parte I · Taller 4 (resumen)](#parte-i--taller-4-resumen)
+- [Estructura del repositorio](#estructura-del-repositorio) · [Interfaz de Viruscity](#interfaz-de-viruscity) · [Créditos](#créditos)
 
 ---
 
@@ -666,7 +782,10 @@ Requisitos: Node.js ≥ 22.13 (con `node:sqlite` sin flags; en 22.5–22.12 los 
 
 Los smokes levantan sus propios procesos en puertos de prueba, con secretos aleatorios y BD temporales, y al terminar los cierran y borran todo.
 
-## 9. ngrok con el gateway (un solo túnel)
+## 9. ngrok con el gateway (alternativa de un solo túnel)
+
+> **La entrega final no usa el gateway:** usa 7 túneles directos, uno por servicio (ver "Cómo levantar todo" al inicio). Esta sección queda como la alternativa del Taller 7 para quien tenga una sola cuenta de ngrok, justificada porque el plan gratuito da un solo dominio fijo por cuenta.
+
 
 El sistema necesita 7 URLs públicas (client, 3 auth, 3 coordinadores) y el plan gratuito de ngrok permite pocos endpoints simultáneos (verifícalo en tu cuenta: los límites de endpoints y de peticiones cambian). El **gateway** expone todo por un solo puerto:
 
@@ -1872,7 +1991,8 @@ Probado con dos jugadores en Edge: los 12 intentos quedaron bloqueados, medidos 
 
 ```
 .
-├── .gitignore · CLAUDE.md · README.md · ngrok.example.yml
+├── .gitignore · CLAUDE.md · README.md · ngrok.example.yml · iniciar-servicios.cmd (abre los 7 servicios)
+├── tunel/              # despliegue con 7 túneles de ngrok: tunel.example.env y configurar.js
 ├── auth-service/
 │   ├── .env.example · .env.auth-a/b/c.example · .npmrc · package.json · package-lock.json
 │   ├── index.js        # arranque: configuración, base, nodo de replicación + mesh, cierre ordenado
@@ -1895,15 +2015,16 @@ Probado con dos jugadores en Edge: los 12 intentos quedaron bloqueados, medidos 
 │   ├── peers.js        # red del mesh: servidor de peers, conexiones salientes, ping, positions_sync
 │   ├── game.js         # lógica pura: config, mapa y choques, spawn, sanitizeIntent/Extras, stepPlayers, snapshot
 │   ├── city.js · missions.js · match.js · arbiter.js   # Viruscity: ciudad, misiones, reducer de la partida y árbitro
+│   ├── persist.js      # track 2.1: reconciliación por versión (pura) y base node:sqlite del coordinador
 │   ├── map/virus-city.json     # grilla de casillas sólidas y de aparición (npm run map en client/)
 │   ├── test/           # node:test de game.js, config, directory-client, mesh y la partida (ciudad, misiones, reducer, árbitro)
-│   └── scripts/smoke-test.js · cluster-smoke.js · full-smoke.js · viruscity-smoke.js   # npm run smoke · smoke:cluster (C1-C13) · smoke:full (F1-F8) · smoke:viruscity
+│   └── scripts/smoke-test.js · cluster-smoke.js · full-smoke.js · viruscity-smoke.js · persistencia-smoke.js · espectador-smoke.js   # npm run smoke · smoke:cluster (C1-C13) · smoke:full (F1-F8) · smoke:viruscity · smoke:persistencia (P1-P8) · smoke:espectador (E1-E10)
 └── client/
     ├── .env.example · package.json · package-lock.json
     ├── server.js       # Express estático + /config.js (AUTH_URLS, AUTH_URL, COORDINATOR_WS_URL opcional, GOOGLE_CLIENT_ID)
     ├── scripts/export-map.mjs  # exporta la grilla del mapa para el coordinator (npm run map)
     ├── public/
-    │   ├── login.html · play.html · cluster.html · lobby.html (legado) · game.html (vista previa de diseño)
+    │   ├── login.html · play.html · spectate.html (track 2.5) · cluster.html · lobby.html (legado) · game.html (vista previa de diseño)
     │   ├── css/        # tokens, base, components, login, google-login, play, lobby, game, vc (partida de Viruscity)
     │   ├── img/        # logo.svg, favicon.svg
     │   └── js/
@@ -1912,7 +2033,7 @@ Probado con dos jugadores en Edge: los 12 intentos quedaron bloqueados, medidos 
     │       ├── login.js · login-ui.js · google-login.js · google-flow.js
     │       ├── lobby.js · game-shell.js
     │       ├── cluster.js      # tabla del directorio (cluster.html)
-│       ├── play/   # play.js, directory.js, render.js, view.js, intent.js, colors.js, look-panel.js, players-panel.js
+    │       ├── play/   # play.js, spectate.js + spectator.js (espectador), directory.js, render.js, view.js, intent.js, colors.js, look-panel.js, players-panel.js
     │       │   ├── map/        # ciudad: layout (puro), props, edificios, suelo, vecinos y coches, reloj, zonas
     │       │   └── characters/ # Heroína, Explorador, Mensajero y look.js (apariencia validada)
     │       ├── vc/     # partida de Viruscity: view, clock, actions, city-render, hud, mission y minigames/
@@ -1922,7 +2043,7 @@ Probado con dos jugadores en Edge: los 12 intentos quedaron bloqueados, medidos 
 
 Y `gateway/` (Taller 7): `index.js` (proxy HTTP y WebSocket), `match.js` (enrutamiento puro), `.env.example` y `test/`.
 
-Solo existen en tu equipo (ignorados por git): `*/.env`, `auth-service/.env.auth-*`, `auth-service/users-*.db`, `coordinator/.env.coord-a`/`-b`/`-c`, `ngrok.yml`, `*/node_modules/`, `auth-service/users.db` y sus copias `*.bak`.
+Solo existen en tu equipo (ignorados por git): `*/.env`, `auth-service/.env.auth-*`, `auth-service/users-*.db`, `coordinator/.env.coord-a`/`-b`/`-c`, `coordinator/state-*.db` (track 2.1), `tunel/tunel.env`, `tunel/ngrok-*.yml`, `tunel/abrir-tuneles.cmd`, `ngrok.yml`, `*/node_modules/`, `auth-service/users.db` y sus copias `*.bak`.
 
 ---
 
