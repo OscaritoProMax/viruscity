@@ -1,0 +1,16 @@
+{
+  "name": "gateway",
+  "version": "1.0.0",
+  "description": "Proxy HTTP y WebSocket por prefijo de ruta para exponer todo con un solo túnel de ngrok (Taller 7)",
+  "main": "index.js",
+  "private": true,
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test"
+  },
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "http-proxy": "^1.18.1"
+  }
+}

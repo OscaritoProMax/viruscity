@@ -1,0 +1,349 @@
+/* Pantalla de login y registro de Viruscity.
+   Solo var(--...) para colores, espacios, radios, tipografía y tiempos.
+   Medidas fijas de componente: escenario del virus animado (380x300px; 170px de alto en móvil),
+   logo de respaldo de 72px, card de 420px, ojo de 44px, icono de 20px, líneas de 1px de la
+   cuadrícula y corte responsive en 900px.
+   El hero toma de virus_city_loading_screen.html la cuadrícula, las líneas de barrido,
+   el brillo de neón del título y el virus que rebota. */
+
+/* ---------- Disposición general ---------- */
+.login {
+    min-height: 100dvh;
+    display: grid;
+    grid-template-columns: 1fr;
+    align-content: start;
+}
+
+@media (min-width: 900px) {
+    .login {
+        grid-template-columns: 1.1fr .9fr;
+        align-content: stretch;
+    }
+}
+
+/* ---------- Hero ---------- */
+.hero {
+    position: relative;
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+    padding: var(--space-7) var(--space-6);
+    /* Halo cian sutil (10 %) sobre el fondo */
+    background:
+        radial-gradient(ellipse 70% 60% at 40% 45%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 70%),
+        var(--bg);
+}
+
+/* Cuadrícula "cyber" y líneas de barrido (scanlines), muy tenues */
+.hero::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+        repeating-linear-gradient(to bottom,
+            transparent 0 calc(var(--space-1) / 2),
+            color-mix(in srgb, var(--accent) 3%, transparent) calc(var(--space-1) / 2) var(--space-1)),
+        linear-gradient(to right, color-mix(in srgb, var(--accent) 5%, transparent) 1px, transparent 1px),
+        linear-gradient(to bottom, color-mix(in srgb, var(--accent) 5%, transparent) 1px, transparent 1px);
+    background-size: auto, var(--space-6) var(--space-6), var(--space-6) var(--space-6);
+}
+
+/* Viñeta: oscurece los bordes del hero */
+.hero::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at center, transparent 55%, var(--bg) 100%);
+    pointer-events: none;
+}
+
+.hero__particles {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.hero__content {
+    position: relative;
+    z-index: 1;
+    width: 100%; /* el escenario del virus usa todo el ancho disponible (hasta 380px) */
+    display: grid;
+    justify-items: center;
+    gap: var(--space-4);
+    text-align: center;
+}
+
+/* Escenario del virus que rebota */
+.hero__virus {
+    position: relative;
+    width: min(380px, 100%);
+    height: 300px;
+    border-radius: var(--radius-l);
+}
+
+.hero__virus.is-interactive { cursor: pointer; }
+
+.hero__virus-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+/* Logo estático: se ve si el JS no arranca; se oculta cuando el virus animado está activo */
+.hero__virus-fallback {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 72px;
+    height: 72px;
+    filter: drop-shadow(var(--shadow-glow));
+}
+
+.hero__virus.is-live .hero__virus-fallback { display: none; }
+
+/* Pista para hacer saltar al virus */
+.hero__hint {
+    margin-top: calc(-1 * var(--space-3));
+    padding: var(--space-1) var(--space-4);
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    border-radius: var(--radius-l);
+    background: color-mix(in srgb, var(--bg) 60%, transparent);
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: var(--fs-s);
+}
+
+.hero__hint-short { display: none; }
+
+/* Título con brillo de neón */
+.wordmark {
+    font-size: var(--fs-hero);
+    letter-spacing: .24em;
+    /* compensa el espacio que deja letter-spacing después de la última letra */
+    margin-right: -.24em;
+}
+
+.wordmark__virus {
+    color: var(--text);
+    text-shadow:
+        0 0 var(--space-3) color-mix(in srgb, var(--text) 70%, transparent),
+        0 0 var(--space-5) color-mix(in srgb, var(--text) 25%, transparent);
+}
+
+.wordmark__city {
+    color: var(--accent);
+    text-shadow:
+        0 0 var(--space-3) color-mix(in srgb, var(--accent) 80%, transparent),
+        0 0 var(--space-6) color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.hero__protocol {
+    margin-top: calc(-1 * var(--space-2));
+    color: color-mix(in srgb, var(--accent) 75%, var(--bg));
+    font-family: var(--font-mono);
+    font-size: var(--fs-s);
+    letter-spacing: .2em;
+    text-transform: uppercase;
+}
+
+.hero__tagline {
+    color: var(--muted);
+    font-size: var(--fs-l);
+}
+
+.hero__chips {
+    list-style: none;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-2);
+}
+
+/* ---------- Tarjeta de autenticación ---------- */
+.auth {
+    width: 100%;
+    max-width: 420px;
+    justify-self: center;
+    align-self: center;
+    margin: var(--space-6) var(--space-4);
+    padding: var(--space-6);
+    display: grid;
+    gap: var(--space-5);
+}
+
+/* Aviso de sesión (token vencido, sesión duplicada, conexión perdida) */
+.banner {
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius-m);
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    color: var(--text);
+    font-size: var(--fs-s);
+    font-weight: 600;
+}
+
+.banner::before {
+    content: "⚠ ";
+    color: var(--danger);
+}
+
+/* ---------- Pestañas tipo segmento ---------- */
+.tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-1);
+    padding: var(--space-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--bg-elev);
+}
+
+.tabs__tab {
+    min-height: 44px;
+    padding: var(--space-2) var(--space-3);
+    border: 0;
+    border-bottom: 2px solid transparent;
+    border-radius: var(--radius-s);
+    background: transparent;
+    color: var(--muted);
+    font-weight: 600;
+    transition: background-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+        border-color var(--t-fast) var(--ease);
+}
+
+.tabs__tab:hover { color: var(--text); }
+
+.tabs__tab[aria-selected="true"] {
+    background: var(--panel-2);
+    color: var(--text);
+    border-bottom-color: var(--accent);
+    border-radius: var(--radius-s) var(--radius-s) 0 0;
+}
+
+/* ---------- Formularios ---------- */
+.auth__form {
+    display: grid;
+    gap: var(--space-4);
+}
+
+/* Campo de contraseña con el botón de mostrar/ocultar dentro */
+.field__control { position: relative; }
+
+.field__control input { padding-right: calc(44px + var(--space-2)); }
+
+.field__toggle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 44px;
+    height: 100%;
+    min-height: 44px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: var(--radius-m);
+    background: transparent;
+    color: var(--muted);
+    transition: color var(--t-fast) var(--ease);
+}
+
+.field__toggle:hover { color: var(--text); }
+
+.field__toggle svg {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.field__toggle .icon-eye-off,
+.field__toggle[aria-pressed="true"] .icon-eye { display: none; }
+
+.field__toggle[aria-pressed="true"] .icon-eye-off { display: block; }
+
+.auth__node {
+    margin: var(--space-3, 12px) 0 0;
+    color: var(--muted, #8f9bc4);
+    font-family: var(--font-mono, monospace);
+    font-size: var(--fs-s, .8125rem);
+    text-align: center;
+}
+
+/* Track 2.5: enlace al modo espectador */
+.auth__spectate {
+    margin: var(--space-2, 8px) 0 0;
+    color: var(--muted, #8f9bc4);
+    font-size: var(--fs-s, .8125rem);
+    text-align: center;
+}
+.auth__spectate a { color: var(--accent, #4dd2ff); font-weight: 700; }
+
+.auth__footer {
+    color: var(--muted);
+    font-size: var(--fs-s);
+    text-align: center;
+}
+
+/* ---------- Entrada de la tarjeta ---------- */
+@keyframes auth-in {
+    from {
+        opacity: 0;
+        transform: translateY(var(--space-2));
+    }
+}
+
+@keyframes auth-fade {
+    from { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .auth { animation: auth-in var(--t-med) var(--ease) both; }
+}
+
+/* Con movimiento reducido solo se conserva el cambio de opacidad */
+@media (prefers-reduced-motion: reduce) {
+    .auth { animation: auth-fade var(--t-med) linear both; }
+
+    .tabs__tab,
+    .field__toggle { transition: opacity var(--t-fast) linear; }
+}
+
+/* ---------- Pantallas de menos de 900px ---------- */
+@media (max-width: 899.98px) {
+    /* El hero se reduce a virus animado + wordmark */
+    .hero { padding: var(--space-4) var(--space-4) var(--space-2); }
+
+    .hero__tagline,
+    .hero__protocol,
+    .hero__chips,
+    .hero__particles { display: none; }
+
+    .hero__virus { height: 170px; }
+
+    /* Pista corta para que quepa en una línea */
+    .hero__hint-long { display: none; }
+
+    .hero__hint-short { display: inline; }
+
+    .hero__content { gap: var(--space-3); }
+
+    /* La tarjeta ocupa el ancho disponible con margen */
+    .auth {
+        max-width: none;
+        width: auto;
+        justify-self: stretch;
+        margin: var(--space-4);
+        align-self: start;
+    }
+}
+
+@media (max-width: 479.98px) {
+    .auth { padding: var(--space-5); }
+}

@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<meta name="color-scheme" content="dark">
+<title>Viruscity · Juego en vivo</title>
+<link rel="icon" type="image/svg+xml" href="img/favicon.svg">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/play.css">
+<link rel="stylesheet" href="css/vc.css">
+</head>
+<body class="play">
+<!-- El mapa ocupa toda la pantalla; todo lo demás va superpuesto -->
+<main id="canvasBox" class="play-stage">
+    <canvas id="gameCanvas" role="img" aria-label="Mapa de Virus City con los jugadores en línea"></canvas>
+
+    <!-- Barra superior -->
+    <header class="play-top">
+        <div class="play-top__group">
+            <h1 class="play-title">VIRUS<span class="play-title__city">CITY</span></h1>
+            <span id="connection" class="play-pill" data-state="connecting">
+                <span class="play-pill__dot" aria-hidden="true"></span>
+                <span id="connectionText" aria-live="polite">Conectando…</span>
+            </span>
+            <!-- Coordinador al que está conectada esta pestaña (Taller 6) -->
+            <span id="coordPill" class="play-pill play-pill--coord"><span id="coordText">Coordinador: —</span></span>
+            <!-- Taller 7: qué auth-service respondió la última petición (js/auth-node.js) -->
+            <span class="play-pill play-pill--coord"><span id="authNode" aria-live="polite">Auth: —</span></span>
+            <!-- Zona y hora del juego (la hora sale del reloj del servidor: es la misma para todos) -->
+            <span class="play-hud" aria-live="polite">
+                <span class="play-hud__item"><span class="play-hud__label">Zona</span> <span id="hudArea">Virus City</span></span>
+                <span class="play-hud__item"><span id="hudClockIcon" class="play-hud__icon" aria-hidden="true">☀</span> <span id="hudClock">--:--</span></span>
+            </span>
+        </div>
+        <div class="play-top__group play-top__session">
+            <span class="play-user">
+                <span id="meName" class="play-user__name"></span>
+                <span id="meProvider" class="provider-badge" hidden></span>
+            </span>
+            <button id="logoutButton" type="button" class="btn btn--ghost play-logout">Cerrar sesión</button>
+        </div>
+    </header>
+
+    <div id="unstableNotice" class="play-notice" role="status" hidden>Conexión inestable…</div>
+    <!-- Aviso del clúster: reconexión a otro coordinador, sin coordinadores, contenido mixto -->
+    <div id="clusterNotice" class="play-notice play-notice--cluster" role="status" aria-live="polite" hidden></div>
+
+    <!-- Viruscity: HUD de la partida (el contenido lo pone js/vc/hud.js con textContent) -->
+    <div id="vcPhase" class="vc-phase" hidden>
+        <span id="vcPhaseLabel" class="vc-phase__label" aria-live="polite">MUNDO ABIERTO</span>
+        <span id="vcTimer" class="vc-phase__timer" hidden>0:00</span>
+        <span id="vcRoleTag" class="vc-phase__role" hidden></span>
+    </div>
+    <div id="vcCure" class="vc-cure" hidden>
+        <span class="vc-cure__label" aria-hidden="true">CURA</span>
+        <div id="vcCureBar" class="vc-cure__bar" role="progressbar" aria-label="Cura" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div id="vcCureFill" class="vc-cure__fill"></div>
+        </div>
+        <span id="vcCureText" class="vc-cure__value" aria-hidden="true">0 %</span>
+    </div>
+    <div id="vcBanner" class="vc-banner" hidden>
+        <p id="vcBannerText" class="vc-banner__text"></p>
+    </div>
+
+    <!-- Columna derecha: minimapa y jugadores en línea -->
+    <div class="play-right">
+        <p id="vcPlayers" class="vc-chip" hidden></p>
+        <canvas id="minimap" class="play-minimap" width="160" height="120" role="img" aria-label="Minimapa: tu posición y la de los demás jugadores"></canvas>
+        <section class="play-float" aria-labelledby="playersToggle">
+            <h2 class="play-float__head">
+                <button id="playersToggle" type="button" class="play-float__toggle" aria-expanded="true" aria-controls="playersBody">
+                    <span>Jugadores en línea</span>
+                    <span class="play-count" id="playerCount">0</span>
+                    <span class="play-float__chevron" aria-hidden="true"></span>
+                </button>
+            </h2>
+            <div id="playersBody" class="play-float__body">
+                <ul id="playerList" class="play-players"></ul>
+            </div>
+        </section>
+    </div>
+
+    <!-- Abajo a la izquierda: misiones de la partida (Viruscity) encima del panel del personaje -->
+    <div class="vc-left">
+    <section id="vcMissions" class="play-float vc-missions" aria-labelledby="vcMissionsToggle" hidden>
+        <h2 class="play-float__head">
+            <button id="vcMissionsToggle" type="button" class="play-float__toggle" aria-expanded="true" aria-controls="vcMissionsBody">
+                <span>Misiones</span>
+                <span class="play-count" id="vcMissionsCount">0/0</span>
+                <span class="play-float__chevron" aria-hidden="true"></span>
+            </button>
+        </h2>
+        <div id="vcMissionsBody" class="play-float__body">
+            <ul id="vcMissionList" class="vc-missions__list"></ul>
+        </div>
+    </section>
+
+    <!-- Personaje, colores y poder -->
+    <section class="play-float play-look-panel" aria-labelledby="lookToggle">
+        <h2 class="play-float__head">
+            <button id="lookToggle" type="button" class="play-float__toggle" aria-expanded="true" aria-controls="lookBody">
+                <canvas id="lookPreview" class="play-look__preview" width="40" height="40" aria-hidden="true"></canvas>
+                <span class="play-look__title">
+                    <span class="play-look__caption">Tu personaje</span>
+                    <strong id="lookName">Explorador Pop</strong>
+                </span>
+                <span class="play-float__chevron" aria-hidden="true"></span>
+            </button>
+        </h2>
+        <div id="lookBody" class="play-float__body">
+            <div class="play-tabs" role="tablist" aria-label="Opciones del personaje">
+                <button type="button" class="play-tab" role="tab" id="tabCharacter" aria-controls="panelCharacter" aria-selected="true">Personaje</button>
+                <button type="button" class="play-tab" role="tab" id="tabColors" aria-controls="panelColors" aria-selected="false" tabindex="-1">Colores</button>
+                <button type="button" class="play-tab" role="tab" id="tabPower" aria-controls="panelPower" aria-selected="false" tabindex="-1">Poder</button>
+            </div>
+
+            <div id="panelCharacter" class="play-tabpanel" role="tabpanel" aria-labelledby="tabCharacter">
+                <!-- Las tarjetas se crean desde js/play/look-panel.js (una por personaje) -->
+                <div id="characterCards" class="play-cards" role="radiogroup" aria-label="Personaje"></div>
+                <p id="lookDescription" class="play-look__desc"></p>
+            </div>
+
+            <div id="panelColors" class="play-tabpanel" role="tabpanel" aria-labelledby="tabColors" hidden>
+                <fieldset class="play-field">
+                    <legend id="colorLegend" class="play-field__legend">Color</legend>
+                    <div class="play-swatches play-swatches--with-picker">
+                        <div id="colorSwatches" class="play-swatches__list"></div>
+                        <label class="play-color__picker" for="colorInput">
+                            <span class="sr-only">Otro color</span>
+                            <input type="color" id="colorInput" value="#3b4836">
+                        </label>
+                    </div>
+                </fieldset>
+                <fieldset class="play-field">
+                    <legend id="detailLegend" class="play-field__legend">Pelo</legend>
+                    <div id="detailSwatches" class="play-swatches__list"></div>
+                </fieldset>
+                <fieldset class="play-field">
+                    <legend class="play-field__legend">Tono de piel</legend>
+                    <div id="skinSwatches" class="play-swatches__list"></div>
+                </fieldset>
+            </div>
+
+            <div id="panelPower" class="play-tabpanel" role="tabpanel" aria-labelledby="tabPower" hidden>
+                <!-- Opciones creadas desde look-panel.js según el personaje -->
+                <div id="powerOptions" class="play-powers" role="radiogroup" aria-label="Poder"></div>
+                <button id="powerButton" type="button" class="btn btn--block play-power-use">Usar poder <kbd>Q</kbd></button>
+                <p class="play-look__desc">El efecto es solo visual: todos lo ven, pero no cambia posiciones.</p>
+            </div>
+        </div>
+    </section>
+    </div>
+
+    <!-- Abajo al centro: avisos de la partida (3 s) y pista contextual -->
+    <div id="vcToasts" class="vc-toasts" role="status" aria-live="polite"></div>
+    <p id="vcHint" class="vc-hint" hidden></p>
+
+    <!-- Pantalla de rol (4 s al empezar la partida; se cierra sola, con cualquier tecla o con un toque) -->
+    <div id="vcRole" class="vc-screen vc-role" hidden>
+        <div id="vcRoleCard" class="vc-screen__card" role="dialog" aria-modal="true" aria-labelledby="vcRoleTitle" aria-describedby="vcRoleText" tabindex="-1">
+            <p class="vc-screen__kicker">Tu rol en esta partida</p>
+            <h2 id="vcRoleTitle" class="vc-screen__title"></h2>
+            <p id="vcRoleText" class="vc-screen__text"></p>
+            <p class="vc-screen__hint">Pulsa cualquier tecla para continuar</p>
+        </div>
+    </div>
+
+    <!-- Pantalla de fin (fase ended): ganador, motivo, resultado y roles revelados -->
+    <div id="vcEnd" class="vc-screen vc-end" hidden>
+        <section id="vcEndCard" class="vc-screen__card" aria-labelledby="vcEndTitle">
+            <p class="vc-screen__kicker">Fin de la partida</p>
+            <h2 id="vcEndTitle" class="vc-screen__title"></h2>
+            <p id="vcEndReason" class="vc-screen__text"></p>
+            <p id="vcEndOutcome" class="vc-end__outcome"></p>
+            <table class="vc-end__table">
+                <caption class="sr-only">Roles de los jugadores de la partida</caption>
+                <thead>
+                    <tr><th scope="col">Jugador</th><th scope="col">Rol</th></tr>
+                </thead>
+                <tbody id="vcEndRows"></tbody>
+            </table>
+            <p id="vcEndBack" class="vc-screen__hint" aria-live="off"></p>
+        </section>
+    </div>
+
+    <!-- Conversación con vecinos y carteles (local: no viaja por la red) -->
+    <div id="dialogue" class="play-dialogue" role="dialog" aria-labelledby="dlgSpeaker" aria-describedby="dlgText" hidden>
+        <p id="dlgSpeaker" class="play-dialogue__speaker"></p>
+        <p id="dlgText" class="play-dialogue__text" aria-live="polite"></p>
+        <p id="dlgHint" class="play-dialogue__hint"></p>
+    </div>
+
+    <!-- Radio: la misma para todos (sincronizada con la hora del servidor) -->
+    <section class="play-radio" aria-label="Radio y sonido">
+        <span class="play-radio__dial" aria-hidden="true"></span>
+        <span class="play-radio__info">
+            <span id="radioStation" class="play-radio__station">Radio</span>
+            <span id="radioTitle" class="play-radio__title" aria-live="polite">Pulsa una tecla para sintonizar</span>
+        </span>
+        <button id="radioToggle" type="button" class="play-radio__btn" aria-pressed="false"><span id="radioIcon" class="play-radio__icon" aria-hidden="true">♪</span><span id="radioLabel" class="play-radio__label">Radio</span></button>
+        <button id="sfxToggle" type="button" class="play-radio__btn" aria-pressed="false"><span id="sfxIcon" class="play-radio__icon" aria-hidden="true">🔊</span><span id="sfxLabel" class="play-radio__label">Efectos</span></button>
+    </section>
+
+    <!-- Abajo a la derecha: zoom (solo visual) -->
+    <div class="play-zoom" role="group" aria-label="Zoom del mapa">
+        <button id="zoomOut" type="button" class="play-zoom__btn" aria-label="Alejar">−</button>
+        <button id="zoomReset" type="button" class="play-zoom__btn play-zoom__value" aria-label="Zoom normal"><span id="zoomText">1.0×</span></button>
+        <button id="zoomIn" type="button" class="play-zoom__btn" aria-label="Acercar">+</button>
+    </div>
+
+    <p class="play-help">WASD o flechas: moverte · E: misión, hablar o mirar · F: infectar · Q: usar tu poder · las misiones están dentro de los edificios: entra por su puerta</p>
+</main>
+
+<script src="/config.js"></script>
+<script src="js/auth-fetch.js"></script>
+<script src="js/auth-node.js"></script>
+<script type="module" src="js/play/play.js"></script>
+</body>
+</html>

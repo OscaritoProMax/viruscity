@@ -5,8 +5,17 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
+    "start:a": "node index.js --env .env.coord-a",
+    "start:b": "node index.js --env .env.coord-b",
+    "start:c": "node index.js --env .env.coord-c",
     "dev": "node --watch index.js",
-    "smoke": "node scripts/smoke-test.js"
+    "test": "node --test test/*.test.mjs test/*.test.js",
+    "smoke": "node scripts/smoke-test.js",
+    "smoke:cluster": "node scripts/cluster-smoke.js",
+    "smoke:viruscity": "node scripts/viruscity-smoke.js",
+    "smoke:full": "node scripts/full-smoke.js",
+    "smoke:persistencia": "node scripts/persistencia-smoke.js",
+    "smoke:espectador": "node scripts/espectador-smoke.js"
   },
   "keywords": [],
   "author": "",

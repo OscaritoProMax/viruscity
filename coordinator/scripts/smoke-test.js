@@ -1,10 +1,14 @@
-// Prueba automatizada del flujo WebSocket del coordinator (S1-S11).
-// Requiere el auth-service y el coordinator levantados.
+// Prueba automatizada del coordinator: flujo WebSocket del Taller 4 (S1-S11) y juego en vivo
+// autoritativo del Taller 5 (G1-G14). Requiere el auth-service y el coordinator levantados.
+// Si el coordinator usa un mapa (GET /health → map), las pruebas de movimiento eligen direcciones
+// libres y comprueban las colisiones con el mismo archivo coordinator/map/<map>.json.
+// Los usuarios locales se crean en el auth; los tokens con provider 'google' se firman aquí
+// con el secreto compartido (la prueba lo conoce).
 //
 // Uso:  npm run smoke
 // Lee de variables de entorno o de coordinator/.env:
 //   AUTH_URL            (por defecto http://localhost:4000)
-//   COORDINATOR_WS_URL  (por defecto ws://localhost:5000)
+//   COORDINATOR_WS_URL  (por defecto ws://localhost:5001, coord-a)
 //   JWT_SECRET          (el mismo del coordinator; se usa para fabricar tokens de prueba)
 // Sale con código 1 si alguna comprobación falla.
 
@@ -13,9 +17,12 @@ const crypto = require("node:crypto");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env"), quiet: true });
 const WebSocket = require("ws");
 const jwt = require("jsonwebtoken");
+const fs = require("node:fs");
+const { createConfig, parseMap, stepPlayers, boxBlocked } = require("../game.js");
 
 const AUTH_URL = (process.env.AUTH_URL || "http://localhost:4000").replace(/\/+$/, "");
-const WS_URL = (process.env.COORDINATOR_WS_URL || "ws://localhost:5000").replace(/\/+$/, "");
+const WS_URL = (process.env.COORDINATOR_WS_URL || "ws://localhost:5001").replace(/\/+$/, "");
+const HTTP_URL = WS_URL.replace(/^ws/, "http"); // mismo host y puerto del coordinator (para /health)
 const JWT_SECRET = process.env.JWT_SECRET;
 const TIMEOUT_MS = 3000;
 
@@ -39,7 +46,8 @@ function withTimeout(promise, ms, fallback) {
 function connect(token, pathname = "/connect") {
     const query = token === undefined ? "" : `?token=${encodeURIComponent(token)}`;
     const ws = new WebSocket(`${WS_URL}${pathname}${query}`);
-    const conn = { ws, queue: [], listeners: [], last: null, openedAt: null, errorMessage: null };
+    // last: último players_update · welcome: mensaje de bienvenida · lastState / stateCount: juego en vivo
+    const conn = { ws, queue: [], listeners: [], last: null, welcome: null, lastState: null, stateCount: 0, openedAt: null, errorMessage: null };
 
     conn.opened = new Promise((resolve) => {
         ws.once("open", () => {
@@ -63,6 +71,13 @@ function connect(token, pathname = "/connect") {
             return;
         }
         if (msg.type === "players_update") conn.last = msg.players;
+        if (msg.type === "welcome") conn.welcome = msg;
+        if (msg.type === "state") {
+            conn.lastState = msg;
+            conn.stateCount += 1;
+            conn.onState?.(msg);
+            return; // los state no se encolan: nextUpdate solo busca players_update
+        }
         conn.queue.push(msg);
         for (const fn of conn.listeners) fn();
     });
@@ -153,13 +168,13 @@ async function main() {
     await expectInvalid(
         "S3",
         "token firmado con otra secret → 4001",
-        jwt.sign({ userId: A.userId, username: A.username }, otherSecret, { algorithm: "HS256", expiresIn: "1h" })
+        jwt.sign({ userId: A.userId, username: A.username, provider: "local" }, otherSecret, { algorithm: "HS256", expiresIn: "1h" })
     );
     await expectInvalid(
         "S4",
         "token con la secret correcta pero vencido → 4001",
         jwt.sign(
-            { userId: A.userId, username: A.username, exp: Math.floor(Date.now() / 1000) - 60 },
+            { userId: A.userId, username: A.username, provider: "local", exp: Math.floor(Date.now() / 1000) - 60 },
             JWT_SECRET,
             { algorithm: "HS256" }
         )
@@ -203,7 +218,7 @@ async function main() {
         `C: ${names(s9c ?? c.last)} · A2: ${names(s9a ?? a2.last)}`);
 
     // S10: token válido que vence a los 3 s con el socket abierto
-    const shortToken = jwt.sign({ userId: B.userId, username: B.username }, JWT_SECRET, {
+    const shortToken = jwt.sign({ userId: B.userId, username: B.username, provider: "local" }, JWT_SECRET, {
         algorithm: "HS256",
         expiresIn: "3s",
     });
@@ -227,6 +242,202 @@ async function main() {
     const open = [a2, c].filter((x) => x.ws.readyState === WebSocket.OPEN);
     for (const x of open) x.ws.close();
     await withTimeout(Promise.all(open.map((x) => x.closed)), TIMEOUT_MS, null);
+
+    await gameChecks();
+}
+
+// ---------- Juego en vivo (Taller 5) ----------
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Espera (sondeando) a que la condición se cumpla; true si se cumplió a tiempo
+async function waitFor(condition, ms = TIMEOUT_MS) {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+        if (condition()) return true;
+        await sleep(20);
+    }
+    return condition();
+}
+
+const playerIn = (conn, user) => conn.lastState?.players.find((p) => p.userId === user.userId) ?? null;
+const sendJson = (conn, msg) => conn.ws.send(typeof msg === "string" ? msg : JSON.stringify(msg));
+const sendIntent = (conn, x, y) => sendJson(conn, { type: "intent", intent: { dir: { x, y } } });
+const isNum = (n) => typeof n === "number" && Number.isFinite(n);
+const fmt = (p) => (p ? `(${p.x.toFixed(1)}, ${p.y.toFixed(1)})` : "sin posición");
+
+// Mantiene una intención durante `ms`, la detiene y devuelve la posición antes y después
+// (vista por el propio jugador y por otro cliente)
+async function moveFor(mover, watcher, user, dir, ms) {
+    const before = playerIn(mover, user);
+    sendIntent(mover, dir.x, dir.y);
+    await sleep(ms);
+    sendIntent(mover, 0, 0);
+    await sleep(300); // deja que el tick aplique el alto y llegue el state
+    const after = playerIn(mover, user);
+    const seen = playerIn(watcher, user);
+    return { before, after, seen, dist: before && after ? Math.hypot(after.x - before.x, after.y - before.y) : NaN };
+}
+
+async function gameChecks() {
+    console.log("\n— Juego en vivo —");
+    const D = await createUser("d");
+    const E = await createUser("e");
+
+    // G1: welcome
+    const d = connect(D.token);
+    await waitFor(() => d.welcome !== null);
+    const w = d.welcome;
+    const g1 = w && w.you?.userId === D.userId && typeof w.you.userId === "string" && w.you.username === D.username &&
+        w.you.provider === "local" && ["width", "height", "playerRadius", "tickRate"].every((k) => isNum(w.world?.[k]));
+    report("G1", "welcome con you (userId string, provider local) y world numérico", g1, w ? JSON.stringify(w) : "sin welcome");
+    const world = w?.world ?? { width: 1200, height: 800, playerRadius: 16, tickRate: 20 };
+
+    // G2: frecuencia de state (~20 Hz)
+    await waitFor(() => d.lastState !== null);
+    const received = [];
+    d.onState = (msg) => received.push(msg);
+    await sleep(2000);
+    d.onState = null;
+    const wellFormed = received.every((s) => isNum(s.t) && Array.isArray(s.players) && s.players.every((p) => isNum(p.x) && isNum(p.y)));
+    report("G2", "state a ~20 Hz: entre 30 y 45 en 2 s, con t y posiciones numéricas", received.length >= 30 && received.length <= 45 && wellFormed,
+        `${received.length} state en 2 s · bien formados: ${wellFormed}`);
+
+    // G3: dos clientes se ven mutuamente y cada jugador trae provider
+    const e = connect(E.token);
+    const g3 = await waitFor(() => playerIn(d, E) && playerIn(e, D) && playerIn(e, E));
+    const providers = (e.lastState?.players ?? []).map((p) => `${p.username}:${p.provider}`).join(", ");
+    report("G3", "dos clientes se ven en el state, cada uno con provider", g3 && playerIn(d, E)?.provider === "local" && playerIn(e, D)?.provider === "local", providers);
+
+    // G4: un token con provider 'google' aparece como google en el state de los demás
+    const G = { userId: `g-${crypto.randomBytes(3).toString("hex")}`, username: `smoke_g_${crypto.randomBytes(3).toString("hex")}` };
+    const gConn = connect(jwt.sign({ ...G, provider: "google" }, JWT_SECRET, { algorithm: "HS256", expiresIn: "1h" }));
+    const g4 = await waitFor(() => playerIn(d, G)?.provider === "google");
+    report("G4", "un usuario de Google aparece con provider google en el state de los demás", g4, `D ve: ${JSON.stringify(playerIn(d, G))}`);
+    gConn.ws.close();
+
+    // Simulación local con la MISMA lógica del servidor (game.js) para elegir direcciones sin obstáculos
+    // y saber dónde debe detenerse el jugador. Con mapa usa el mismo archivo que el coordinator.
+    const health = await fetch(`${HTTP_URL}/health`).then((r) => r.json()).catch(() => ({}));
+    let map = null;
+    if (health.map) map = parseMap(JSON.parse(fs.readFileSync(path.join(__dirname, "..", "map", `${health.map}.json`), "utf8")));
+    const sim = createConfig({ ...process.env, WORLD_WIDTH: String(world.width), WORLD_HEIGHT: String(world.height), PLAYER_RADIUS: String(world.playerRadius) }, map);
+    console.log(`  (mundo ${world.width}×${world.height}${map ? ` con el mapa "${map.id}"` : " sin mapa"})`);
+    const simulate = (start, d0, seconds) => {
+        const p = { x: start.x, y: start.y, intent: { x: d0.x, y: d0.y } };
+        for (let t = 0; t < seconds - 1e-9; t += 0.05) stepPlayers(new Map([["s", p]]), 0.05, sim, map);
+        return p;
+    };
+    // Primera dirección de la lista con 1,3 s de recorrido libre (ni paredes ni bordes)
+    const freeDir = (p, options) =>
+        options.find((d0) => {
+            const end = simulate(p, d0, 1.3);
+            return Math.abs(Math.hypot(end.x - p.x, end.y - p.y) - sim.PLAYER_SPEED * 1.3) < 1;
+        }) ?? options[0];
+    const AXES = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }];
+    const DIAGONALS = [{ x: 1, y: 1 }, { x: -1, y: 1 }, { x: 1, y: -1 }, { x: -1, y: -1 }];
+
+    // G5: un eje durante 1 s ≈ 200 px, y el otro cliente ve lo mismo
+    let dir = freeDir(playerIn(d, D), AXES);
+    const g5 = await moveFor(d, e, D, dir, 1000);
+    const sameView = g5.seen && g5.after && Math.abs(g5.seen.x - g5.after.x) < 0.5 && Math.abs(g5.seen.y - g5.after.y) < 0.5;
+    report("G5", "intención de un eje durante 1 s mueve 160-240 px y el otro cliente lo ve igual", g5.dist >= 160 && g5.dist <= 240 && sameView,
+        `${g5.dist.toFixed(1)} px · ${fmt(g5.before)} → ${fmt(g5.after)} · E ve ${fmt(g5.seen)}`);
+
+    // G6: diagonal durante 1 s: misma distancia que un eje (no ~283)
+    dir = freeDir(playerIn(d, D), DIAGONALS);
+    const g6 = await moveFor(d, e, D, dir, 1000);
+    report("G6", "intención diagonal durante 1 s recorre 160-240 px", g6.dist >= 160 && g6.dist <= 240, `${g6.dist.toFixed(1)} px`);
+
+    // G7: {9999, 9999} se comporta como {1, 1}
+    dir = freeDir(playerIn(d, D), DIAGONALS);
+    const g7 = await moveFor(d, e, D, { x: 9999 * dir.x, y: 9999 * dir.y }, 1000);
+    report("G7", "intención {9999, 9999} se comporta como {1, 1} (sin teletransporte)", g7.dist >= 160 && g7.dist <= 240, `${g7.dist.toFixed(1)} px`);
+
+    // G8: mensajes inválidos (y una ráfaga por encima del límite) no cierran el socket ni cambian nada
+    const beforeG8 = playerIn(e, D);
+    const countBefore = d.stateCount;
+    const invalid = [
+        "{roto",
+        { type: "intent", intent: { dir: { x: "a", y: 0 } } },
+        { type: "intent", intent: {} },
+        { type: "teletransporte", x: 0, y: 0 },
+        { type: "extras_update", extras: [1, 2, 3] },
+        { type: "extras_update", extras: { pad: "x".repeat(1990) } }, // ~2000 bytes: más que MAX_EXTRAS_BYTES, menos que maxPayload
+        { type: "extras_update", extras: { color: "red" } },
+    ];
+    for (const msg of invalid) sendJson(d, msg);
+    for (let i = 0; i < 150; i++) sendJson(d, { type: "nada" }); // ráfaga por encima de MAX_MSGS_PER_SEC
+    await sleep(600);
+    const afterG8 = playerIn(e, D);
+    const g8 = d.ws.readyState === WebSocket.OPEN && d.stateCount > countBefore + 5 && afterG8 &&
+        afterG8.x === beforeG8.x && afterG8.y === beforeG8.y && JSON.stringify(afterG8.extras) === "{}";
+    report("G8", "mensajes inválidos no cierran el socket ni cambian nada; siguen llegando state", g8,
+        `abierto: ${d.ws.readyState === WebSocket.OPEN} · state nuevos: ${d.stateCount - countBefore} · posición ${fmt(beforeG8)} → ${fmt(afterG8)} · extras ${JSON.stringify(afterG8?.extras)}`);
+
+    // G9: extras_update con color aparece en el state de los otros y se mantiene
+    await sleep(1000); // nueva ventana del límite de mensajes
+    sendJson(d, { type: "extras_update", extras: { color: "#ff5500" } });
+    const seenColor = await waitFor(() => playerIn(e, D)?.extras?.color === "#ff5500");
+    await sleep(600);
+    const stillColor = playerIn(e, D)?.extras?.color === "#ff5500";
+    report("G9", "extras con color aparece en el state de los otros y persiste", seenColor && stillColor, `E ve extras de D: ${JSON.stringify(playerIn(e, D)?.extras)}`);
+
+    // G10: hacia -x hasta detenerse: queda donde lo calcula el servidor (el borde del mundo, o la pared
+    // del mapa que lo frena) y nunca dentro de una casilla sólida
+    const startG10 = playerIn(d, D);
+    let stopAt = { x: startG10.x, y: startG10.y };
+    let secs = 0;
+    while (secs < 30) {
+        const next = simulate(stopAt, { x: -1, y: 0 }, 0.5);
+        secs += 0.5;
+        if (next.x === stopAt.x) break;
+        stopAt = next;
+    }
+    sendIntent(d, -1, 0);
+    await sleep(Math.round(secs * 1000) + 1500);
+    sendIntent(d, 0, 0);
+    await sleep(300);
+    const edge = playerIn(d, D);
+    const insideSolid = map && edge ? boxBlocked(map, edge.x, edge.y, world.playerRadius) : false;
+    const g10 = Boolean(edge) && Math.abs(edge.x - stopAt.x) < 0.01 && edge.y === startG10.y && !insideSolid && (map !== null || edge.x === world.playerRadius);
+    report("G10", map ? "hacia -x se detiene contra el mapa donde lo calcula el servidor, sin pisar casillas sólidas" : "intención hacia -x hasta el borde deja x == playerRadius",
+        g10, `x = ${edge?.x} (esperado ${stopAt.x}) · dentro de una casilla sólida: ${insideSolid}`);
+
+    // G11: provider ausente o inválido → 4001
+    const sign = (extra) => jwt.sign({ userId: "x1", username: "sin_provider", ...extra }, JWT_SECRET, { algorithm: "HS256", expiresIn: "1h" });
+    await expectInvalid("G11", "token sin provider → 4001 invalid token", sign({}));
+    await expectInvalid("G11", 'token con provider "facebook" → 4001 invalid token', sign({ provider: "facebook" }));
+
+    // G12: al desconectar, el jugador desaparece del state y llega players_update
+    drain(d);
+    e.ws.close();
+    const update = await nextUpdate(d, (ps) => !has(ps, E));
+    const goneFromState = await waitFor(() => d.lastState && !playerIn(d, E));
+    report("G12", "al desconectar desaparece del state y llega players_update", update !== null && goneFromState, `players_update: ${names(update)}`);
+
+    // G13: recargar la página (cerrar y volver a conectar) NO cambia la posición: el servidor la recuerda
+    const before = playerIn(d, D);
+    d.ws.close();
+    await withTimeout(d.closed, TIMEOUT_MS, null);
+    await sleep(300);
+    const d2 = connect(D.token);
+    await waitFor(() => playerIn(d2, D) !== null);
+    const again = playerIn(d2, D);
+    report("G13", "al reconectarse aparece donde estaba (recargar no teletransporta)",
+        Boolean(before && again) && Math.abs(again.x - before.x) < 0.01 && Math.abs(again.y - before.y) < 0.01, `${fmt(before)} → ${fmt(again)}`);
+
+    // G14: abrir otra pestaña con la misma cuenta tampoco mueve al jugador (la sesión nueva hereda la posición)
+    const d3 = connect(D.token);
+    const replaced = await withTimeout(d2.closed, TIMEOUT_MS, null);
+    await waitFor(() => playerIn(d3, D) !== null);
+    const third = playerIn(d3, D);
+    report("G14", "una sesión duplicada (4002) sigue en la misma posición",
+        replaced?.code === 4002 && Boolean(third) && Math.abs(third.x - again.x) < 0.01 && Math.abs(third.y - again.y) < 0.01,
+        `cierre ${replaced?.code} · ${fmt(again)} → ${fmt(third)}`);
+
+    d3.ws.close();
+    await withTimeout(d3.closed, TIMEOUT_MS, null);
 }
 
 main()

@@ -1,0 +1,312 @@
+// Capa de red del mesh de coordinadores (Taller 6): sockets, temporizadores y E/S.
+// TODA decisión (quién inicia, conexiones duplicadas, validación, propiedad, resync) la toma mesh.js;
+// aquí solo se conectan los cables.
+//
+// createPeerNetwork({ selfId, peerPort, clusterSecret, authUrls, discoveryMs, pingMs, syncMs, cfg, players,
+//                     onMembershipChanged, onCloseLocal, log }) → {
+//   start()            levanta el servidor de peers en PEER_PORT y empieza el descubrimiento
+//   stop()             detiene temporizadores y cierra conexiones y servidor
+//   readyPeerIds()     ids de los peers con handshake completo
+//   sendToPeers(obj)   serializa UNA vez y envía a los peers listos
+// }
+// Mensajes recibidos: JSON.parse → validatePeerMessage → applyPeerMessage (mesh.js). Si cambió la lista
+// de jugadores se llama onMembershipChanged(); las acciones close-local van a onCloseLocal(action).
+// Nada se retransmite: cada coordinador envía SUS mensajes directamente a cada peer.
+//
+// Al completar el handshake se manda el resync (buildResync); cada syncMs, positions_sync con las
+// posiciones de los locales (corrige la deriva); cada pingMs, ping (terminate si no hubo pong en el ciclo
+// anterior). Si se cierra la conexión con un peer, sus jugadores remotos se eliminan.
+//
+// Descubrimiento: al arrancar y cada discoveryMs se pide GET /coordinator-peers al primer auth de AUTH_URLS que
+// responda (Taller 7; en el Taller 6 era GET {authUrl}/peers) y se abre conexión SOLO
+// hacia los peers de id mayor (shouldInitiate) que aún no tengan conexión ni intento en curso. Los de id
+// menor esperan a que ellos conecten. Si el auth no responde, se conservan las conexiones existentes.
+//
+// Seguridad: el servidor de peers exige el header x-cluster-secret en el upgrade (sha256 +
+// timingSafeEqual; si falla, 401 y se destruye el socket) y el primer mensaje debe ser un hello válido
+// en 3 s. Nunca se registran secretos ni el contenido de los mensajes.
+
+const http = require("node:http");
+const crypto = require("node:crypto");
+const { WebSocketServer, WebSocket } = require("ws");
+const { shouldInitiate, resolveLink, validatePeerMessage, applyPeerMessage, dropPeerPlayers, buildResync, buildPositionsSync } = require("./mesh.js");
+const { fetchCoordinatorPeers } = require("./directory-client.js");
+
+const PEER_MAX_PAYLOAD = 262144;
+const HELLO_TIMEOUT_MS = 3000;
+const PEER_MSGS_PER_SEC = 500; // por conexión; el exceso se ignora
+
+const sha256 = (text) => crypto.createHash("sha256").update(String(text), "utf8").digest();
+
+function createPeerNetwork({
+    selfId,
+    peerPort,
+    clusterSecret,
+    authUrls,
+    discoveryMs,
+    pingMs,
+    syncMs,
+    cfg,
+    players,
+    onMembershipChanged = () => {},
+    onCloseLocal = () => {},
+    onGameMessage = () => {}, // (peerId, { type: 'game_action' | 'game_state', … })
+    onPeerReady = () => {}, // (peerId) handshake completo (después del resync)
+    onPeerClosed = () => {}, // (peerId) se cerró la conexión vigente con ese peer
+    log = console,
+}) {
+    // peerId → { ws, direction: "in" | "out", ready }
+    const peers = new Map();
+    const connecting = new Set(); // peers con una conexión saliente en curso
+    const failing = new Set(); // peers cuyo último intento falló (para avisar UNA vez, sin spam)
+    const pending = new Set(); // sockets salientes todavía sin handshake (para cerrarlos al apagar)
+    let discoveryTimer = null;
+    let pingTimer = null;
+    let syncTimer = null;
+    let stopped = false;
+    const secretHash = sha256(clusterSecret);
+
+    const secretMatches = (given) => typeof given === "string" && given.length > 0 && crypto.timingSafeEqual(sha256(given), secretHash);
+    const isOpen = (ws) => ws.readyState === ws.OPEN;
+    const sendRaw = (ws, text) => {
+        if (isOpen(ws)) ws.send(text);
+    };
+
+    // Primer mensaje: debe ser un hello con un id válido y distinto del propio; si no, null
+    function parseHello(raw) {
+        let msg;
+        try {
+            msg = JSON.parse(raw.toString());
+        } catch {
+            return null;
+        }
+        const v = validatePeerMessage(msg, cfg);
+        if (!v.ok || v.msg.type !== "hello" || v.msg.coordinatorId === selfId) return null;
+        return v.msg.coordinatorId;
+    }
+
+    // Handshake completo: se registra el peer y se le manda el estado de nuestros jugadores locales
+    function registerPeer(peerId, ws, direction) {
+        const entry = { ws, direction, ready: true, alive: true };
+        peers.set(peerId, entry);
+        attachMessageHandler(peerId, ws);
+        ws.on("pong", () => {
+            entry.alive = true;
+        });
+        ws.on("close", () => {
+            // Solo si sigue siendo ESA conexión (una reemplazada no borra a la nueva)
+            if (peers.get(peerId)?.ws !== ws) return;
+            peers.delete(peerId);
+            // Peer caído: sus jugadores ya no tienen dueño conectado a este mesh
+            const removed = dropPeerPlayers(players, peerId);
+            log.log(`Peer ${peerId} desconectado · se quitaron ${removed.length} jugadores suyos`);
+            if (removed.length > 0) onMembershipChanged();
+            onPeerClosed(peerId);
+        });
+        for (const m of buildResync(players, selfId)) sendRaw(ws, JSON.stringify(m));
+        log.log(`Peer ${peerId} conectado (${direction === "in" ? "entrante" : "saliente"})`);
+        onPeerReady(peerId);
+    }
+
+    // Único manejador de mensajes de una conexión con handshake completo (entrante o saliente).
+    // No se registra el contenido de los mensajes.
+    function attachMessageHandler(peerId, ws) {
+        let windowStart = Date.now();
+        let count = 0;
+        ws.on("message", (raw) => {
+            const now = Date.now();
+            if (now - windowStart >= 1000) {
+                windowStart = now;
+                count = 0;
+            }
+            if (++count > PEER_MSGS_PER_SEC) return;
+            let msg;
+            try {
+                msg = JSON.parse(raw.toString());
+            } catch {
+                return; // JSON roto
+            }
+            const v = validatePeerMessage(msg, cfg);
+            if (!v.ok) return;
+            const result = applyPeerMessage(players, selfId, peerId, v.msg, cfg);
+            for (const action of result.actions) {
+                if (action.type === "close-local") onCloseLocal(action);
+                else onGameMessage(peerId, action); // game_action / game_state de la partida (Viruscity)
+            }
+            if (result.membershipChanged) onMembershipChanged();
+        });
+    }
+
+    // Serializa UNA vez y envía a todos los peers listos
+    function sendToPeers(obj) {
+        const text = JSON.stringify(obj);
+        for (const { ws, ready } of peers.values()) if (ready) sendRaw(ws, text);
+    }
+
+    // ---------- Servidor de peers (conexiones entrantes) ----------
+    const server = http.createServer((req, res) => {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Ruta no encontrada" }));
+    });
+    const wss = new WebSocketServer({ noServer: true, maxPayload: PEER_MAX_PAYLOAD });
+
+    server.on("upgrade", (req, socket, head) => {
+        socket.on("error", () => {}); // un reset durante el handshake no tumba el proceso
+        if (!secretMatches(req.headers["x-cluster-secret"])) {
+            socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+            socket.destroy();
+            return;
+        }
+        // Cualquier ruta es válida: la peerUrl del directorio se usa tal cual
+        wss.handleUpgrade(req, socket, head, (ws) => handleIncoming(ws));
+    });
+
+    function handleIncoming(ws) {
+        ws.on("error", () => {});
+        let peerId = null;
+        const helloTimer = setTimeout(() => ws.close(4011, "hello timeout"), HELLO_TIMEOUT_MS);
+        ws.on("close", () => clearTimeout(helloTimer));
+
+        ws.once("message", (raw) => {
+            clearTimeout(helloTimer);
+            peerId = parseHello(raw);
+            if (!peerId) {
+                ws.close(4011, "invalid hello");
+                return;
+            }
+            const current = peers.get(peerId);
+            const decision = resolveLink(selfId, peerId, { direction: "in", existing: Boolean(current && isOpen(current.ws)) });
+            if (decision === "reject") {
+                ws.close(4010, "duplicate peer");
+                return;
+            }
+            sendRaw(ws, JSON.stringify({ type: "hello", coordinatorId: selfId }));
+            registerPeer(peerId, ws, "in");
+            // replace: la conexión vieja se cierra DESPUÉS de registrar la nueva (su cierre no la borra)
+            if (decision === "replace" && current) current.ws.close(4010, "duplicate peer");
+        });
+    }
+
+    // ---------- Conexiones salientes ----------
+    function warnOnce(peerId, why) {
+        if (failing.has(peerId)) return;
+        failing.add(peerId);
+        log.warn(`No se pudo conectar con el peer ${peerId} (${why}); se reintentará`);
+    }
+
+    function connectTo(peerId, peerUrl) {
+        connecting.add(peerId);
+        const ws = new WebSocket(peerUrl, {
+            headers: { "x-cluster-secret": clusterSecret },
+            handshakeTimeout: HELLO_TIMEOUT_MS,
+            maxPayload: PEER_MAX_PAYLOAD,
+        });
+        pending.add(ws);
+        let helloTimer = null;
+        const done = () => {
+            clearTimeout(helloTimer);
+            connecting.delete(peerId);
+            pending.delete(ws);
+        };
+
+        ws.on("error", (err) => warnOnce(peerId, err.code || "error de conexión"));
+        ws.on("unexpected-response", (req, res) => {
+            warnOnce(peerId, `HTTP ${res.statusCode}`);
+            req.destroy(); // con este listener, abortar la petición es responsabilidad nuestra
+            done();
+        });
+        ws.on("close", done);
+        ws.on("open", () => {
+            ws.send(JSON.stringify({ type: "hello", coordinatorId: selfId }));
+            helloTimer = setTimeout(() => ws.close(4011, "hello timeout"), HELLO_TIMEOUT_MS);
+        });
+        ws.once("message", (raw) => {
+            done();
+            // La respuesta debe ser el hello del peer que esperábamos
+            if (parseHello(raw) !== peerId) {
+                warnOnce(peerId, "respondió con un hello inesperado");
+                ws.close(4011, "unexpected hello");
+                return;
+            }
+            const current = peers.get(peerId);
+            if (current && isOpen(current.ws)) {
+                ws.close(4010, "duplicate peer");
+                return;
+            }
+            failing.delete(peerId);
+            registerPeer(peerId, ws, "out");
+        });
+    }
+
+    async function discover() {
+        if (stopped) return;
+        const list = await fetchCoordinatorPeers({ authUrls, selfId });
+        if (!list || stopped) return; // auth caído: las conexiones existentes se conservan
+        for (const { coordinatorId, peerUrl } of list) {
+            if (!shouldInitiate(selfId, coordinatorId)) continue; // los de id menor nos conectan a nosotros
+            if (peers.has(coordinatorId) || connecting.has(coordinatorId)) continue;
+            connectTo(coordinatorId, peerUrl);
+        }
+    }
+
+    // Ping a cada peer; si no respondió al anterior, la conexión está muerta (sin cierre limpio)
+    function pingPeers() {
+        for (const entry of peers.values()) {
+            if (!entry.alive) {
+                entry.ws.terminate(); // dispara 'close' → se quitan sus jugadores
+                continue;
+            }
+            entry.alive = false;
+            if (isOpen(entry.ws)) entry.ws.ping();
+        }
+    }
+
+    // Posiciones de los locales (la simulación de los demás coordinadores puede derivar un poco)
+    function syncPositions() {
+        const msg = buildPositionsSync(players, selfId);
+        if (msg) sendToPeers(msg);
+    }
+
+    function start() {
+        return new Promise((resolve, reject) => {
+            server.once("error", reject);
+            server.listen(peerPort, () => {
+                server.off("error", reject);
+                discover();
+                discoveryTimer = setInterval(discover, discoveryMs);
+                pingTimer = setInterval(pingPeers, pingMs);
+                syncTimer = setInterval(syncPositions, syncMs);
+                resolve();
+            });
+        });
+    }
+
+    function stop() {
+        stopped = true;
+        clearInterval(discoveryTimer);
+        clearInterval(pingTimer);
+        clearInterval(syncTimer);
+        for (const ws of pending) ws.terminate();
+        for (const { ws } of peers.values()) ws.close(1001, "server shutting down");
+        for (const ws of wss.clients) ws.terminate();
+        wss.close();
+        server.close();
+    }
+
+    const readyPeerIds = () => [...peers].filter(([, e]) => e.ready && isOpen(e.ws)).map(([id]) => id);
+    const isPeerReady = (peerId) => {
+        const e = peers.get(peerId);
+        return Boolean(e && e.ready && isOpen(e.ws));
+    };
+
+    // Envía a UN peer listo (p. ej. una acción al árbitro o un handover); false si no hay conexión
+    function sendToPeer(peerId, obj) {
+        if (!isPeerReady(peerId)) return false;
+        sendRaw(peers.get(peerId).ws, JSON.stringify(obj));
+        return true;
+    }
+
+    return { start, stop, readyPeerIds, isPeerReady, sendToPeers, sendToPeer };
+}
+
+module.exports = { createPeerNetwork };

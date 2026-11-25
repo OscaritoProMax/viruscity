@@ -1,9 +1,15 @@
 // Lobby: se conecta al coordinator por WebSocket con el token guardado en el login
 // y muestra en vivo la lista de jugadores conectados.
 // Si la conexión se cierra sin que el usuario cierre sesión, vuelve al login con un mensaje.
-// Todo el texto dinámico se inserta con textContent: nunca se interpreta texto como HTML.
+// Se carga como módulo: la parte visual la pinta ui/lobby-view.js (siempre con textContent).
+
+import { UI } from "./ui/ui-config.js";
+import { createLobbyView } from "./ui/lobby-view.js";
+import { startLobbyPreview } from "./ui/preview.js";
 
 const $ = (id) => document.getElementById(id); // atajo tomado de dashboard/common.js del código base
+
+const view = createLobbyView(document.body);
 
 // Mensajes según el código de cierre del coordinator
 const CLOSE_MESSAGES = {
@@ -12,8 +18,13 @@ const CLOSE_MESSAGES = {
 };
 const DEFAULT_CLOSE_MESSAGE = "Se perdió la conexión con el coordinador. Inicia sesión de nuevo.";
 
+// Vigilancia del token guardado mientras la sesión está abierta
+const TOKEN_CHECK_MS = 1000;
+const TOKEN_CHANGED_MESSAGE = "El token de tu sesión no es válido. Inicia sesión de nuevo.";
+const TOKEN_REMOVED_MESSAGE = "Tu sesión se cerró. Inicia sesión de nuevo.";
+
 // Lee el payload del JWT sin verificar la firma (la verificación la hace el coordinator).
-// Solo se usa para saber cuál es "mi" userId en la lista. Devuelve null si no se puede leer.
+// Solo se usa para saber quién soy en la lista. Devuelve null si no se puede leer.
 function decodeTokenPayload(token) {
     try {
         const base64 = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
@@ -26,42 +37,29 @@ function decodeTokenPayload(token) {
 
 // Indicador de conexión (adaptado de setWsStatus() del dashboard del código base)
 function setStatus(state) {
-    const states = {
-        connecting: ["Conectando…", "muted"],
-        connected: ["Conectado", "ok"],
-        disconnected: ["Desconectado", "bad"],
+    const texts = {
+        connecting: "Conectando…",
+        connected: "Conectado",
+        disconnected: "Desconectado",
     };
-    const [text, cls] = states[state];
-    $("status").textContent = text;
-    $("status").className = `pill ${cls}`;
+    view.setStatus(state, texts[state]);
 }
 
-// Borra la sesión guardada en el navegador
-function clearSession() {
+// Borra la sesión guardada en el navegador, pero solo si el token guardado sigue siendo el de
+// esta pestaña: todas las pestañas comparten localStorage y no se debe borrar la sesión de otra.
+function clearSession(token) {
+    if (localStorage.getItem("token") !== token) return;
     localStorage.removeItem("token");
     localStorage.removeItem("username");
 }
 
 function startLobby(token) {
     const username = localStorage.getItem("username") || "";
-    const myUserId = decodeTokenPayload(token)?.userId ?? null;
+    const myUsername = decodeTokenPayload(token)?.username ?? null;
     let loggingOut = false;
 
-    $("greeting").textContent = `Hola, ${username}`;
+    view.setUser(username);
     setStatus("connecting");
-
-    // Vacía la lista y la vuelve a construir con <li> creados a mano
-    function renderPlayers(players) {
-        const list = $("playerList");
-        list.replaceChildren();
-        for (const player of players) {
-            const li = document.createElement("li");
-            li.textContent = player.userId === myUserId ? `${player.username} (tú)` : player.username;
-            if (player.userId === myUserId) li.classList.add("me");
-            list.append(li);
-        }
-        $("playerCount").textContent = String(players.length);
-    }
 
     const ws = new WebSocket(`${window.APP_CONFIG.COORDINATOR_WS_URL}/connect?token=${encodeURIComponent(token)}`);
 
@@ -74,30 +72,56 @@ function startLobby(token) {
         } catch {
             return; // mensaje que no es JSON: se ignora
         }
-        if (msg && msg.type === "players_update" && Array.isArray(msg.players)) renderPlayers(msg.players);
+        if (msg && msg.type === "players_update" && Array.isArray(msg.players)) view.setPlayers(msg.players, myUsername);
     };
 
-    // Cierre inesperado: se guarda el motivo, se borra la sesión y se vuelve al login (sin reconexión)
+    // Cierre inesperado: se guarda el motivo, se borra la sesión y se vuelve al login (sin reconexión).
+    // Con 4002 el token guardado ya es el de la sesión nueva (otra pestaña): no se borra.
     ws.onclose = (event) => {
         setStatus("disconnected");
+        clearInterval(tokenWatch);
         if (loggingOut) return;
         sessionStorage.setItem("sessionMessage", CLOSE_MESSAGES[event.code] || DEFAULT_CLOSE_MESSAGE);
-        clearSession();
+        if (event.code !== 4002) clearSession(token);
         window.location.href = "login.html";
     };
 
     $("logoutButton").addEventListener("click", () => {
         loggingOut = true;
-        clearSession();
+        clearSession(token);
         ws.close(1000, "logout");
         window.location.href = "login.html";
     });
+
+    // El coordinator solo valida el token al conectar. Si el token guardado cambia o desaparece con la
+    // sesión abierta (por ejemplo, alguien lo edita o lo borra en DevTools), esta sesión ya no es válida:
+    // se cierra y se vuelve al login con un mensaje. Se revisa cada segundo y, entre pestañas, con "storage".
+    function checkStoredToken() {
+        const stored = localStorage.getItem("token");
+        if (loggingOut || stored === token) return;
+        loggingOut = true; // el cierre del socket ya no se trata como inesperado
+        clearInterval(tokenWatch);
+        sessionStorage.setItem("sessionMessage", stored === null ? TOKEN_REMOVED_MESSAGE : TOKEN_CHANGED_MESSAGE);
+        ws.close(1000, "invalid token");
+        window.location.href = "login.html";
+    }
+    const tokenWatch = setInterval(checkStoredToken, TOKEN_CHECK_MS);
+    window.addEventListener("storage", (event) => {
+        if (event.key === "token" || event.key === null) checkStoredToken();
+    });
 }
 
-// Sin token no hay sesión: directo al login
-const token = localStorage.getItem("token");
-if (!token) {
-    window.location.href = "login.html";
+// Vista previa de diseño (?preview): datos de ejemplo, sin token ni WebSocket
+const isPreview = UI.PREVIEW_ENABLED && new URLSearchParams(location.search).has("preview");
+
+if (isPreview) {
+    startLobbyPreview(view);
 } else {
-    startLobby(token);
+    // Sin token no hay sesión: directo al login
+    const token = localStorage.getItem("token");
+    if (!token) {
+        window.location.href = "login.html";
+    } else {
+        startLobby(token);
+    }
 }

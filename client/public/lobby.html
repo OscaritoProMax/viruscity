@@ -2,27 +2,63 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Lobby</title>
-<link rel="stylesheet" href="/css/style.css">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<meta name="color-scheme" content="dark">
+<title>Viruscity · Sala de espera</title>
+<link rel="icon" type="image/svg+xml" href="img/favicon.svg">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/components.css">
+<link rel="stylesheet" href="css/lobby.css">
 </head>
 <body>
-<main>
-    <header class="lobby-header">
-        <div>
-            <h1 id="greeting">Hola</h1>
-            <p class="muted">Estado: <span id="status" class="pill muted">Conectando…</span></p>
-        </div>
-        <button id="logoutButton" type="button">Cerrar sesión</button>
-    </header>
+<header class="topbar">
+    <div class="topbar__brand">
+        <img src="img/logo.svg" width="28" height="28" alt="">
+        <span class="topbar__wordmark">VIRUS<span class="topbar__city">CITY</span></span>
+    </div>
 
-    <section class="card">
-        <h2>Jugadores en línea (<span id="playerCount">0</span>)</h2>
+    <!-- Estado de la conexión con el coordinador (punto de color según data-state) -->
+    <span id="connection" class="status-pill" data-state="connecting">
+        <span class="status-pill__dot" aria-hidden="true"></span>
+        <span id="status" aria-live="polite">Conectando…</span>
+    </span>
+
+    <div class="topbar__actions">
+        <span class="user-chip">
+            <span id="userAvatar"></span>
+            <span id="greeting" class="user-chip__name"></span>
+        </span>
+        <button id="logoutButton" type="button" class="btn btn--ghost">Cerrar sesión</button>
+    </div>
+</header>
+
+<main class="lobby">
+    <div id="notice" class="notice" role="status" hidden></div>
+
+    <section class="card lobby__panel lobby__waiting" aria-labelledby="waitingTitle">
+        <h2 id="waitingTitle" class="panel-title">Sala de espera</h2>
+        <p class="lobby__desc">El infectado se elige al azar cuando empieza la partida.</p>
+        <div id="waitingProgress" class="waiting">
+            <p class="waiting__count"><span id="waitingCount">0</span> / <span id="waitingMin">4</span></p>
+            <div id="progressBar" class="progress progress--segmented" role="progressbar"
+                 aria-label="Jugadores para iniciar" aria-valuemin="0" aria-valuemax="4" aria-valuenow="0"></div>
+            <p id="progressText" class="waiting__text" aria-live="polite"></p>
+        </div>
+    </section>
+
+    <section class="card lobby__panel lobby__players" aria-labelledby="playersTitle">
+        <h2 id="playersTitle" class="panel-title">Jugadores en línea (<span id="playerCount">0</span>)</h2>
         <ul id="playerList" class="players"></ul>
+        <p id="playersEmpty" class="players__empty">Nadie conectado todavía</p>
     </section>
 </main>
 
+<!-- Avisos breves (toasts) -->
+<div id="toasts"></div>
+
 <script src="/config.js"></script>
-<script src="/js/lobby.js"></script>
+<script type="module" src="js/lobby.js"></script>
 </body>
 </html>

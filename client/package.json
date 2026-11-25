@@ -4,7 +4,9 @@
   "description": "",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test",
+    "map": "node scripts/export-map.mjs"
   },
   "keywords": [],
   "author": "",

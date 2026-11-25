@@ -1,0 +1,833 @@
+// Dibujo del juego en un <canvas>. Solo pinta lo que dice window.lastState (el estado del servidor):
+// no calcula posiciones de juego.
+//
+// createRenderer(canvas, minimap) → {
+//   resize(availW, availH), draw(lastState, world, me, nowMs, dt, game), setZoom(z), getZoom(), area(),
+//   scene(), target(), setTalking(npc), jukebox(nowMs, ms), surface(), meMoving(), positionOf(id), drainEvents(),
+//   setCity(city)
+// }
+//
+// Viruscity: la ciudad de la partida (welcome.city) se dibuja debajo de los jugadores con los anillos de
+// misión según el último 'game'; los jugadores con ghost:true (espectadores) se ven translúcidos y, si el
+// rol local es infectado, los bordes de la pantalla tienen una viñeta verde (solo en este cliente).
+//
+// - Si el mundo del servidor mide lo mismo que el mapa de Virus City (3840 × 3840: ciudad + interiores),
+//   dibuja la ciudad o el local donde está el jugador (las colisiones y las puertas las calcula el
+//   servidor). Si no, una cuadrícula simple.
+// - Solo se dibuja a los jugadores que están en el mismo escenario (se deduce de sus coordenadas).
+// - La cámara sigue al jugador local dentro de su escenario; el zoom es solo visual.
+// - Vecinos y coches son decorado local: cada cliente ve los suyos y no chocan con nadie.
+
+import { computeView, clampZoom, nextAnim } from "./view.js";
+import { resolveLook, POWER_MS } from "./characters/look.js";
+import { drawCharacter, CHARACTER_HEIGHT, FEET_OFFSET } from "./characters/index.js";
+import { drawPowerEffect, jetpackHeight } from "./characters/powers.js";
+import { WORLD_WIDTH, WORLD_HEIGHT, TILE_SIZE, MAP_COLS, MAP_ROWS, CITY_WIDTH, CITY_HEIGHT } from "./map/constants.js";
+import { buildWorld, worldObjs, buildingsList, ground, idx, gAt, G, worldInteractables, doors } from "./map/layout.js";
+import { buildScenes } from "./map/interiors.js";
+import { buildInteriorSprites, paintBurgerBase, paintMarketBase } from "./map/interior-art.js";
+import { buildRoomSprites, paintRoomBase } from "./map/room-art.js";
+import { sceneAt, sceneRect, WORLD_SCENE } from "./map/scenes.js";
+import { SPRITES, buildAllPropSprites } from "./map/props.js";
+import { buildBuildingSprite } from "./map/buildings.js";
+import { drawGround, drawWaterFx } from "./map/ground.js";
+import { worldNPCs, buildWorldNPCs, updateNPC, drawNPCEntity, npcFoot, cars, buildCars, updateCars, drawCar } from "./map/npcs.js";
+import { hash2, circle } from "./map/draw-utils.js";
+import { gameMinutes, ambientAt } from "./map/clock.js";
+import { areaName } from "./map/zones.js";
+import { drawCity } from "../vc/city-render.js";
+
+const MAX_DPR = 2;
+const GRID_STEP = 100; // cuadrícula del modo sin mapa (unidades del mundo)
+const SMOOTHING = 20; // cuanto mayor, más rápido alcanza la posición del servidor
+const SNAP_DISTANCE = 200; // si la diferencia es mayor, se salta directamente (sin suavizar)
+
+// Insignia del proveedor: "G" azul de Google sobre blanco, o "L" sobre gris para cuentas locales
+const GOOGLE_BLUE = "#4285f4";
+const BADGE_WHITE = "#ffffff";
+
+// Árboles y cenador se vuelven translúcidos si tapan al jugador local
+const FADE_RE = /^(oak|pine|birch|cherry|forest|gazebo)/;
+// Colores del minimapa por tipo de suelo (orden de G en layout.js)
+const MINI_COLORS = ["#4a9c3f", "#58aa47", "#3d4452", "#b8c0cb", "#d9cba6", "#1d7fc4", "#ecd9a3", "#a6794a", "#d8cdb2", "#2f3540", "#6b4423", "#8b5a2b", "#2a6e34", "#9fa2a7"];
+const MINI_SCALE = 2; // px del minimapa base por casilla
+// La caja del jugador en el servidor (2·radio) es más alta que la caja de pies de la referencia: no se
+// acerca tanto a mostradores y carteles, así que el radio para hablar se amplía un poco
+const REACH_BONUS = 24;
+// Marcas de entrada y salida de los locales (amarillo de las puertas del minimapa de la referencia)
+const DOOR_YELLOW = "#facc15";
+const DOOR_INK = "#0b1020";
+// Viruscity: espectadores translúcidos y relleno de las zonas de la partida sobre el mapa
+const GHOST_ALPHA = 0.35;
+const ZONE_ALPHA_MAP = 0.5;
+
+// "#7cff6b" → "124,255,107" (para degradados con transparencia)
+function hexToRgb(hex, fallback) {
+    const m = /^#([0-9a-f]{6})$/i.exec(String(hex).trim());
+    if (!m) return fallback;
+    const n = parseInt(m[1], 16);
+    return `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`;
+}
+
+// Lee una variable CSS (tokens.css) con un valor de respaldo
+function cssVar(name, fallback) {
+    const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return value || fallback;
+}
+
+function glow(c, x, y, r, rgb, a) {
+    const g = c.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, `rgba(${rgb},${a})`);
+    g.addColorStop(1, `rgba(${rgb},0)`);
+    c.fillStyle = g;
+    c.fillRect(x - r, y - r, r * 2, r * 2);
+}
+
+// ---------- Ciudad (se construye una sola vez, al primer uso) ----------
+let city = null;
+function ensureCity() {
+    if (city) return city;
+    buildAllPropSprites();
+    buildInteriorSprites();
+    buildRoomSprites();
+    buildWorld();
+    for (const o of worldObjs) o.sp = o.kind === "building" ? buildBuildingSprite(o.spec) : SPRITES[o.sprite];
+    const objs = worldObjs.filter((o) => o.sp); // un sprite que no exista no rompe el dibujo
+    buildWorldNPCs();
+    buildCars();
+
+    // Minimapa base: color del suelo por casilla y edificios encima
+    const mini = document.createElement("canvas");
+    mini.width = MAP_COLS * MINI_SCALE;
+    mini.height = MAP_ROWS * MINI_SCALE;
+    const m = mini.getContext("2d");
+    for (let r = 0; r < MAP_ROWS; r++) {
+        for (let q = 0; q < MAP_COLS; q++) {
+            m.fillStyle = MINI_COLORS[ground[idx(q, r)]] ?? MINI_COLORS[0];
+            m.fillRect(q * MINI_SCALE, r * MINI_SCALE, MINI_SCALE, MINI_SCALE);
+        }
+    }
+    for (const o of buildingsList) {
+        const s = o.spec;
+        m.fillStyle = s.roof || s.roofTop || { church: "#475569", hall: "#64748b", barn: "#7f1d1d" }[s.kind] || "#57534e";
+        m.fillRect(o.c * MINI_SCALE, o.r * MINI_SCALE, s.w * MINI_SCALE, s.h * MINI_SCALE);
+    }
+    // Puertas de los locales a los que se puede entrar: cuadro amarillo con borde negro
+    for (const d of doors) {
+        const x = (d.cols[0] + d.cols.length / 2) * MINI_SCALE - 3;
+        const y = (d.row + 1) * MINI_SCALE - 3;
+        m.fillStyle = DOOR_YELLOW;
+        m.fillRect(x, y, 6, 6);
+        m.strokeStyle = "#000000";
+        m.lineWidth = 1;
+        m.strokeRect(x - 0.5, y - 0.5, 7, 7);
+    }
+    // Interiores: piso pintado una vez y sprites de los muebles
+    const scenes = buildScenes();
+    const painters = { burger: paintBurgerBase, market: paintMarketBase };
+    for (const sc of Object.values(scenes)) {
+        sc.base = painters[sc.id] ? painters[sc.id]() : paintRoomBase(sc); // salas de las misiones (rooms.js)
+        for (const o of sc.objs) o.sp = SPRITES[o.sprite];
+        sc.objs = sc.objs.filter((o) => o.sp);
+    }
+    city = { objs, mini, scenes, fountain: objs.find((o) => o.fx === "fountain") ?? null };
+    return city;
+}
+
+export function createRenderer(canvas, minimap) {
+    const ctx = canvas.getContext("2d");
+    const colors = {
+        bg: cssVar("--bg", "#0b1020"),
+        border: cssVar("--border", "#2a3560"),
+        text: cssVar("--text", "#e6e9f5"),
+        muted: cssVar("--muted", "#8f9bc4"),
+        accent: cssVar("--accent", "#4dd2ff"),
+        infectedRgb: hexToRgb(cssVar("--infected", "#7cff6b"), "124,255,107"),
+    };
+    const fontMono = cssVar("--font-mono", "monospace");
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let matchCity = null; // ciudad de la partida (welcome.city)
+
+    let cssW = 0;
+    let cssH = 0;
+    let dpr = 1;
+    let zoom = 1;
+    let lastView = null;
+    // Track 2.5: cámara libre del modo espectador ({ x, y } del mundo) o null para seguir al jugador "me"
+    let freeCamera = null;
+    let lastMePos = null;
+
+    // Posiciones SOLO para dibujar: se acercan a las del servidor (window.lastState) con un suavizado
+    // exponencial. Nunca se escriben en lastState: si alguien lo edita en DevTools, la vista lo refleja
+    // y el siguiente state del servidor lo corrige.
+    const renderPos = new Map();
+    const anims = new Map();
+    // Poderes: cuándo vio este cliente que cada jugador activó el suyo (extras.powerOn pasa a true)
+    const powers = new Map(); // userId → { on, start }
+    const events = []; // activaciones de poderes y cambios de escenario vistos en este cuadro (para el sonido)
+    let currentScene = WORLD_SCENE;
+    let currentTarget = null; // cartel o vecino con el que se puede hablar (tecla E)
+    let talkingTo = null; // vecino en conversación: se queda quieto
+    let meMoving = false;
+    let jukeUntil = 0;
+
+    // Progreso del efecto (0..1) o null si no está activo
+    function powerProgress(userId, look, nowMs) {
+        const prev = powers.get(userId) ?? { on: false, start: -Infinity };
+        const next = { on: look.powerOn, start: look.powerOn && !prev.on ? nowMs : prev.start };
+        powers.set(userId, next);
+        if (look.powerOn && !prev.on) events.push({ type: "power", userId, power: look.power });
+        const t = (nowMs - next.start) / POWER_MS;
+        return t >= 0 && t < 1 ? t : null;
+    }
+
+    function smoothedPosition(p, dt) {
+        let pos = renderPos.get(p.userId);
+        if (!pos || Math.hypot(p.x - pos.x, p.y - pos.y) > SNAP_DISTANCE) {
+            pos = { x: p.x, y: p.y };
+            renderPos.set(p.userId, pos);
+            return pos;
+        }
+        const k = 1 - Math.exp(-SMOOTHING * dt);
+        pos.x += (p.x - pos.x) * k;
+        pos.y += (p.y - pos.y) * k;
+        return pos;
+    }
+
+    // El canvas ocupa todo el espacio disponible (la cámara decide qué parte del mundo se ve)
+    function resize(availW, availH) {
+        cssW = Math.max(1, Math.floor(availW));
+        cssH = Math.max(1, Math.floor(availH));
+        dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
+        canvas.style.width = `${cssW}px`;
+        canvas.style.height = `${cssH}px`;
+        canvas.width = Math.round(cssW * dpr);
+        canvas.height = Math.round(cssH * dpr);
+    }
+
+    // Medidas en píxeles de pantalla expresadas en unidades del mundo (líneas y textos nítidos con zoom)
+    const px = (n) => n / zoom;
+
+    // ---------- Fondo sin mapa ----------
+    function drawPlainWorld(world) {
+        ctx.fillStyle = colors.bg;
+        ctx.fillRect(0, 0, world.width, world.height);
+        ctx.save();
+        ctx.globalAlpha = 0.06;
+        ctx.strokeStyle = colors.text;
+        ctx.lineWidth = px(1);
+        ctx.beginPath();
+        for (let x = GRID_STEP; x < world.width; x += GRID_STEP) {
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, world.height);
+        }
+        for (let y = GRID_STEP; y < world.height; y += GRID_STEP) {
+            ctx.moveTo(0, y);
+            ctx.lineTo(world.width, y);
+        }
+        ctx.stroke();
+        ctx.restore();
+        ctx.strokeStyle = colors.border;
+        ctx.lineWidth = px(2);
+        ctx.strokeRect(px(1), px(1), world.width - px(2), world.height - px(2));
+    }
+
+    // ---------- Efectos de la ciudad: humo, fuente, noche, luces y neones (de la referencia) ----------
+    function cityEffects(c, t, minutes, v) {
+        const { vx0, vy0, vx1, vy1 } = v;
+        const amb = ambientAt(minutes);
+        const night = Math.max(0, Math.min(1, amb.a / 0.32));
+        const motion = !reducedMotion.matches;
+        if (motion) {
+            for (const o of buildingsList) {
+                const m = o.sp?.meta?.chimney;
+                if (!m) continue;
+                const cx = o.x + m.x;
+                const cy = o.y - o.sp.ay + m.y;
+                if (cx < vx0 - 40 || cx > vx1 + 40 || cy < vy0 - 100 || cy > vy1 + 40) continue;
+                for (let k = 0; k < 4; k++) {
+                    const ph = (t * 0.0004 + k / 4 + hash2(o.c, o.r, 3)) % 1;
+                    const a = (1 - ph) * 0.32 * (0.6 + night * 0.4);
+                    circle(c, cx + Math.sin(ph * 6 + k) * 6 + ph * 14, cy - ph * 46, 4 + ph * 9, `rgba(235,235,240,${a.toFixed(3)})`);
+                }
+            }
+            const fo = city.fountain;
+            if (fo && fo.x > vx0 - 120 && fo.x < vx1 + 120 && fo.y > vy0 && fo.y < vy1 + 200) {
+                const fx = fo.x;
+                const fy = fo.y - 124;
+                c.save();
+                c.strokeStyle = "rgba(200,235,255,0.85)";
+                c.lineWidth = 2;
+                c.lineCap = "round";
+                c.fillStyle = "rgba(210,240,255,0.9)";
+                for (let k = 0; k < 14; k++) {
+                    const ph = (t * 0.0011 + k / 14) % 1;
+                    const ang = (k / 14) * 6.283;
+                    c.beginPath();
+                    c.arc(fx + Math.cos(ang) * 46 * ph, fy - 30 * ph + 120 * ph * ph + 14, 2, 0, 7);
+                    c.fill();
+                }
+                c.beginPath();
+                c.moveTo(fx, fy + 16);
+                c.quadraticCurveTo(fx - 3, fy - 6, fx, fy - 14);
+                c.stroke();
+                for (let k = 0; k < 3; k++) {
+                    const ph = (t * 0.0008 + k / 3) % 1;
+                    c.strokeStyle = `rgba(255,255,255,${(0.5 * (1 - ph)).toFixed(2)})`;
+                    c.beginPath();
+                    c.ellipse(fx, fo.y - 46, 22 + ph * 40, 8 + ph * 14, 0, 0, 6.283);
+                    c.stroke();
+                }
+                c.restore();
+            }
+        }
+        // Oscuridad ambiental según la hora (la misma para todos: sale del reloj del servidor)
+        if (amb.a > 0.01) {
+            c.fillStyle = `rgba(${amb.c[0]},${amb.c[1]},${amb.c[2]},${amb.a.toFixed(3)})`;
+            c.fillRect(vx0, vy0, vx1 - vx0, vy1 - vy0);
+        }
+        // Luces aditivas: farolas y ventanas de noche, neones siempre
+        c.save();
+        c.globalCompositeOperation = "lighter";
+        if (night > 0.05) {
+            for (const o of city.objs) {
+                if (!o.light || o.x < vx0 - 120 || o.x > vx1 + 120 || o.y < vy0 - 40 || o.y > vy1 + 160) continue;
+                glow(c, o.x, o.y - 92, 110, "255,214,120", (0.55 * night).toFixed(2));
+            }
+            for (const o of buildingsList) {
+                if (!o.sp || o.x > vx1 + 20 || o.x + o.sp._w < vx0 - 20 || o.y - o.sp.ay > vy1 || o.y < vy0) continue;
+                o.sp.meta.windows.forEach((w, i) => {
+                    if (hash2(i, o.c * 7 + o.r, 5) < (w.lamp ? 0 : 0.3)) return;
+                    const wx = o.x + w.x;
+                    const wy = o.y - o.sp.ay + w.y;
+                    c.fillStyle = `rgba(255,196,96,${(0.55 * night).toFixed(2)})`;
+                    c.fillRect(wx, wy, w.w, w.h);
+                    glow(c, wx + w.w / 2, wy + w.h / 2 + 10, Math.max(w.w, w.h) * 1.3 + 10, "255,190,90", (0.2 * night).toFixed(2));
+                });
+            }
+        }
+        for (const o of buildingsList) {
+            const n = o.sp?.meta?.neon;
+            if (!n) continue;
+            const nx = o.x + n.x;
+            const ny = o.y - o.sp.ay + n.y;
+            if (nx > vx1 + 20 || nx + n.w < vx0 - 20 || ny > vy1 || ny + n.h < vy0) continue;
+            const flick = motion ? 0.75 + 0.25 * Math.sin(t * 0.008 + o.c) + (Math.sin(t * 0.021 + o.r * 3) > 0.96 ? -0.4 : 0) : 0.85;
+            const base = 0.2 + 0.55 * night;
+            const col = n.color === "#fef08a" ? "255,120,160" : n.color === "#4ade80" ? "60,255,140" : "120,230,255";
+            glow(c, nx + n.w / 2, ny + n.h / 2 + 6, n.w * 0.7, col, (base * flick * 0.5).toFixed(2));
+        }
+        c.restore();
+    }
+
+    // ---------- Jugadores ----------
+    function drawPlayerBody(p, pos, radius, isMe, look, powerT) {
+        const anim = anims.get(p.userId);
+        const feetY = pos.y + radius; // base de la caja de colisión del servidor = pies del personaje
+        ctx.save();
+        if (p.ghost === true) ctx.globalAlpha = GHOST_ALPHA; // espectador: translúcido
+        ctx.translate(pos.x, feetY - FEET_OFFSET);
+        // Anillo en el suelo para reconocer al jugador local
+        if (isMe) {
+            ctx.save();
+            ctx.strokeStyle = colors.accent;
+            ctx.lineWidth = 2.5;
+            ctx.globalAlpha = 0.9;
+            ctx.beginPath();
+            ctx.ellipse(0, FEET_OFFSET + 2, 26, 10, 0, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+        }
+        const flyHeight = look.power === "jetpack" && powerT !== null ? jetpackHeight(powerT) : 0;
+        drawCharacter(ctx, look, anim?.dir ?? "DOWN", reducedMotion.matches ? false : Boolean(anim?.moving), anim?.walkTime ?? 0, { flyHeight });
+        ctx.restore();
+    }
+
+    function drawPlayerPower(p, pos, radius, look, powerT) {
+        if (powerT === null) return;
+        ctx.save();
+        if (p.ghost === true) ctx.globalAlpha = GHOST_ALPHA;
+        ctx.translate(pos.x, pos.y + radius - FEET_OFFSET);
+        drawPowerEffect(ctx, look.power, anims.get(p.userId)?.dir ?? "DOWN", powerT);
+        ctx.restore();
+    }
+
+    // Nombre en una píldora sobre la cabeza + insignia del proveedor (tamaño constante en pantalla).
+    // Un espectador (ghost) lleva solo el nombre, translúcido y sin insignia: no se destaca.
+    function drawLabel(p, pos, radius, world) {
+        ctx.save();
+        if (p.ghost === true) ctx.globalAlpha = GHOST_ALPHA;
+        drawLabelPill(p, pos, radius, world);
+        ctx.restore();
+    }
+
+    function drawLabelPill(p, pos, radius, world) {
+        const fontSize = px(12);
+        ctx.font = `600 ${fontSize}px ${fontMono}`;
+        ctx.textBaseline = "middle";
+        ctx.textAlign = "left";
+        const name = String(p.username ?? "");
+        const padX = px(6);
+        const pillH = fontSize + px(6);
+        const pillW = ctx.measureText(name).width + padX * 2;
+        const hasBadge = p.ghost !== true && (p.provider === "google" || p.provider === "local");
+        const labelW = pillW + (hasBadge ? px(4) + pillH : 0);
+
+        // La etiqueta se mantiene dentro del mundo
+        const margin = px(2);
+        const pillX = Math.min(Math.max(pos.x - labelW / 2, margin), world.width - labelW - margin);
+        const headTop = pos.y + radius - CHARACTER_HEIGHT;
+        const above = headTop - px(6) - pillH;
+        const pillY = above >= margin ? above : pos.y + radius + px(6);
+
+        ctx.save();
+        ctx.globalAlpha *= 0.78;
+        ctx.fillStyle = colors.bg;
+        ctx.beginPath();
+        ctx.roundRect(pillX, pillY, pillW, pillH, pillH / 2);
+        ctx.fill();
+        ctx.restore();
+        ctx.fillStyle = colors.text;
+        ctx.fillText(name, pillX + padX, pillY + pillH / 2);
+
+        if (hasBadge) {
+            const r = pillH / 2;
+            const cx = pillX + pillW + px(4) + r;
+            const cy = pillY + pillH / 2;
+            const google = p.provider === "google";
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, Math.PI * 2);
+            ctx.fillStyle = google ? BADGE_WHITE : colors.muted;
+            ctx.fill();
+            ctx.fillStyle = google ? GOOGLE_BLUE : colors.bg;
+            ctx.font = `700 ${px(11)}px ${fontMono}`;
+            ctx.textAlign = "center";
+            ctx.fillText(google ? "G" : "L", cx, cy + px(0.5));
+        }
+    }
+
+    // ---------- Conversaciones: objetivo cercano y aviso "E" ----------
+    // Cosas con las que hablar en el escenario actual (coordenadas absolutas del mundo)
+    function talkables(sceneId) {
+        const list = [];
+        if (sceneId === WORLD_SCENE) {
+            for (const o of worldInteractables) list.push({ x: o.x, y: o.y, r: o.r, o, ox: 0, oy: 0 });
+            for (const n of worldNPCs) list.push({ x: n.x, y: n.y + 4, r: n.dog ? 64 : 78, npc: n, ox: 0, oy: 0 });
+        } else {
+            const sc = city.scenes[sceneId];
+            for (const o of sc.interactables) list.push({ x: sc.ox + o.x, y: sc.oy + o.y, r: o.r, o, ox: sc.ox, oy: sc.oy });
+            for (const n of sc.npcs) list.push({ x: sc.ox + n.x, y: sc.oy + n.y + 4, r: 92, npc: n, ox: sc.ox, oy: sc.oy });
+        }
+        return list;
+    }
+
+    function findTarget(sceneId, mePos) {
+        if (!mePos) return null;
+        let best = null;
+        let bestD = Infinity;
+        for (const it of talkables(sceneId)) {
+            const d = Math.hypot(mePos.x - it.x, mePos.y - it.y);
+            if (d < it.r + REACH_BONUS && d < bestD) {
+                bestD = d;
+                best = it;
+            }
+        }
+        return best;
+    }
+
+    function drawPrompt(t, nowMs) {
+        const x = t.npc ? t.ox + t.npc.x : t.x;
+        const y = (t.npc ? t.oy + t.npc.y - 74 : t.y - 64) + (reducedMotion.matches ? 0 : Math.sin(nowMs * 0.006) * 2);
+        const label = t.npc ? "Hablar" : "Mirar";
+        ctx.save();
+        ctx.font = `700 ${px(11)}px ${fontMono}`;
+        const w = ctx.measureText(label).width + px(40);
+        const h = px(24);
+        ctx.globalAlpha = 0.92;
+        ctx.fillStyle = colors.bg;
+        ctx.beginPath();
+        ctx.roundRect(x - w / 2, y - h / 2, w, h, h / 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = colors.accent;
+        ctx.lineWidth = px(1.5);
+        ctx.stroke();
+        ctx.fillStyle = colors.accent;
+        ctx.beginPath();
+        ctx.arc(x - w / 2 + px(14), y, px(9), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = colors.bg;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("E", x - w / 2 + px(14), y + px(0.5));
+        ctx.fillStyle = colors.text;
+        ctx.textAlign = "left";
+        ctx.fillText(label, x - w / 2 + px(28), y + px(0.5));
+        ctx.restore();
+    }
+
+    // ---------- Entradas y salidas de los locales ----------
+    // Cartel "ENTRAR · Burger Neón" sobre la puerta y flecha en la acera; dentro, "SALIDA" en la puerta.
+    // x: centro de la puerta; doorY: borde inferior de la puerta (línea de la fachada)
+    function drawDoorSign(x, doorY, text, arrowUp, nowMs) {
+        const bob = reducedMotion.matches ? 0 : Math.sin(nowMs * 0.005) * 3;
+        ctx.save();
+        // Resplandor en el suelo frente a la puerta
+        const pulse = reducedMotion.matches ? 0.35 : 0.3 + 0.15 * Math.sin(nowMs * 0.004);
+        const g = ctx.createRadialGradient(x, doorY, 4, x, doorY, 56);
+        g.addColorStop(0, `rgba(250,204,21,${pulse.toFixed(2)})`);
+        g.addColorStop(1, "rgba(250,204,21,0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(x - 56, doorY - 56, 112, 112);
+        // Flecha que indica hacia dónde caminar
+        const ay = arrowUp ? doorY + 30 + bob : doorY - 22 + bob;
+        const dir = arrowUp ? -1 : 1;
+        ctx.fillStyle = DOOR_YELLOW;
+        ctx.strokeStyle = DOOR_INK;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x, ay + dir * 12);
+        ctx.lineTo(x - 11, ay - dir * 4);
+        ctx.lineTo(x - 4, ay - dir * 4);
+        ctx.lineTo(x - 4, ay - dir * 12);
+        ctx.lineTo(x + 4, ay - dir * 12);
+        ctx.lineTo(x + 4, ay - dir * 4);
+        ctx.lineTo(x + 11, ay - dir * 4);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        // Cartel (tamaño constante en pantalla)
+        const fs = px(11);
+        ctx.font = `800 ${fs}px ${fontMono}`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        const w = ctx.measureText(text).width + px(16);
+        const h = fs + px(10);
+        // Fuera: sobre la fachada. Dentro: sobre el vidrio de la puerta, en el suelo (no tapa a nadie)
+        const ly = arrowUp ? doorY - 100 : doorY + px(6);
+        ctx.fillStyle = DOOR_YELLOW;
+        ctx.beginPath();
+        ctx.roundRect(x - w / 2, ly, w, h, px(6));
+        ctx.fill();
+        ctx.lineWidth = px(1.5);
+        ctx.strokeStyle = DOOR_INK;
+        ctx.stroke();
+        ctx.fillStyle = DOOR_INK;
+        ctx.fillText(text, x, ly + h / 2 + px(0.5));
+        ctx.restore();
+    }
+
+    function drawCityDoors(nowMs, v) {
+        for (const d of doors) {
+            const x = (d.cols[0] + d.cols.length / 2) * TILE_SIZE;
+            const doorY = (d.row + 1) * TILE_SIZE;
+            if (x < v.vx0 - 200 || x > v.vx1 + 200 || doorY < v.vy0 - 200 || doorY > v.vy1 + 200) continue;
+            const name = sceneRect(d.to)?.name ?? "";
+            drawDoorSign(x, doorY, `ENTRAR · ${name.toUpperCase()}`, true, nowMs);
+        }
+    }
+
+    function drawSceneExit(sc, nowMs) {
+        const ex = sc.exit;
+        const x = sc.ox + (ex.cols[0] + ex.cols.length / 2) * TILE_SIZE;
+        const doorY = sc.oy + ex.row * TILE_SIZE;
+        drawDoorSign(x, doorY, "SALIDA", false, nowMs);
+    }
+
+    // ---------- Interiores ----------
+    function drawInterior(sc, nowMs, dt, players, positions, looks, powerTs, radius, meId, onFloor = () => {}) {
+        ctx.drawImage(sc.base, sc.ox, sc.oy);
+        // Charcos de luz cálida sobre el suelo (debajo de muebles y personas)
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        const la = Math.min(0.17, 1.1 / Math.max(1, sc.lights.length));
+        for (const l of sc.lights) glow(ctx, sc.ox + l.x, sc.oy + l.y, l.r, l.c, la);
+        ctx.restore();
+        drawSceneExit(sc, nowMs); // en el suelo: muebles y personas pasan por encima
+        onFloor(); // Viruscity: anillos de las estaciones de misión de esta sala
+
+        const f = Math.min(dt, 0.1) * 60;
+        for (const n of sc.npcs) updateNPC(n, f, talkingTo);
+
+        const list = [];
+        for (const o of sc.objs) list.push({ s: sc.oy + o.sortY, k: 0, o, x0: sc.ox + o.x - o.sp.ax, y0: sc.oy + o.y - o.sp.ay });
+        for (const n of sc.npcs) list.push({ s: sc.oy + npcFoot(n) + (n.mode === "sit" ? 14 : 0), k: 1, o: n });
+        for (const p of players) {
+            const pos = positions.get(p.userId);
+            list.push({ s: pos.y + radius + (p.userId === meId ? 0.01 : 0), k: 3, p, pos });
+        }
+        list.sort((a, b) => a.s - b.s);
+        for (const it of list) {
+            if (it.k === 0) ctx.drawImage(it.o.sp, it.x0, it.y0, it.o.sp._w, it.o.sp._h);
+            else if (it.k === 1) {
+                ctx.save();
+                ctx.translate(sc.ox, sc.oy);
+                drawNPCEntity(ctx, it.o);
+                ctx.restore();
+            } else drawPlayerBody(it.p, it.pos, radius, it.p.userId === meId, looks.get(it.p.userId), powerTs.get(it.p.userId));
+        }
+
+        // Neón del local y luces de la rocola
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        if (sc.neonSign) {
+            const n = sc.neonSign;
+            const fl = reducedMotion.matches ? 0.85 : 0.7 + 0.3 * Math.sin(nowMs * 0.009) + (Math.sin(nowMs * 0.017) > 0.97 ? -0.4 : 0);
+            glow(ctx, sc.ox + n.x, sc.oy + n.y, 240, "255,90,170", (0.3 * fl).toFixed(2));
+        }
+        if (sc.id === "burger" && jukeUntil > nowMs && !reducedMotion.matches) {
+            const ph = nowMs * 0.012;
+            ["255,60,150", "60,200,255", "255,220,60"].forEach((c, i) =>
+                glow(ctx, sc.ox + 16.5 * TILE_SIZE + Math.cos(ph + i * 2.1) * 90, sc.oy + 5 * TILE_SIZE + Math.sin(ph * 1.3 + i * 2.1) * 70, 150, c, 0.2));
+        }
+        ctx.restore();
+    }
+
+    // ---------- Minimapa ----------
+    function drawMinimap(players, positions, meId, world, view, nowMs) {
+        if (!minimap) return;
+        const mc = minimap.getContext("2d");
+        mc.clearRect(0, 0, minimap.width, minimap.height);
+        if (!city) return;
+        mc.drawImage(city.mini, 0, 0, minimap.width, minimap.height);
+        // El minimapa muestra solo la ciudad (los interiores están debajo, fuera de él)
+        const kx = minimap.width / CITY_WIDTH;
+        const ky = minimap.height / CITY_HEIGHT;
+        mc.strokeStyle = "rgba(255,255,255,0.85)";
+        mc.lineWidth = 1;
+        mc.strokeRect(view.x * kx, view.y * ky, view.w * kx, view.h * ky);
+        for (const p of players) {
+            const pos = positions.get(p.userId);
+            if (!pos) continue;
+            const isMe = p.userId === meId;
+            const blink = !reducedMotion.matches && Math.floor(nowMs / 300) % 2;
+            mc.fillStyle = isMe ? (blink ? colors.accent : "#ffffff") : resolveLook(p).color;
+            mc.beginPath();
+            mc.arc(pos.x * kx, pos.y * ky, isMe ? 3.5 : 2.5, 0, Math.PI * 2);
+            mc.fill();
+            mc.strokeStyle = "#000000";
+            mc.stroke();
+        }
+    }
+
+    // Viñeta verde en los bordes de la pantalla para el jugador infectado (solo la ve él)
+    function drawInfectedVignette() {
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        const cw = canvas.width;
+        const ch = canvas.height;
+        const g = ctx.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.38, cw / 2, ch / 2, Math.max(cw, ch) * 0.72);
+        g.addColorStop(0, `rgba(${colors.infectedRgb},0)`);
+        g.addColorStop(1, `rgba(${colors.infectedRgb},0.32)`);
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, cw, ch);
+        ctx.restore();
+    }
+
+    // nowMs: reloj del navegador (animaciones). dt: segundos desde el cuadro anterior (suavizado).
+    // game: último mensaje 'game' validado (o null): estado de las misiones y rol local.
+    function draw(lastState, world, me, nowMs, dt = 0, game = null) {
+        drawScene(lastState, world, me, nowMs, dt, game);
+        if (world && game?.you?.role === "infected") drawInfectedVignette();
+    }
+
+    function drawScene(lastState, world, me, nowMs, dt, game) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.fillStyle = colors.bg;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        if (!world) return;
+
+        const withMap = world.width === WORLD_WIDTH && world.height === WORLD_HEIGHT;
+        if (withMap) ensureCity();
+
+        const radius = world.playerRadius;
+        const meId = me?.userId ?? null;
+        const players = (lastState?.players ?? []).filter((p) => Number.isFinite(p?.x) && Number.isFinite(p?.y));
+
+        // Posiciones suavizadas y animación (solo visual)
+        const positions = new Map();
+        const looks = new Map();
+        const powerTs = new Map();
+        for (const p of players) {
+            const look = resolveLook(p);
+            looks.set(p.userId, look);
+            powerTs.set(p.userId, powerProgress(p.userId, look, nowMs));
+            const pos = smoothedPosition(p, dt);
+            positions.set(p.userId, pos);
+            anims.set(p.userId, nextAnim(anims.get(p.userId), pos.x, pos.y, dt));
+        }
+        for (const id of [...renderPos.keys()]) {
+            if (!positions.has(id)) {
+                renderPos.delete(id);
+                anims.delete(id);
+                powers.delete(id);
+            }
+        }
+
+        // Escenario del jugador local (ciudad o un local) y jugadores visibles: los del mismo escenario
+        const mePos = positions.get(meId) ?? null;
+        lastMePos = mePos ? { x: mePos.x, y: mePos.y } : null;
+        const meServer = players.find((p) => p.userId === meId) ?? null;
+        const myScene = withMap && meServer ? sceneAt(meServer.x, meServer.y) : WORLD_SCENE;
+        if (myScene !== currentScene) {
+            events.push({ type: "scene", from: currentScene, to: myScene });
+            currentScene = myScene;
+            talkingTo = null;
+        }
+        const visible = withMap ? players.filter((p) => sceneAt(p.x, p.y) === myScene) : players;
+        meMoving = Boolean(anims.get(meId)?.moving);
+
+        // Cámara: sigue al jugador local dentro de su escenario
+        const rect = withMap ? sceneRect(myScene) : { x: 0, y: 0, width: world.width, height: world.height };
+        const camPos = freeCamera ?? mePos;
+        const local = computeView(camPos ? { x: camPos.x - rect.x, y: camPos.y - rect.y } : null, cssW, cssH, rect, zoom);
+        const view = { x: local.x + rect.x, y: local.y + rect.y, w: local.w, h: local.h };
+        lastView = view;
+        const scale = zoom * dpr;
+        ctx.setTransform(scale, 0, 0, scale, Math.round(-view.x * scale), Math.round(-view.y * scale));
+        const v = { vx0: view.x - 8, vy0: view.y - 8, vx1: view.x + view.w + 8, vy1: view.y + view.h + 8 };
+
+        const inCity = withMap && myScene === WORLD_SCENE;
+        if (inCity) {
+            drawGround(ctx, v.vx0, v.vy0, v.vx1, v.vy1);
+            if (!reducedMotion.matches) drawWaterFx(ctx, nowMs, v.vx0, v.vy0, v.vx1, v.vy1);
+            // Decorado local: vecinos y coches (frenan ante el jugador local, no chocan)
+            const f = Math.min(dt, 0.1) * 60;
+            for (const n of worldNPCs) updateNPC(n, f, talkingTo);
+            updateCars(f, mePos?.x ?? -9999, (mePos?.y ?? -9999) + radius - FEET_OFFSET);
+            // Ciudad de la partida sobre el suelo y debajo de edificios y personas
+            drawCity(ctx, matchCity, game, me, nowMs, reducedMotion.matches, { zoneAlpha: ZONE_ALPHA_MAP, area: { x: 0, y: 0, w: CITY_WIDTH, h: CITY_HEIGHT } });
+        } else if (!withMap) {
+            drawPlainWorld(world);
+            drawCity(ctx, matchCity, game, me, nowMs, reducedMotion.matches);
+        }
+
+        if (!lastState) {
+            ctx.fillStyle = colors.muted;
+            ctx.font = `600 ${px(16)}px ${fontMono}`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText("Conectando…", view.x + view.w / 2, view.y + view.h / 2);
+            drawMinimap([], positions, meId, world, view, nowMs);
+            return;
+        }
+
+        if (withMap && !inCity) {
+            const sc = city.scenes[myScene];
+            const area = sceneRect(myScene);
+            drawInterior(sc, nowMs, dt, visible, positions, looks, powerTs, radius, meId, () =>
+                drawCity(ctx, matchCity, game, me, nowMs, reducedMotion.matches, { stationsOnly: true, area: { x: area.x, y: area.y, w: area.width, h: area.height } }),
+            );
+            for (const p of visible) drawPlayerPower(p, positions.get(p.userId), radius, looks.get(p.userId), powerTs.get(p.userId));
+            for (const p of visible) drawLabel(p, positions.get(p.userId), radius, world);
+            currentTarget = talkingTo ? null : findTarget(myScene, mePos);
+            if (currentTarget) drawPrompt(currentTarget, nowMs);
+            // Viñeta: los bordes del local más oscuros (en píxeles de pantalla)
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            const cw = canvas.width;
+            const ch = canvas.height;
+            const g = ctx.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.35, cw / 2, ch / 2, Math.max(cw, ch) * 0.75);
+            g.addColorStop(0, "rgba(0,0,0,0)");
+            g.addColorStop(1, "rgba(0,0,0,0.45)");
+            ctx.fillStyle = g;
+            ctx.fillRect(0, 0, cw, ch);
+            drawMinimap([], positions, meId, world, view, nowMs);
+            return;
+        }
+
+        // Todo lo que tiene "pies" se ordena por su y de suelo (los de más abajo tapan a los de arriba)
+        const list = [];
+        if (inCity) {
+            const meFoot = mePos ? mePos.y + radius : -Infinity;
+            const meBox = mePos ? { x: mePos.x - 22, y: meFoot - CHARACTER_HEIGHT - 6, w: 44, h: CHARACTER_HEIGHT + 6 } : null;
+            for (const o of city.objs) {
+                const x0 = o.x - o.sp.ax;
+                const y0 = o.y - o.sp.ay;
+                if (x0 > v.vx1 || x0 + o.sp._w < v.vx0 || y0 > v.vy1 || y0 + o.sp._h < v.vy0) continue;
+                const covers = meBox && (o.kind === "building" || FADE_RE.test(o.name)) && o.sortY > meFoot &&
+                    meBox.x < x0 + o.sp._w && meBox.x + meBox.w > x0 && meBox.y < y0 + o.sp._h && meBox.y + meBox.h > y0 + (o.kind === "building" ? 0 : 20);
+                o.a = (o.a ?? 1) + ((covers ? 0.45 : 1) - (o.a ?? 1)) * 0.2;
+                list.push({ s: o.sortY, k: 0, o, x0, y0 });
+            }
+            for (const n of worldNPCs) {
+                if (n.x < v.vx0 - 60 || n.x > v.vx1 + 60 || n.y < v.vy0 - 80 || n.y > v.vy1 + 60) continue;
+                list.push({ s: npcFoot(n), k: 1, o: n });
+            }
+            for (const cr of cars) {
+                if (cr.x < v.vx0 - 80 || cr.x > v.vx1 + 80 || cr.y < v.vy0 - 60 || cr.y > v.vy1 + 60) continue;
+                list.push({ s: cr.y, k: 2, o: cr });
+            }
+        }
+        for (const p of visible) {
+            const pos = positions.get(p.userId);
+            // a igual altura, el jugador local va encima
+            list.push({ s: pos.y + radius + (p.userId === meId ? 0.01 : 0), k: 3, p, pos });
+        }
+        list.sort((a, b) => a.s - b.s);
+        for (const it of list) {
+            if (it.k === 0) {
+                if (it.o.a < 0.99) ctx.globalAlpha = it.o.a;
+                ctx.drawImage(it.o.sp, it.x0, it.y0, it.o.sp._w, it.o.sp._h);
+                ctx.globalAlpha = 1;
+            } else if (it.k === 1) drawNPCEntity(ctx, it.o);
+            else if (it.k === 2) drawCar(ctx, it.o);
+            else drawPlayerBody(it.p, it.pos, radius, it.p.userId === meId, looks.get(it.p.userId), powerTs.get(it.p.userId));
+        }
+
+        if (inCity) cityEffects(ctx, nowMs, gameMinutes(lastState.t), v);
+        if (inCity) drawCityDoors(nowMs, v);
+
+        // Efectos de poderes encima de la noche (brillan)
+        for (const p of visible) drawPlayerPower(p, positions.get(p.userId), radius, looks.get(p.userId), powerTs.get(p.userId));
+
+        // Nombres al final, por encima de la noche, para que siempre se lean
+        for (const p of visible) drawLabel(p, positions.get(p.userId), radius, world);
+
+        currentTarget = inCity && !talkingTo ? findTarget(myScene, mePos) : null;
+        if (currentTarget) drawPrompt(currentTarget, nowMs);
+
+        // En el minimapa solo los jugadores que están en la ciudad
+        drawMinimap(withMap ? players.filter((p) => sceneAt(p.x, p.y) === WORLD_SCENE) : [], positions, meId, world, view, nowMs);
+    }
+
+    return {
+        resize,
+        draw,
+        setZoom: (z) => (zoom = clampZoom(z)),
+        // Ciudad de la partida (welcome.city ya validada) o null
+        setCity: (c) => (matchCity = c ?? null),
+        // Track 2.5: cámara libre (espectador) o null para volver a seguir al jugador
+        setFreeCamera: (pos) => (freeCamera = pos && Number.isFinite(pos.x) && Number.isFinite(pos.y) ? { x: pos.x, y: pos.y } : null),
+        getZoom: () => zoom,
+        // Nombre de la zona donde está el jugador local (null sin mapa o sin posición)
+        area: () => (city && lastMePos ? areaName(lastMePos.x, lastMePos.y) : null),
+        hasCity: () => city !== null,
+        view: () => lastView,
+        // Escenario del jugador local: "world" o el id del local
+        scene: () => currentScene,
+        // Cartel o vecino cercano (para la tecla E)
+        target: () => currentTarget,
+        // Vecino en conversación (se queda quieto y mira al jugador); null para soltarlo
+        setTalking(npc, at) {
+            talkingTo = npc;
+            if (npc && at && lastMePos) {
+                const dx = lastMePos.x - (at.ox + npc.x);
+                const dy = lastMePos.y - (at.oy + npc.y);
+                npc.dir = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? "LEFT" : "RIGHT") : dy < 0 ? "UP" : "DOWN";
+            }
+        },
+        // Luces de la rocola del Burger Neón
+        jukebox: (nowMs, ms) => (jukeUntil = nowMs + ms),
+        // Suelo bajo los pies del jugador local (para el sonido de los pasos)
+        surface() {
+            if (!city || !lastMePos || currentScene !== WORLD_SCENE) return "hard";
+            const g = gAt(Math.floor(lastMePos.x / TILE_SIZE), Math.floor((lastMePos.y + 8) / TILE_SIZE));
+            return [G.GRASS, G.LAWN, G.FOREST, G.SAND, G.DIRT, G.CROPS].includes(g) ? "soft" : "hard";
+        },
+        meMoving: () => meMoving,
+        // Posición dibujada de un jugador (para el volumen de sus sonidos según la distancia)
+        positionOf: (userId) => renderPos.get(userId) ?? null,
+        // Eventos de este cuadro: activaciones de poderes y cambios de escenario del jugador local
+        drainEvents: () => events.splice(0, events.length),
+    };
+}
